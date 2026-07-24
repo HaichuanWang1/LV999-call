@@ -66,18 +66,8 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(64.dp))
 
             ModeCard(
-                title = "快速",
-                subtitle = "即刻开始对话",
-                icon = Icons.Default.FlashOn,
-                containerColor = colors.primary,
-                onClick = { onNavigateToPrepare(DialogMode.QUICK) }
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            ModeCard(
-                title = "长提示词",
-                subtitle = "深度角色扮演",
+                title = "银狼",
+                subtitle = "角色扮演语音对话",
                 icon = Icons.Default.Description,
                 containerColor = colors.secondary,
                 onClick = { onNavigateToPrepare(DialogMode.LONG) }
