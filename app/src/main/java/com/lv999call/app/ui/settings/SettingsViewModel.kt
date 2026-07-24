@@ -44,7 +44,7 @@ class SettingsViewModel(
         }
     }
 
-    /** 获取模型列表，返回 Pair(模型ID列表, 最大context_length) */
+    /** 获取模型列表，抛出异常时由调用方处理 */
     suspend fun fetchModelsWithContext(baseUrl: String, apiKey: String): Pair<List<String>, Int> {
         val items = chatRepository.fetchModels(baseUrl, apiKey)
         val maxContext = items.mapNotNull { it.context_length }.maxOrNull() ?: 200000

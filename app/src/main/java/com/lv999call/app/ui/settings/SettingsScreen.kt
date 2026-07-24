@@ -73,6 +73,8 @@ fun SettingsScreen(
     var showModelDialog by remember { mutableStateOf(false) }
     var isLoadingModels by remember { mutableStateOf(false) }
     var modelDialogTarget by remember { mutableStateOf("tts") } // "llm" or "tts"
+    var fetchError by remember { mutableStateOf<String?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Vosk 下载完成提示
     LaunchedEffect(voskDownloadState) {
@@ -119,11 +121,17 @@ fun SettingsScreen(
                             isLoadingModels = true
                             modelDialogTarget = "llm"
                             scope.launch {
-                                val (models, maxCtx) = onFetchModels(llmBaseUrl, llmApiKey)
-                                modelList = models
-                                apiMaxContext = maxCtx
-                                isLoadingModels = false
-                                if (modelList.isNotEmpty()) showModelDialog = true
+                                try {
+                                    val (models, maxCtx) = onFetchModels(llmBaseUrl, llmApiKey)
+                                    modelList = models
+                                    apiMaxContext = maxCtx
+                                    if (modelList.isNotEmpty()) showModelDialog = true
+                                } catch (e: Exception) {
+                                    fetchError = "获取模型失败: ${e.message?.take(80)}"
+                                    snackbarHostState.showSnackbar(fetchError ?: "未知错误")
+                                } finally {
+                                    isLoadingModels = false
+                                }
                             }
                         },
                         enabled = !isLoadingModels && llmBaseUrl.isNotBlank() && llmApiKey.isNotBlank()
@@ -315,10 +323,16 @@ fun SettingsScreen(
                             isLoadingModels = true
                             modelDialogTarget = "tts"
                             scope.launch {
-                                val (models, _) = onFetchModels(ttsBaseUrl, ttsApiKey)
-                                modelList = models
-                                isLoadingModels = false
-                                if (modelList.isNotEmpty()) showModelDialog = true
+                                try {
+                                    val (models, _) = onFetchModels(ttsBaseUrl, ttsApiKey)
+                                    modelList = models
+                                    if (modelList.isNotEmpty()) showModelDialog = true
+                                } catch (e: Exception) {
+                                    fetchError = "获取模型失败: ${e.message?.take(80)}"
+                                    snackbarHostState.showSnackbar(fetchError ?: "未知错误")
+                                } finally {
+                                    isLoadingModels = false
+                                }
                             }
                         },
                         enabled = !isLoadingModels && ttsBaseUrl.isNotBlank() && ttsApiKey.isNotBlank()
@@ -416,6 +430,9 @@ fun SettingsScreen(
             confirmButton = { TextButton(onClick = { showModelDialog = false }) { Text("取消") } }
         )
     }
+
+    // 错误提示
+    SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
 }
 
 @Composable
