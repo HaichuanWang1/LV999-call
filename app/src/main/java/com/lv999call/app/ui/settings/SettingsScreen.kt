@@ -125,7 +125,11 @@ fun SettingsScreen(
                                     val (models, maxCtx) = onFetchModels(llmBaseUrl, llmApiKey)
                                     modelList = models
                                     apiMaxContext = maxCtx
-                                    if (modelList.isNotEmpty()) showModelDialog = true
+                                    if (modelList.isNotEmpty()) {
+                                        showModelDialog = true
+                                    } else {
+                                        snackbarHostState.showSnackbar("该接口未返回模型列表")
+                                    }
                                 } catch (e: Exception) {
                                     fetchError = "获取模型失败: ${e.message?.take(80)}"
                                     snackbarHostState.showSnackbar(fetchError ?: "未知错误")
