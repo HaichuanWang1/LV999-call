@@ -7,7 +7,7 @@ import retrofit2.http.Url
 /** /v1/models 响应 */
 object ModelsResponse {
     data class ModelList(
-        val data: List<ModelItem>
+        val data: List<ModelItem>? = null
     )
 
     data class ModelItem(

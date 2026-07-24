@@ -45,11 +45,12 @@ class ChatRepository(
         val url = ModelsApiService.buildUrl(baseUrl)
         android.util.Log.d("ChatRepo", "获取模型: $url")
         val response = modelsApi.listModels(url, apiKey, "Bearer $apiKey")
-        android.util.Log.d("ChatRepo", "模型响应: ${response.data.size}个模型")
-        response.data.forEach {
+        val models = response.data ?: emptyList()
+        android.util.Log.d("ChatRepo", "模型响应: ${models.size}个模型")
+        models.forEach {
             android.util.Log.d("ChatRepo", "  模型: ${it.id}, ctx=${it.context_length}")
         }
-        return response.data
+        return models
     }
 
     /**
