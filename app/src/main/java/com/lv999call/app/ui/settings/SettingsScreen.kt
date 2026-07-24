@@ -11,7 +11,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
@@ -65,9 +64,6 @@ fun SettingsScreen(
     var ttsApiKey by remember(config) { mutableStateOf(config.ttsApiKey) }
     var ttsModel by remember(config) { mutableStateOf(config.ttsModel) }
     var ttsSpeed by remember(config) { mutableFloatStateOf(config.ttsSpeed) }
-    var refAudioBase64 by remember(config) { mutableStateOf(config.ttsReferenceAudioBase64) }
-    var refAudioMime by remember(config) { mutableStateOf(config.ttsReferenceAudioMime) }
-    var refAudioName by remember { mutableStateOf(if (config.ttsReferenceAudioBase64.isNotEmpty()) "已加载" else "未选择") }
 
     var showApiKey by remember { mutableStateOf(false) }
     var waitTts by remember(config) { mutableStateOf(config.waitTtsBeforeRecord) }
@@ -77,46 +73,6 @@ fun SettingsScreen(
     var showModelDialog by remember { mutableStateOf(false) }
     var isLoadingModels by remember { mutableStateOf(false) }
     var modelDialogTarget by remember { mutableStateOf("tts") } // "llm" or "tts"
-    var isExtractingAudio by remember { mutableStateOf(false) }
-
-    // 音频文件选择（通过AudioExtractor解码+裁剪到15秒）
-    val audioPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let {
-            refAudioName = it.lastPathSegment ?: "audio"
-            isExtractingAudio = true
-            scope.launch {
-                val result = com.lv999call.app.audio.AudioExtractor.extractWav(context, it)
-                isExtractingAudio = false
-                result.onSuccess { wavBytes ->
-                    refAudioBase64 = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
-                    refAudioMime = "audio/wav"
-                }
-            }
-        }
-    }
-
-    // 视频文件选择（提取音频后使用）
-    val videoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let {
-            refAudioName = it.lastPathSegment ?: "video"
-            isExtractingAudio = true
-            scope.launch {
-                val result = com.lv999call.app.audio.AudioExtractor.extractWav(context, it)
-                isExtractingAudio = false
-                result.onSuccess { wavBytes ->
-                    refAudioBase64 = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
-                    refAudioMime = "audio/wav"
-                }
-            }
-        }
-    }
-
-    // 音频/视频来源选择弹窗
-    var showSourceDialog by remember { mutableStateOf(false) }
 
     // Vosk 下载完成提示
     LaunchedEffect(voskDownloadState) {
@@ -377,32 +333,6 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // 参考音频选择
-                Text("参考音频（克隆音色）", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(
-                        onClick = { showSourceDialog = true },
-                        modifier = Modifier.weight(1f),
-                        shape = shapes.small,
-                        enabled = !isExtractingAudio
-                    ) {
-                        if (isExtractingAudio) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = colors.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("提取中...", style = MaterialTheme.typography.bodyMedium)
-                        } else {
-                            Icon(Icons.Default.AudioFile, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(refAudioName, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    if (refAudioBase64.isNotEmpty() && !isExtractingAudio) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(Icons.Default.Check, "已选择", tint = colors.tertiary, modifier = Modifier.size(24.dp))
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
                 Text("语速: ${"%.1f".format(ttsSpeed)}x", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
                 Slider(value = ttsSpeed, onValueChange = { ttsSpeed = it }, valueRange = 0.5f..2.0f, steps = 14,
                     colors = SliderDefaults.colors(thumbColor = colors.primary, activeTrackColor = colors.primary))
@@ -433,7 +363,7 @@ fun SettingsScreen(
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
-                            ttsReferenceAudioBase64 = refAudioBase64, ttsReferenceAudioMime = refAudioMime,
+                            ttsReferenceAudioBase64 = "", ttsReferenceAudioMime = "audio/wav",
                             waitTtsBeforeRecord = waitTts
                         ))
                     },
@@ -484,37 +414,6 @@ fun SettingsScreen(
                 }
             },
             confirmButton = { TextButton(onClick = { showModelDialog = false }) { Text("取消") } }
-        )
-    }
-
-    // 音频来源选择弹窗
-    if (showSourceDialog) {
-        AlertDialog(
-            onDismissRequest = { showSourceDialog = false },
-            title = { Text("选择音频来源") },
-            text = {
-                Column {
-                    ListItem(
-                        headlineContent = { Text("音频文件") },
-                        supportingContent = { Text("WAV / MP3 / FLAC 等") },
-                        leadingContent = { Icon(Icons.Default.AudioFile, contentDescription = null, tint = colors.primary) },
-                        modifier = Modifier.clickable {
-                            showSourceDialog = false
-                            audioPicker.launch("audio/*")
-                        }
-                    )
-                    ListItem(
-                        headlineContent = { Text("从视频提取") },
-                        supportingContent = { Text("MP4 / MKV / AVI 等，自动提取音频转WAV") },
-                        leadingContent = { Icon(Icons.Default.VideoFile, contentDescription = null, tint = colors.tertiary) },
-                        modifier = Modifier.clickable {
-                            showSourceDialog = false
-                            videoPicker.launch("video/*")
-                        }
-                    )
-                }
-            },
-            confirmButton = {}
         )
     }
 }
