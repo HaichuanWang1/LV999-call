@@ -32,3 +32,13 @@
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
 -keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+
+# JNA (required by Vosk) - 不能混淆，否则原生库加载失败
+-keep class com.sun.jna.** { *; }
+-keepclassmembers class com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+
+# Vosk ASR - 不能混淆，依赖JNA反射调用原生库
+-keep class org.vosk.** { *; }
+-keepclassmembers class org.vosk.** { *; }
+-dontwarn org.vosk.**

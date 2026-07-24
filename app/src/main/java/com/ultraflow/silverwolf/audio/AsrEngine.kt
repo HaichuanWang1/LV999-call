@@ -6,15 +6,12 @@ import com.ultraflow.silverwolf.data.remote.AsrApiService
 import com.ultraflow.silverwolf.data.remote.NetworkClient
 import com.ultraflow.silverwolf.domain.model.ApiConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.vosk.Model
 import org.vosk.Recognizer
-import java.io.ByteArrayOutputStream
-import kotlin.coroutines.resume
 
 /**
  * ASR引擎
@@ -31,17 +28,17 @@ class AsrEngine(private val context: Context) {
     val modelManager = VoskModelManager(context)
 
     private var voskModel: Model? = null
+    private var voskRecognizer: Recognizer? = null
     private var currentVoskModelId: String? = null
 
     /**
-     * 初始化 Vosk 模型（优先从 assets 解压，已加载则复用）
+     * 初始化 Vosk 模型和 Recognizer（复用，不每次重建）
      */
     suspend fun initVoskModel(modelId: String): Boolean {
         if (voskModel != null && currentVoskModelId == modelId) return true
 
         releaseVoskModel()
 
-        // 确保模型文件就绪（assets 解压或已存在）
         val modelPath = modelManager.ensureModelReady(modelId)
         if (modelPath == null) {
             Log.e(TAG, "Vosk模型不可用: $modelId")
@@ -50,21 +47,26 @@ class AsrEngine(private val context: Context) {
 
         return try {
             voskModel = Model(modelPath)
+            voskRecognizer = Recognizer(voskModel!!, VOSK_SAMPLE_RATE).apply {
+                setMaxAlternatives(0)
+                setWords(true)
+                setPartialWords(false)
+            }
             currentVoskModelId = modelId
-            Log.d(TAG, "Vosk模型加载成功: $modelId")
+            Log.d(TAG, "Vosk模型+Recognizer加载成功: $modelId")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Vosk模型加载失败: ${e.message}")
             voskModel = null
+            voskRecognizer = null
             currentVoskModelId = null
             false
         }
     }
 
-    /**
-     * 释放 Vosk 模型资源
-     */
     fun releaseVoskModel() {
+        voskRecognizer?.close()
+        voskRecognizer = null
         voskModel?.close()
         voskModel = null
         currentVoskModelId = null
@@ -75,7 +77,7 @@ class AsrEngine(private val context: Context) {
      */
     suspend fun transcribe(config: ApiConfig, pcmData: ByteArray): String {
         return if (config.asrProvider == "vosk") {
-            transcribeVosk(config, pcmData)
+            transcribeVosk(pcmData)
         } else {
             transcribeHttp(config, pcmData)
         }
@@ -85,22 +87,18 @@ class AsrEngine(private val context: Context) {
 
     /**
      * 使用 Vosk 进行离线语音识别
+     * 复用 Recognizer，送入音频后获取结果，然后重置
      */
-    private suspend fun transcribeVosk(config: ApiConfig, pcmData: ByteArray): String {
+    private suspend fun transcribeVosk(pcmData: ByteArray): String {
         return withContext(Dispatchers.IO) {
-            val model = voskModel
-            if (model == null) {
-                Log.e(TAG, "Vosk模型未初始化")
+            val recognizer = voskRecognizer
+            if (recognizer == null) {
+                Log.e(TAG, "Vosk Recognizer未初始化")
                 return@withContext ""
             }
 
             try {
-                val recognizer = Recognizer(model, VOSK_SAMPLE_RATE)
-                recognizer.setMaxAlternatives(0)
-                recognizer.setWords(true)
-                recognizer.setPartialWords(false)
-
-                // 分块送入音频数据
+                // 分块送入音频数据（每块4096字节 = 2048 samples）
                 val chunkSize = 4096
                 var offset = 0
                 while (offset < pcmData.size) {
@@ -112,12 +110,15 @@ class AsrEngine(private val context: Context) {
 
                 // 获取最终结果
                 val finalResult = recognizer.finalResult
-                recognizer.close()
+                Log.d(TAG, "Vosk原始结果: $finalResult")
 
-                // 解析JSON结果提取文本
-                parseVoskResult(finalResult)
+                // 解析结果
+                val text = parseVoskResult(finalResult)
+                Log.d(TAG, "Vosk识别: '$text' (输入${pcmData.size}字节)")
+
+                text
             } catch (e: Exception) {
-                Log.e(TAG, "Vosk识别失败: ${e.message}")
+                Log.e(TAG, "Vosk识别异常: ${e.message}")
                 ""
             }
         }
@@ -132,48 +133,36 @@ class AsrEngine(private val context: Context) {
             val obj = org.json.JSONObject(json)
             obj.optString("text", "").trim()
         } catch (e: Exception) {
-            Log.e(TAG, "Vosk结果解析失败: $json")
+            Log.e(TAG, "Vosk结果解析失败: $json, err=${e.message}")
             ""
         }
     }
 
     // ===== HTTP API 识别 =====
 
-    /**
-     * 通过 HTTP API 进行语音识别
-     */
     private suspend fun transcribeHttp(config: ApiConfig, pcmData: ByteArray): String {
         return withContext(Dispatchers.IO) {
             try {
                 val wavData = pcmToWav(pcmData)
-
                 val requestFile = wavData.toRequestBody("audio/wav".toMediaType())
                 val audioPart = MultipartBody.Part.createFormData("file", "audio.wav", requestFile)
                 val languageBody = config.asrLanguage.toRequestBody("text/plain".toMediaType())
-
                 val url = AsrApiService.buildTranscribeUrl(config.asrBaseUrl)
                 val auth = "Bearer ${config.asrApiKey}"
-
                 val response = networkAsrApi.transcribe(url, auth, audioPart, language = languageBody)
-                val text = response.text.ifEmpty {
-                    response.result?.firstOrNull()?.text ?: ""
-                }
-
-                Log.d(TAG, "HTTP ASR识别结果: $text")
+                val text = response.text.ifEmpty { response.result?.firstOrNull()?.text ?: "" }
+                Log.d(TAG, "HTTP ASR: $text")
                 text
             } catch (e: Exception) {
-                Log.e(TAG, "HTTP ASR识别失败: ${e.message}")
+                Log.e(TAG, "HTTP ASR失败: ${e.message}")
                 ""
             }
         }
     }
 
-    // ===== WAV 转换工具 =====
-
     fun pcmToWav(pcmData: ByteArray, sampleRate: Int = 16000, channels: Int = 1): ByteArray {
         val totalDataLen = pcmData.size + 36
         val byteRate = sampleRate * channels * 2
-
         val header = ByteArray(44)
         header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte()
         header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
@@ -183,16 +172,12 @@ class AsrEngine(private val context: Context) {
         header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte()
         header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
         writeInt(header, 16, 16)
-        writeShort(header, 20, 1)
-        writeShort(header, 22, channels)
-        writeInt(header, 24, sampleRate)
-        writeInt(header, 28, byteRate)
-        writeShort(header, 32, channels * 2)
-        writeShort(header, 34, 16)
+        writeShort(header, 20, 1); writeShort(header, 22, channels)
+        writeInt(header, 24, sampleRate); writeInt(header, 28, byteRate)
+        writeShort(header, 32, channels * 2); writeShort(header, 34, 16)
         header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte()
         header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
         writeInt(header, 40, pcmData.size)
-
         return header + pcmData
     }
 
