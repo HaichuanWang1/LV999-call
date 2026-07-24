@@ -44,6 +44,7 @@ class ConfigRepository(private val context: Context) {
         val CHARACTER_AVATAR_URI = stringPreferencesKey("character_avatar_uri")
         val BACKGROUND_URI = stringPreferencesKey("background_uri")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
+        val WAIT_TTS_BEFORE_RECORD = stringPreferencesKey("wait_tts_before_record")
     }
 
     val configFlow: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -69,7 +70,8 @@ class ConfigRepository(private val context: Context) {
             customTtsReferenceAudioMime = prefs[CUSTOM_TTS_REF_AUDIO_MIME] ?: "audio/wav",
             characterAvatarUri = prefs[CHARACTER_AVATAR_URI] ?: "",
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
-            customPrompt = prefs[CUSTOM_PROMPT] ?: ""
+            customPrompt = prefs[CUSTOM_PROMPT] ?: "",
+            waitTtsBeforeRecord = prefs[WAIT_TTS_BEFORE_RECORD]?.toBooleanStrictOrNull() ?: true
         )
     }
 
@@ -97,6 +99,7 @@ class ConfigRepository(private val context: Context) {
             prefs[CHARACTER_AVATAR_URI] = config.characterAvatarUri
             prefs[BACKGROUND_URI] = config.backgroundUri
             prefs[CUSTOM_PROMPT] = config.customPrompt
+            prefs[WAIT_TTS_BEFORE_RECORD] = config.waitTtsBeforeRecord.toString()
         }
     }
 

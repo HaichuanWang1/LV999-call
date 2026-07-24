@@ -70,6 +70,7 @@ fun SettingsScreen(
     var refAudioName by remember { mutableStateOf(if (config.ttsReferenceAudioBase64.isNotEmpty()) "已加载" else "未选择") }
 
     var showApiKey by remember { mutableStateOf(false) }
+    var waitTts by remember(config) { mutableStateOf(config.waitTtsBeforeRecord) }
     val scrollState = rememberScrollState()
 
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -412,6 +413,15 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("显示API Key", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = waitTts, onCheckedChange = { waitTts = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text("TTS播完再录音", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                        Text("关闭可降低延迟，但可能录到TTS声音", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(24.dp))
 
@@ -423,7 +433,8 @@ fun SettingsScreen(
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
-                            ttsReferenceAudioBase64 = refAudioBase64, ttsReferenceAudioMime = refAudioMime
+                            ttsReferenceAudioBase64 = refAudioBase64, ttsReferenceAudioMime = refAudioMime,
+                            waitTtsBeforeRecord = waitTts
                         ))
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

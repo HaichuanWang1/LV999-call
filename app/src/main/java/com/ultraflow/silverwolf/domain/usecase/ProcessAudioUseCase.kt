@@ -105,6 +105,12 @@ class ProcessAudioUseCase(
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
+                // 如果开启了等待TTS，阻塞到播放完毕再返回
+                if (config.waitTtsBeforeRecord) {
+                    while (audioPlayer.isPlaying.value) {
+                        kotlinx.coroutines.delay(100)
+                    }
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "TTS播放失败: ${e.message}")

@@ -158,9 +158,11 @@ class CallViewModel(
                 _currentResponse.value = ""
             } finally {
                 isProcessing = false
-                if (_callState.value != CallState.ENDED) {
+                if (_callState.value != CallState.ENDED && !_isMuted.value) {
                     _callState.value = CallState.LISTENING
                     startListening()
+                } else if (_callState.value != CallState.ENDED) {
+                    _callState.value = CallState.LISTENING
                 }
             }
         }
@@ -190,9 +192,11 @@ class CallViewModel(
                 currentSession?.let { session -> manageSessionUseCase.saveCallMessages(session.id, _messages.value) }
             } finally {
                 isProcessing = false
-                if (_callState.value != CallState.ENDED) {
+                if (_callState.value != CallState.ENDED && !_isMuted.value) {
                     _callState.value = CallState.LISTENING
                     startListening()
+                } else if (_callState.value != CallState.ENDED) {
+                    _callState.value = CallState.LISTENING
                 }
             }
         }

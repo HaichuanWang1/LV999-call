@@ -30,8 +30,13 @@ class ChatRepository(
     private val gson = Gson()
 
     companion object {
-        // 匹配emoji (Unicode 1F000-1FFFF 范围 + 组合标记)
-        private val REGEX_EMOJI = Regex("[\\uD83C-\\uDBFF\\uDC00-\\uDFFF\\u2600-\\u27BF\\uFE0F\\u200D\\u20E3\\u2702-\\u27B0\\u2934-\\u2935\\u2B05-\\u2B07\\u2B1B-\\u2B1C\\u3030\\u303D\\u3297\\u3299]")
+        // 匹配emoji (仅真正的emoji，不包含常用符号)
+        private val REGEX_EMOJI = Regex(
+            "[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]|" +  // 双字节emoji (U+1F000-U+1FFFF)
+            "[\\u200D\\uFE0F\\u20E3]|" +               // 组合标记
+            "[\\u2702-\\u27B0]|" +                      // 杂项符号(✂✉✏等)
+            "[\\uD83C\\uDDE0-\\uDDFF]{2}"              // 旗标emoji
+        )
         // 匹配特殊装饰符号（箭头、几何形状等TTS无法处理的）
         private val REGEX_SYMBOLS = Regex("[◆◇○●□■△▽▲▼→←↑↓↔►◄★☆♦♣♠♥⬡⬢⏣⎔]")
     }
