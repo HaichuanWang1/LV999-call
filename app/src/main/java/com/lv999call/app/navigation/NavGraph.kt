@@ -119,10 +119,6 @@ fun NavGraph() {
         ) { backStackEntry ->
             val presetId = backStackEntry.arguments?.getLong("presetId") ?: 0L
 
-            val viewModel: CustomEditViewModel = viewModel(
-                factory = CustomEditViewModel.Factory(appModule.configRepository)
-            )
-
             // 加载已有预设数据
             var loadedPreset by remember { mutableStateOf<com.lv999call.app.data.local.entity.PresetEntity?>(null) }
             LaunchedEffect(presetId) {

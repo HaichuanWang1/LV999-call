@@ -38,7 +38,7 @@ class AppModule(private val context: Context) {
     val voskModelManager: VoskModelManager by lazy { VoskModelManager(context) }
     val audioPlayer: AudioPlayer by lazy { AudioPlayer() }
 
-    val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, configRepository) }
+    val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, configRepository, context) }
     val manageSessionUseCase: ManageSessionUseCase by lazy { ManageSessionUseCase(sessionRepository) }
     val processAudioUseCase: ProcessAudioUseCase by lazy { ProcessAudioUseCase(chatRepository, configRepository, asrEngine, audioPlayer) }
 }
