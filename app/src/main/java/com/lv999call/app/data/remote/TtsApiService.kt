@@ -32,7 +32,7 @@ object TtsModels {
     )
 
     data class TtsAudioConfig(
-        val format: String = "pcm16",
+        val format: String = "wav",   // 文档支持: wav, mp3
         val voice: String       // "data:{MIME};base64,{BASE64_AUDIO}"
     )
 

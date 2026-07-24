@@ -18,7 +18,8 @@ class ProcessAudioUseCase(
     private val chatRepository: ChatRepository,
     private val configRepository: ConfigRepository,
     private val asrEngine: AsrEngine,
-    private val audioPlayer: AudioPlayer
+    private val audioPlayer: AudioPlayer,
+    private val silverWolfRefAudioBase64: String = ""
 ) {
     companion object {
         private const val TAG = "ProcessAudioUseCase"
@@ -109,8 +110,14 @@ class ProcessAudioUseCase(
         // Step 3: 单次TTS合成完整响应并播放
         onStateChange(CallState.SPEAKING)
         try {
-            val refAudio = overrideRefAudioBase64?.takeIf { it.isNotEmpty() } ?: config.getRefAudioForMode(mode)
-            val refMime = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true } ?: config.getRefAudioMimeForMode(mode)
+            // 优先级：预设override > 配置音频 > 银狼内置音频(所有模式兜底)
+            val refAudio: String = overrideRefAudioBase64?.takeIf { it.isNotEmpty() }
+                ?: config.getRefAudioForMode(mode).takeIf { it.isNotEmpty() }
+                ?: silverWolfRefAudioBase64
+                ?: ""
+            val refMime: String = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true }
+                ?: config.getRefAudioMimeForMode(mode).takeIf { config.getRefAudioForMode(mode).isNotEmpty() }
+                ?: "audio/wav"
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime")
 
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)

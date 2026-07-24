@@ -38,7 +38,18 @@ class AppModule(private val context: Context) {
     val voskModelManager: VoskModelManager by lazy { VoskModelManager(context) }
     val audioPlayer: AudioPlayer by lazy { AudioPlayer() }
 
+    /** 银狼内置参考音频（从assets加载） */
+    val silverWolfRefAudioBase64: String by lazy {
+        try {
+            val bytes = context.assets.open("silverwolf/ref_voice.wav").use { it.readBytes() }
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            android.util.Log.e("AppModule", "加载银狼音频失败: ${e.message}")
+            ""
+        }
+    }
+
     val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, configRepository, context) }
     val manageSessionUseCase: ManageSessionUseCase by lazy { ManageSessionUseCase(sessionRepository) }
-    val processAudioUseCase: ProcessAudioUseCase by lazy { ProcessAudioUseCase(chatRepository, configRepository, asrEngine, audioPlayer) }
+    val processAudioUseCase: ProcessAudioUseCase by lazy { ProcessAudioUseCase(chatRepository, configRepository, asrEngine, audioPlayer, silverWolfRefAudioBase64) }
 }
