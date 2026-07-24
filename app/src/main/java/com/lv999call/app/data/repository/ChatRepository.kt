@@ -93,7 +93,7 @@ class ChatRepository(
         val auth = "Bearer ${config.llmApiKey}"
 
         try {
-            val responseBody = llmApi.chatCompletionStream(url, auth, request)
+            val responseBody = llmApi.chatCompletionStream(url, auth, config.llmApiKey, request)
             try {
                 val stream = responseBody.byteStream()
                 parseSSEStream(stream).collect { emit(it) }

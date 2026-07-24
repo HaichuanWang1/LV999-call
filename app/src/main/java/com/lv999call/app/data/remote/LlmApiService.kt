@@ -7,7 +7,7 @@ import retrofit2.http.POST
 import retrofit2.http.Streaming
 import retrofit2.http.Url
 
-/** LLM API 服务 - 支持SSE流式 */
+/** LLM API 服务 - 支持SSE流式，同时支持 Authorization 和 api-key 两种认证 */
 interface LlmApiService {
 
     @POST
@@ -15,6 +15,7 @@ interface LlmApiService {
     suspend fun chatCompletionStream(
         @Url url: String,
         @Header("Authorization") auth: String,
+        @Header("api-key") apiKey: String,
         @Body request: LlmModels.ChatRequest
     ): ResponseBody
 
