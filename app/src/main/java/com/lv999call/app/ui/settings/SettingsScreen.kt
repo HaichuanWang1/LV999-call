@@ -432,7 +432,7 @@ fun SettingsScreen(
     }
 
     // 错误提示
-    SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
+    SnackbarHost(hostState = snackbarHostState, modifier = Modifier.navigationBarsPadding().padding(16.dp))
 }
 
 @Composable
