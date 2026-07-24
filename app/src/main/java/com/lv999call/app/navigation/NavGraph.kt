@@ -15,26 +15,26 @@ import com.lv999call.app.ui.call.CallScreen
 import com.lv999call.app.ui.call.CallViewModel
 import com.lv999call.app.ui.custom.CustomEditScreen
 import com.lv999call.app.ui.custom.CustomEditViewModel
+import com.lv999call.app.ui.custom.PresetViewModel
 import com.lv999call.app.ui.history.HistoryScreen
 import com.lv999call.app.ui.history.HistoryViewModel
 import com.lv999call.app.ui.home.HomeScreen
 import com.lv999call.app.ui.prepare.PrepareScreen
-import com.lv999call.app.ui.prepare.PrepareViewModel
 import com.lv999call.app.ui.settings.SettingsScreen
 import com.lv999call.app.ui.settings.SettingsViewModel
 
-/** 路由定义 */
 object Routes {
     const val HOME = "home"
-    const val PREPARE = "prepare/{mode}"
-    const val CALL = "call/{mode}"
+    const val SILVERWOLF_PREPARE = "silverwolf_prepare"
+    const val SILVERWOLF_CALL = "silverwolf_call"
+    const val PRESET_EDIT = "preset_edit/{presetId}"
+    const val PRESET_CALL = "preset_call/{presetId}"
     const val CALL_CONTINUE = "call_continue/{sessionId}"
     const val HISTORY = "history/{sessionId}"
-    const val CUSTOM_EDIT = "custom_edit"
     const val SETTINGS = "settings"
 
-    fun prepare(mode: DialogMode) = "prepare/${mode.name}"
-    fun call(mode: DialogMode) = "call/${mode.name}"
+    fun presetEdit(id: Long) = "preset_edit/$id"
+    fun presetCall(id: Long) = "preset_call/$id"
     fun callContinue(sessionId: String) = "call_continue/$sessionId"
     fun history(sessionId: String) = "history/$sessionId"
 }
@@ -45,83 +45,56 @@ fun NavGraph() {
     val context = LocalContext.current
     val appModule = (context.applicationContext as App).appModule
 
-    NavHost(
-        navController = navController,
-        startDestination = Routes.HOME
-    ) {
+    // 预设ViewModel（全局共享）
+    val presetViewModel: PresetViewModel = viewModel(
+        factory = PresetViewModel.Factory(appModule.presetDao)
+    )
+
+    NavHost(navController = navController, startDestination = Routes.HOME) {
+
         // ===== 首页 =====
         composable(Routes.HOME) {
+            val presets by presetViewModel.presets.collectAsState()
+
             HomeScreen(
-                onNavigateToPrepare = { mode ->
-                    navController.navigate(Routes.prepare(mode))
-                },
-                onNavigateToSettings = {
-                    navController.navigate(Routes.SETTINGS)
-                }
+                presets = presets,
+                onNavigateToSilverWolf = { navController.navigate(Routes.SILVERWOLF_PREPARE) },
+                onNavigateToPreset = { presetId -> navController.navigate(Routes.presetEdit(presetId)) },
+                onNavigateToNewPreset = { navController.navigate(Routes.presetEdit(0)) },
+                onDeletePreset = { presetId -> presetViewModel.deletePreset(presetId) },
+                onNavigateToSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
 
-        // ===== 对话准备页 =====
-        composable(
-            route = Routes.PREPARE,
-            arguments = listOf(navArgument("mode") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val modeName = backStackEntry.arguments?.getString("mode") ?: "QUICK"
-            val mode = DialogMode.valueOf(modeName)
-
-            val viewModel: PrepareViewModel = viewModel(
-                factory = PrepareViewModel.Factory(appModule.startCallUseCase, appModule.configRepository)
-            )
-
-            LaunchedEffect(mode) {
-                viewModel.loadPrompt(mode)
-            }
-
-            val systemPrompt by viewModel.systemPrompt.collectAsState()
-            val config by viewModel.config.collectAsState()
-
+        // ===== 银狼准备页 =====
+        composable(Routes.SILVERWOLF_PREPARE) {
             PrepareScreen(
-                mode = mode,
-                systemPrompt = systemPrompt,
-                backgroundUri = config.backgroundUri,
-                onStartCall = {
-                    navController.navigate(Routes.call(mode))
-                },
+                mode = DialogMode.LONG,
+                promptPreview = "",  // 内置提示词，不预览
+                backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
+                onStartCall = { navController.navigate(Routes.SILVERWOLF_CALL) },
                 onBack = { navController.popBackStack() }
             )
         }
 
-        // ===== 通话页（新会话） =====
-        composable(
-            route = Routes.CALL,
-            arguments = listOf(navArgument("mode") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val modeName = backStackEntry.arguments?.getString("mode") ?: "QUICK"
-            val mode = DialogMode.valueOf(modeName)
-
+        // ===== 银狼通话页 =====
+        composable(Routes.SILVERWOLF_CALL) {
             val viewModel: CallViewModel = viewModel(
                 factory = CallViewModel.Factory(appModule, context.applicationContext as android.app.Application)
             )
-
             val callState by viewModel.callState.collectAsState()
             val messages by viewModel.messages.collectAsState()
             val currentResponse by viewModel.currentResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
 
-            // 启动通话
-            LaunchedEffect(Unit) {
-                viewModel.startCall(mode)
-            }
+            LaunchedEffect(Unit) { viewModel.startCall(DialogMode.LONG) }
 
-            // 通话结束后跳转到历史页
             LaunchedEffect(callState) {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
-                        navController.navigate(Routes.history(sessionId)) {
-                            popUpTo(Routes.HOME)
-                        }
+                        navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
             }
@@ -132,7 +105,113 @@ fun NavGraph() {
                 currentResponse = currentResponse,
                 audioLevel = 0f,
                 avatarUri = config.characterAvatarUri,
-                backgroundUri = config.backgroundUri,
+                backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
+                onHangUp = { viewModel.hangUp() },
+                onToggleMute = { viewModel.toggleMute() },
+                onSendText = { text -> viewModel.sendTextMessage(text) },
+                isMuted = isMuted
+            )
+        }
+
+        // ===== 预设编辑页（新建/编辑） =====
+        composable(
+            route = Routes.PRESET_EDIT,
+            arguments = listOf(navArgument("presetId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val presetId = backStackEntry.arguments?.getLong("presetId") ?: 0L
+
+            val viewModel: CustomEditViewModel = viewModel(
+                factory = CustomEditViewModel.Factory(appModule.configRepository)
+            )
+
+            // 加载已有预设数据
+            var loadedPreset by remember { mutableStateOf<com.lv999call.app.data.local.entity.PresetEntity?>(null) }
+            LaunchedEffect(presetId) {
+                if (presetId > 0) {
+                    loadedPreset = presetViewModel.getPreset(presetId)
+                }
+            }
+
+            CustomEditScreen(
+                presetId = if (presetId > 0) presetId else null,
+                currentName = loadedPreset?.name ?: "",
+                currentPrompt = loadedPreset?.prompt ?: "",
+                currentRefAudioBase64 = loadedPreset?.refAudioBase64 ?: "",
+                currentRefAudioMime = loadedPreset?.refAudioMime ?: "audio/wav",
+                currentAvatarUri = loadedPreset?.avatarUri,
+                currentBackgroundUri = loadedPreset?.backgroundUri,
+                onSave = { name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
+                    presetViewModel.savePreset(
+                        id = if (presetId > 0) presetId else null,
+                        name = name,
+                        prompt = prompt,
+                        refAudioBase64 = refAudioBase64,
+                        refAudioMime = refAudioMime,
+                        avatarUri = avatarUri ?: "",
+                        backgroundUri = backgroundUri ?: ""
+                    )
+                    navController.popBackStack()
+                },
+                onStartCall = { name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
+                    // 先保存预设
+                    presetViewModel.savePreset(
+                        id = if (presetId > 0) presetId else null,
+                        name = name,
+                        prompt = prompt,
+                        refAudioBase64 = refAudioBase64,
+                        refAudioMime = refAudioMime,
+                        avatarUri = avatarUri ?: "",
+                        backgroundUri = backgroundUri ?: ""
+                    )
+                    // 导航到通话页（需要把presetId传过去）
+                    navController.navigate("preset_call/$presetId")
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // ===== 预设通话页 =====
+        composable(
+            route = Routes.PRESET_CALL,
+            arguments = listOf(navArgument("presetId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val presetId = backStackEntry.arguments?.getLong("presetId") ?: 0L
+
+            val viewModel: CallViewModel = viewModel(
+                factory = CallViewModel.Factory(appModule, context.applicationContext as android.app.Application)
+            )
+            val callState by viewModel.callState.collectAsState()
+            val messages by viewModel.messages.collectAsState()
+            val currentResponse by viewModel.currentResponse.collectAsState()
+            val isMuted by viewModel.isMuted.collectAsState()
+            val config by viewModel.config.collectAsState()
+
+            // 加载预设数据用于显示
+            var presetBgUri by remember { mutableStateOf<String?>(null) }
+            var presetAvatarUri by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(presetId) {
+                val preset = presetViewModel.getPreset(presetId)
+                presetBgUri = preset?.backgroundUri
+                presetAvatarUri = preset?.avatarUri
+                viewModel.startPresetCall(presetId)
+            }
+
+            LaunchedEffect(callState) {
+                if (callState == CallState.ENDED) {
+                    val sessionId = viewModel.getSessionId()
+                    if (sessionId != null) {
+                        navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
+                    }
+                }
+            }
+
+            CallScreen(
+                callState = callState,
+                messages = messages,
+                currentResponse = currentResponse,
+                audioLevel = 0f,
+                avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
+                backgroundUri = presetBgUri?.ifEmpty { null },
                 onHangUp = { viewModel.hangUp() },
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
@@ -150,39 +229,28 @@ fun NavGraph() {
             val viewModel: CallViewModel = viewModel(
                 factory = CallViewModel.Factory(appModule, context.applicationContext as android.app.Application)
             )
-
             val callState by viewModel.callState.collectAsState()
             val messages by viewModel.messages.collectAsState()
             val currentResponse by viewModel.currentResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
 
-            LaunchedEffect(Unit) {
-                viewModel.continueSession(sessionId)
-            }
+            LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
 
             LaunchedEffect(callState) {
                 if (callState == CallState.ENDED) {
                     val currentSessionId = viewModel.getSessionId()
                     if (currentSessionId != null) {
-                        navController.navigate(Routes.history(currentSessionId)) {
-                            popUpTo(Routes.HOME)
-                        }
+                        navController.navigate(Routes.history(currentSessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
             }
 
             CallScreen(
-                callState = callState,
-                messages = messages,
-                currentResponse = currentResponse,
-                audioLevel = 0f,
-                avatarUri = config.characterAvatarUri,
-                backgroundUri = config.backgroundUri,
-                onHangUp = { viewModel.hangUp() },
-                onToggleMute = { viewModel.toggleMute() },
-                onSendText = { text -> viewModel.sendTextMessage(text) },
-                isMuted = isMuted
+                callState = callState, messages = messages, currentResponse = currentResponse,
+                audioLevel = 0f, avatarUri = config.characterAvatarUri,
+                onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
+                onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted
             )
         }
 
@@ -197,46 +265,18 @@ fun NavGraph() {
                 factory = HistoryViewModel.Factory(appModule.manageSessionUseCase)
             )
 
-            LaunchedEffect(sessionId) {
-                viewModel.loadSession(sessionId)
-            }
+            LaunchedEffect(sessionId) { viewModel.loadSession(sessionId) }
 
             val messages by viewModel.messages.collectAsState()
 
             HistoryScreen(
                 messages = messages,
                 onContinueSession = {
-                    navController.navigate(Routes.callContinue(sessionId)) {
-                        popUpTo(Routes.HOME)
-                    }
+                    navController.navigate(Routes.callContinue(sessionId)) { popUpTo(Routes.HOME) }
                 },
                 onBackToHome = {
-                    navController.navigate(Routes.HOME) {
-                        popUpTo(Routes.HOME) { inclusive = true }
-                    }
+                    navController.navigate(Routes.HOME) { popUpTo(Routes.HOME) { inclusive = true } }
                 }
-            )
-        }
-
-        // ===== 自定义编辑页 =====
-        composable(Routes.CUSTOM_EDIT) {
-            val viewModel: CustomEditViewModel = viewModel(
-                factory = CustomEditViewModel.Factory(appModule.configRepository)
-            )
-
-            val config by viewModel.config.collectAsState()
-
-            CustomEditScreen(
-                currentPrompt = config.customPrompt,
-                currentAvatarUri = config.characterAvatarUri.takeIf { it.isNotEmpty() },
-                currentBackgroundUri = config.backgroundUri.takeIf { it.isNotEmpty() },
-                currentRefAudioBase64 = config.customTtsReferenceAudioBase64,
-                currentRefAudioMime = config.customTtsReferenceAudioMime,
-                onSave = { prompt, avatarUri, backgroundUri, refAudioBase64, refAudioMime ->
-                    viewModel.saveCustomConfig(prompt, avatarUri, backgroundUri, refAudioBase64, refAudioMime)
-                    navController.popBackStack()
-                },
-                onBack = { navController.popBackStack() }
             )
         }
 
@@ -245,7 +285,6 @@ fun NavGraph() {
             val viewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.Factory(appModule.configRepository, appModule.chatRepository, appModule.voskModelManager)
             )
-
             val config by viewModel.config.collectAsState()
             val voskDownloadState by viewModel.voskDownloadState.collectAsState()
 
@@ -253,10 +292,7 @@ fun NavGraph() {
                 config = config,
                 voskModels = com.lv999call.app.audio.VoskModelManager.AVAILABLE_MODELS,
                 voskDownloadState = voskDownloadState,
-                onSave = { newConfig ->
-                    viewModel.saveConfig(newConfig)
-                    navController.popBackStack()
-                },
+                onSave = { newConfig -> viewModel.saveConfig(newConfig); navController.popBackStack() },
                 onFetchModels = { baseUrl, apiKey -> viewModel.fetchModelsWithContext(baseUrl, apiKey) },
                 onDownloadVoskModel = { model -> viewModel.downloadVoskModel(model) },
                 onDeleteVoskModel = { modelId -> viewModel.deleteVoskModel(modelId) },

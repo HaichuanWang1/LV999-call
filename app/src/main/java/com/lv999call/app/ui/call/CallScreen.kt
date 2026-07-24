@@ -18,11 +18,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,7 +43,8 @@ fun CallScreen(
     currentResponse: String,
     audioLevel: Float,
     avatarUri: String?,
-    backgroundUri: String?,
+    backgroundUri: String? = null,
+    backgroundResId: Int? = null,
     onHangUp: () -> Unit,
     onToggleMute: () -> Unit,
     onSendText: (String) -> Unit,
@@ -63,12 +66,24 @@ fun CallScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (!backgroundUri.isNullOrEmpty()) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(backgroundUri).crossfade(true).build(),
-                contentDescription = null, modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop, alpha = 0.25f
-            )
+        // 背景图
+        when {
+            backgroundResId != null -> {
+                Image(
+                    painter = painterResource(id = backgroundResId),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().blur(6.dp),
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.3f
+                )
+            }
+            !backgroundUri.isNullOrEmpty() -> {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(backgroundUri).crossfade(true).build(),
+                    contentDescription = null, modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop, alpha = 0.25f
+                )
+            }
         }
 
         Box(

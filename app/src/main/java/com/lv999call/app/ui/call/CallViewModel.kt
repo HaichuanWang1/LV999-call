@@ -113,6 +113,30 @@ class CallViewModel(
         }
     }
 
+    /** 使用预设开始通话（从PresetDao加载数据） */
+    fun startPresetCall(presetId: Long) {
+        viewModelScope.launch {
+            val preset = appModule.presetDao.getPresetById(presetId)
+            if (preset != null) {
+                // 使用预设的提示词和音频
+                systemPrompt = preset.prompt.ifEmpty { null }
+                currentMode = DialogMode.CUSTOM
+                currentSession = startCallUseCase.createSession(DialogMode.CUSTOM)
+                _messages.value = emptyList()
+
+                // 将预设音频临时覆盖到config中
+                val currentConfig = configRepository.configFlow.first()
+                configRepository.saveConfig(currentConfig.copy(
+                    customTtsReferenceAudioBase64 = preset.refAudioBase64,
+                    customTtsReferenceAudioMime = preset.refAudioMime
+                ))
+
+                _callState.value = CallState.LISTENING
+                startListening()
+            }
+        }
+    }
+
     private fun startListening() {
         if (_callState.value == CallState.ENDED) return
 
