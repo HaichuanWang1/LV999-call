@@ -17,6 +17,35 @@ class PresetViewModel(
     val presets: StateFlow<List<PresetEntity>> = presetDao.getAllPresets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * 保存预设，返回新插入的ID（新建时）或原ID（更新时）
+     */
+    suspend fun savePresetAndGetId(
+        id: Long?,
+        name: String,
+        prompt: String,
+        refAudioBase64: String,
+        refAudioMime: String,
+        avatarUri: String,
+        backgroundUri: String
+    ): Long {
+        val preset = PresetEntity(
+            id = id ?: 0,
+            name = name,
+            prompt = prompt,
+            refAudioBase64 = refAudioBase64,
+            refAudioMime = refAudioMime,
+            avatarUri = avatarUri,
+            backgroundUri = backgroundUri
+        )
+        return if (id != null && id > 0) {
+            presetDao.update(preset)
+            id
+        } else {
+            presetDao.insert(preset)
+        }
+    }
+
     fun savePreset(
         id: Long?,
         name: String,

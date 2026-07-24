@@ -51,6 +51,8 @@ class ProcessAudioUseCase(
         mode: DialogMode,
         isAutoGreeting: Boolean = false,
         autoGreetingText: String = "",
+        overrideRefAudioBase64: String? = null,
+        overrideRefAudioMime: String? = null,
         onStateChange: (CallState) -> Unit,
         onPartialResponse: (String) -> Unit
     ): Pair<ChatMessage, ChatMessage?> {
@@ -107,17 +109,19 @@ class ProcessAudioUseCase(
         // Step 3: 单次TTS合成完整响应并播放
         onStateChange(CallState.SPEAKING)
         try {
-            val refAudio = config.getRefAudioForMode(mode)
-            val refMime = config.getRefAudioMimeForMode(mode)
+            val refAudio = overrideRefAudioBase64?.takeIf { it.isNotEmpty() } ?: config.getRefAudioForMode(mode)
+            val refMime = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true } ?: config.getRefAudioMimeForMode(mode)
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime")
 
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
-                // 如果开启了等待TTS，阻塞到播放完毕再返回
+                // 如果开启了等待TTS，阻塞到播放完毕再返回（最多等待60秒）
                 if (config.waitTtsBeforeRecord) {
-                    while (audioPlayer.isPlaying.value) {
-                        kotlinx.coroutines.delay(100)
+                    kotlinx.coroutines.withTimeoutOrNull(60_000L) {
+                        while (audioPlayer.isPlaying.value) {
+                            kotlinx.coroutines.delay(100)
+                        }
                     }
                 }
             }

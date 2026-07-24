@@ -11,7 +11,13 @@ object LlmModels {
         val stream: Boolean = true,
         val temperature: Float = 0.7f,
         @SerializedName("max_tokens")
-        val maxTokens: Int = 2048
+        val maxTokens: Int = 2048,
+        // 显式关闭思考模式，提升响应速度
+        val thinking: ThinkingConfig? = ThinkingConfig(type = "disabled")
+    )
+
+    data class ThinkingConfig(
+        val type: String  // "enabled" or "disabled"
     )
 
     data class Message(
@@ -20,7 +26,7 @@ object LlmModels {
     )
 
     data class ChatResponse(
-        val choices: List<Choice>
+        val choices: List<Choice>?
     )
 
     data class Choice(

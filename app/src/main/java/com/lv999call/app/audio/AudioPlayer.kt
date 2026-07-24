@@ -9,7 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.InputStream
-import java.util.concurrent.LinkedBlockingQueue
 
 /**
  * 流式音频播放器
@@ -27,7 +26,7 @@ class AudioPlayer {
     private var audioTrack: AudioTrack? = null
     private var playbackJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val audioQueue = LinkedBlockingQueue<ByteArray>()
+    private val trackLock = Any() // 保护audioTrack的并发访问
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -135,9 +134,10 @@ class AudioPlayer {
     }
 
     private fun reinitWithParams(sampleRate: Int, channels: Int) {
-        try {
-            audioTrack?.stop()
-            audioTrack?.release()
+        synchronized(trackLock) {
+            try {
+                audioTrack?.stop()
+                audioTrack?.release()
             val channelConfig = if (channels == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO
             val bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, AudioFormat.ENCODING_PCM_16BIT)
             audioTrack = AudioTrack.Builder()
@@ -157,8 +157,9 @@ class AudioPlayer {
                 .setBufferSizeInBytes(bufferSize * 2)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
-        } catch (e: Exception) {
-            Log.e(TAG, "AudioTrack重初始化失败: ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "AudioTrack重初始化失败: ${e.message}")
+            }
         }
     }
 
@@ -203,11 +204,12 @@ class AudioPlayer {
     fun stopCurrentPlayback() {
         _isPlaying.value = false
         playbackJob?.cancel()
-        audioQueue.clear()
-        try {
-            audioTrack?.stop()
-            audioTrack?.flush()
-        } catch (_: Exception) {}
+        synchronized(trackLock) {
+            try {
+                audioTrack?.stop()
+                audioTrack?.flush()
+            } catch (_: Exception) {}
+        }
     }
 
     /**

@@ -25,9 +25,9 @@
 -keep @androidx.room.Entity class *
 
 # Keep data models
--keep class com.ultraflow.silverwolf.data.local.entity.** { *; }
--keep class com.ultraflow.silverwolf.data.remote.** { *; }
--keep class com.ultraflow.silverwolf.domain.model.** { *; }
+-keep class com.lv999call.app.data.local.entity.** { *; }
+-keep class com.lv999call.app.data.remote.** { *; }
+-keep class com.lv999call.app.domain.model.** { *; }
 
 # Keep ViewModel classes (accessed via reflection by ViewModelProvider)
 -keep class * extends androidx.lifecycle.ViewModel { *; }
@@ -35,8 +35,8 @@
 -keepclassmembers class * implements androidx.lifecycle.ViewModelProvider$Factory { *; }
 
 # Keep app DI module and UseCase classes
--keep class com.ultraflow.silverwolf.di.** { *; }
--keep class com.ultraflow.silverwolf.domain.usecase.** { *; }
+-keep class com.lv999call.app.di.** { *; }
+-keep class com.lv999call.app.domain.usecase.** { *; }
 
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses

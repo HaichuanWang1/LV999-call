@@ -82,7 +82,8 @@ class AudioRecorder(private val context: Context) {
             _isRecording.value = true
             vadDetector.reset()
 
-            // 每次录音创建新的scope
+            // 每次录音创建新的scope（先取消旧的避免泄漏）
+            scope?.cancel()
             val newScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
             scope = newScope
 
@@ -132,6 +133,10 @@ class AudioRecorder(private val context: Context) {
     fun stopRecording() {
         _isRecording.value = false
         recordingJob?.cancel()
+        // 等待录音协程退出后再操作AudioRecord，避免并发
+        try {
+            kotlinx.coroutines.runBlocking { recordingJob?.join() }
+        } catch (_: Exception) {}
         try {
             audioRecord?.stop()
         } catch (_: Exception) {}

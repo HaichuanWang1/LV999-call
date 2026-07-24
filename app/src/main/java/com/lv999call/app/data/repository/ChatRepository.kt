@@ -18,7 +18,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.BufferedReader
 import java.io.InputStream
 
 /** 对话仓库 - 处理LLM/ASR/TTS的网络调用 */
@@ -37,16 +36,11 @@ class ChatRepository(
         private val REGEX_STYLE_ANNOTATION = Regex("[（(][^）)]{1,10}[）)]|\\[[^\\]]{1,10}]")
     }
 
-    /**
-     * 获取可用模型列表
-     * @param baseUrl API基础URL（LLM或TTS）
-     * @param apiKey API密钥
-     */
-    suspend fun fetchModels(baseUrl: String, apiKey: String): List<ModelsResponse.ModelItem> {
+    /** 获取可用模型列表 */
+    suspend fun fetchModels(baseUrl: String, apiKey: String): Result<List<ModelsResponse.ModelItem>> {
         val url = ModelsApiService.buildUrl(baseUrl)
         android.util.Log.d("ChatRepo", "获取模型: $url")
 
-        // 直接用OkHttp请求，避免Retrofit+Gson反序列化问题
         return withContext(Dispatchers.IO) {
             try {
                 val request = okhttp3.Request.Builder()
@@ -56,40 +50,55 @@ class ChatRepository(
                     .get()
                     .build()
 
-                val response = com.lv999call.app.data.remote.NetworkClient.okHttpClient.newCall(request).execute()
-                val body = response.body?.string() ?: ""
-                android.util.Log.d("ChatRepo", "模型原始响应(${response.code}): ${body.take(300)}")
-
-                if (!response.isSuccessful) {
-                    android.util.Log.e("ChatRepo", "模型请求失败: ${response.code}")
-                    return@withContext emptyList()
+                val call = com.lv999call.app.data.remote.NetworkClient.okHttpClient.newCall(request)
+                val response = try {
+                    kotlinx.coroutines.suspendCancellableCoroutine<okhttp3.Response> { cont ->
+                        cont.invokeOnCancellation { call.cancel() }
+                        call.enqueue(object : okhttp3.Callback {
+                            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                                cont.resumeWith(kotlin.Result.success(response))
+                            }
+                            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                                cont.resumeWith(kotlin.Result.failure(e))
+                            }
+                        })
+                    }
+                } catch (e: Exception) {
+                    return@withContext Result.failure(Exception("网络请求失败: ${e.message}"))
                 }
 
-                // 手动解析JSON
-                val jsonObj = org.json.JSONObject(body)
-                val dataArray = jsonObj.optJSONArray("data")
-                if (dataArray == null || dataArray.length() == 0) {
-                    android.util.Log.w("ChatRepo", "响应中无data数组或为空")
-                    return@withContext emptyList()
-                }
+                response.use { resp ->
+                    val body = resp.body?.string() ?: ""
+                    android.util.Log.d("ChatRepo", "模型原始响应(${resp.code}): ${body.take(300)}")
 
-                val models = mutableListOf<ModelsResponse.ModelItem>()
-                for (i in 0 until dataArray.length()) {
-                    val item = dataArray.getJSONObject(i)
-                    models.add(
-                        ModelsResponse.ModelItem(
-                            id = item.optString("id", ""),
-                            `object` = item.optString("object", "model"),
-                            owned_by = item.optString("owned_by", ""),
-                            context_length = if (item.has("context_length")) item.optInt("context_length") else null
+                    if (!resp.isSuccessful) {
+                        return@withContext Result.failure(Exception("请求失败 (${resp.code}): ${resp.message}"))
+                    }
+
+                    val jsonObj = org.json.JSONObject(body)
+                    val dataArray = jsonObj.optJSONArray("data")
+                    if (dataArray == null || dataArray.length() == 0) {
+                        return@withContext Result.success(emptyList())
+                    }
+
+                    val models = mutableListOf<ModelsResponse.ModelItem>()
+                    for (i in 0 until dataArray.length()) {
+                        val item = dataArray.getJSONObject(i)
+                        models.add(
+                            ModelsResponse.ModelItem(
+                                id = item.optString("id", ""),
+                                `object` = item.optString("object", "model"),
+                                owned_by = item.optString("owned_by", ""),
+                                context_length = if (item.has("context_length")) item.optInt("context_length") else null
+                            )
                         )
-                    )
+                    }
+                    android.util.Log.d("ChatRepo", "解析到 ${models.size} 个模型")
+                    Result.success(models)
                 }
-                android.util.Log.d("ChatRepo", "解析到 ${models.size} 个模型")
-                models
             } catch (e: Exception) {
                 android.util.Log.e("ChatRepo", "获取模型异常: ${e.message}")
-                emptyList()
+                Result.failure(Exception("获取模型失败: ${e.message}"))
             }
         }
     }
@@ -126,8 +135,26 @@ class ChatRepository(
         try {
             val responseBody = llmApi.chatCompletionStream(url, auth, config.llmApiKey, request)
             try {
-                val stream = responseBody.byteStream()
-                parseSSEStream(stream).collect { emit(it) }
+                val reader = responseBody.byteStream().bufferedReader()
+                try {
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val currentLine = line ?: continue
+                        if (currentLine.startsWith("data: ")) {
+                            val data = currentLine.removePrefix("data: ").trim()
+                            if (data == "[DONE]") break
+                            try {
+                                val chunk = gson.fromJson(data, LlmModels.ChatResponse::class.java)
+                                val content = chunk.choices?.firstOrNull()?.delta?.content
+                                if (!content.isNullOrEmpty()) emit(content)
+                            } catch (e: Exception) {
+                                android.util.Log.w("ChatRepo", "SSE解析跳过: ${e.message}")
+                            }
+                        }
+                    }
+                } finally {
+                    reader.close()
+                }
             } finally {
                 responseBody.close()
             }
@@ -210,17 +237,19 @@ class ChatRepository(
                 stream = true
             )
 
-            val url = TtsApiService.buildUrl(config.ttsBaseUrl)
+            // TTS锁死MiMo端点，当前只支持MiMo-V2.5-TTS-VoiceClone格式
+            val url = "https://api.xiaomimimo.com/v1/chat/completions"
             val voicePreview = voiceUri.take(60)
             android.util.Log.d("ChatRepo", "TTS: url=$url, model=${request.model}, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
 
-            val responseBody = ttsApi.synthesizeStream(url, config.ttsApiKey, request)
+            val responseBody = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
             try {
                 parseTtsAudioStream(responseBody.byteStream())
             } finally {
                 responseBody.close()
             }
         } catch (e: Exception) {
+            android.util.Log.e("ChatRepo", "TTS合成异常: ${e.message}", e)
             null
         }
     }
@@ -252,7 +281,9 @@ class ChatRepository(
                             audioOutput.write(decoded)
                             chunkCount++
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        android.util.Log.w("ChatRepo", "TTS JSON解析失败: $data, 原因: ${e.message}")
+                    }
                 }
             }
         } finally {
@@ -264,39 +295,4 @@ class ChatRepository(
         android.util.Log.d("ChatRepo", "TTS解析: 行=$lineCount, 块=$chunkCount, 字节=${result.size}")
         return result.inputStream()
     }
-
-    /**
-     * 解析SSE流式响应，提取content文本
-     */
-    private fun parseSSEStream(inputStream: InputStream): Flow<String> = flow {
-        val reader = inputStream.bufferedReader()
-        var line: String?
-
-        try {
-            while (reader.readLine().also { line = it } != null) {
-                val currentLine = line ?: continue
-
-                if (currentLine.startsWith("data: ")) {
-                    val data = currentLine.removePrefix("data: ").trim()
-
-                    if (data == "[DONE]") {
-                        break
-                    }
-
-                    try {
-                        val chunk = gson.fromJson(data, LlmModels.ChatResponse::class.java)
-                        val content = chunk.choices.firstOrNull()?.delta?.content
-                        if (!content.isNullOrEmpty()) {
-                            emit(content)
-                        }
-                    } catch (_: Exception) {
-                        // 跳过解析错误的行
-                    }
-                }
-            }
-        } finally {
-            reader.close()
-            inputStream.close()
-        }
-    }.flowOn(Dispatchers.IO)
 }

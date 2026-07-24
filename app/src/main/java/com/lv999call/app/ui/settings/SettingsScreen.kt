@@ -1,6 +1,5 @@
 package com.lv999call.app.ui.settings
 
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -36,6 +35,7 @@ fun SettingsScreen(
     config: ApiConfig,
     voskModels: List<VoskModelManager.VoskModel>,
     voskDownloadState: SettingsViewModel.VoskDownloadState,
+    isModelDownloaded: (String) -> Boolean = { false },
     onSave: (ApiConfig) -> Unit,
     onFetchModels: suspend (baseUrl: String, apiKey: String) -> Pair<List<String>, Int>,
     onDownloadVoskModel: (VoskModelManager.VoskModel) -> Unit,
@@ -52,7 +52,7 @@ fun SettingsScreen(
     var llmApiKey by remember(config) { mutableStateOf(config.llmApiKey) }
     var llmModel by remember(config) { mutableStateOf(config.llmModel) }
     var maxContextTokens by remember(config) { mutableStateOf(config.maxContextTokens.toFloat()) }
-    var apiMaxContext by remember { mutableStateOf(200000) } // 从API读取的上限
+    var apiMaxContext by remember(config) { mutableStateOf(config.maxContextTokens.coerceAtLeast(200000)) }
 
     var asrProvider by remember(config) { mutableStateOf(config.asrProvider) }
     var asrBaseUrl by remember(config) { mutableStateOf(config.asrBaseUrl) }
@@ -188,7 +188,7 @@ fun SettingsScreen(
                     Text("离线模型", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
 
                     voskModels.forEach { model ->
-                        val isDownloaded = voskModels.any { it.id == model.id }
+                        val isDownloaded = isModelDownloaded(model.id)
                         val isSelected = asrVoskModelId == model.id
                         val isDownloading = voskDownloadState is SettingsViewModel.VoskDownloadState.Downloading
                             && voskDownloadState.modelId == model.id
@@ -330,7 +330,11 @@ fun SettingsScreen(
                                 try {
                                     val (models, _) = onFetchModels(ttsBaseUrl, ttsApiKey)
                                     modelList = models
-                                    if (modelList.isNotEmpty()) showModelDialog = true
+                                    if (modelList.isNotEmpty()) {
+                                        showModelDialog = true
+                                    } else {
+                                        snackbarHostState.showSnackbar("该接口未返回模型列表")
+                                    }
                                 } catch (e: Exception) {
                                     fetchError = "获取模型失败: ${e.message?.take(80)}"
                                     snackbarHostState.showSnackbar(fetchError ?: "未知错误")
@@ -381,7 +385,6 @@ fun SettingsScreen(
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
-                            ttsReferenceAudioBase64 = "", ttsReferenceAudioMime = "audio/wav",
                             waitTtsBeforeRecord = waitTts
                         ))
                     },
@@ -407,7 +410,7 @@ fun SettingsScreen(
             onDismissRequest = { showModelDialog = false },
             title = { Text(dialogTitle) },
             text = {
-                Column {
+                Column(modifier = Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
                     modelList.forEach { modelId ->
                         Row(
                             modifier = Modifier.fillMaxWidth().clickable {

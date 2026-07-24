@@ -63,6 +63,7 @@ interface TtsApiService {
     @Streaming
     suspend fun synthesizeStream(
         @Url url: String,
+        @Header("Authorization") auth: String,
         @Header("api-key") apiKey: String,
         @Body request: TtsModels.TtsChatRequest
     ): ResponseBody
@@ -70,10 +71,10 @@ interface TtsApiService {
     companion object {
         fun buildUrl(baseUrl: String): String {
             val base = baseUrl.trimEnd('/')
-            return if (base.endsWith("/v1/chat/completions")) {
-                base
-            } else if (base.endsWith("/v1")) {
-                "$base/chat/completions"
+            if (base.endsWith("/chat/completions")) return base
+            val versionMatch = Regex("(.*/v\\d+)$").find(base)
+            return if (versionMatch != null) {
+                "${versionMatch.groupValues[1]}/chat/completions"
             } else {
                 "$base/v1/chat/completions"
             }

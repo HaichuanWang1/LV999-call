@@ -98,6 +98,9 @@ class AsrEngine(private val context: Context) {
             }
 
             try {
+                // 重置Recognizer，避免连续识别结果累积
+                recognizer.reset()
+
                 // 分块送入音频数据（每块4096字节 = 2048 samples）
                 val chunkSize = 4096
                 var offset = 0

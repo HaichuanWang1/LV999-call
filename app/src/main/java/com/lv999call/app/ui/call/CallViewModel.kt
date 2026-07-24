@@ -44,6 +44,9 @@ class CallViewModel(
     private var systemPrompt: String? = null
     @Volatile
     private var isProcessing = false
+    // 预设专用的TTS参考音频（不污染全局配置）
+    private var presetRefAudioBase64: String? = null
+    private var presetRefAudioMime: String? = null
 
     val config: StateFlow<ApiConfig> = configRepository.configFlow
         .stateIn(
@@ -73,24 +76,30 @@ class CallViewModel(
             // 自动发送"你好"发起对话
             _callState.value = CallState.THINKING
             val greetingPcm = ByteArray(0) // 空音频，跳过ASR
-            val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
-                pcmData = greetingPcm,
-                systemPrompt = systemPrompt,
-                history = emptyList(),
-                mode = currentMode,
-                isAutoGreeting = true,
-                autoGreetingText = "你好",
-                onStateChange = { state -> _callState.value = state },
-                onPartialResponse = { partial -> _currentResponse.value = partial }
-            )
+            try {
+                val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
+                    pcmData = greetingPcm,
+                    systemPrompt = systemPrompt,
+                    history = emptyList(),
+                    mode = currentMode,
+                    isAutoGreeting = true,
+                    autoGreetingText = "你好",
+                    onStateChange = { state -> _callState.value = state },
+                    onPartialResponse = { partial -> _currentResponse.value = partial }
+                )
 
-            val newMessages = mutableListOf(userMsg)
-            if (assistantMsg != null) newMessages.add(assistantMsg)
-            _messages.value = newMessages
-            _currentResponse.value = ""
+                val newMessages = mutableListOf(userMsg)
+                if (assistantMsg != null) newMessages.add(assistantMsg)
+                _messages.value = newMessages
+                _currentResponse.value = ""
 
-            currentSession?.let { session ->
-                manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                currentSession?.let { session ->
+                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CallVM", "打招呼失败: ${e.message}")
+                _callState.value = CallState.ENDED
+                return@launch
             }
 
             // 进入监听状态
@@ -109,6 +118,9 @@ class CallViewModel(
                 _messages.value = session.messages
                 _callState.value = CallState.LISTENING
                 startListening()
+            } else {
+                android.util.Log.e("CallVM", "会话不存在: $sessionId")
+                _callState.value = CallState.ENDED
             }
         }
     }
@@ -124,15 +136,54 @@ class CallViewModel(
                 currentSession = startCallUseCase.createSession(DialogMode.CUSTOM)
                 _messages.value = emptyList()
 
-                // 将预设音频临时覆盖到config中
+                // 保存预设音频到ViewModel本地字段，不污染全局配置
+                presetRefAudioBase64 = preset.refAudioBase64
+                presetRefAudioMime = preset.refAudioMime
+
+                // 如果使用 Vosk，初始化模型
                 val currentConfig = configRepository.configFlow.first()
-                configRepository.saveConfig(currentConfig.copy(
-                    customTtsReferenceAudioBase64 = preset.refAudioBase64,
-                    customTtsReferenceAudioMime = preset.refAudioMime
-                ))
+                if (currentConfig.asrProvider == "vosk") {
+                    val asrEngine = appModule.asrEngine
+                    val modelId = currentConfig.asrVoskModelId.ifEmpty { "vosk-model-small-cn-0.22" }
+                    if (!asrEngine.initVoskModel(modelId)) {
+                        _callState.value = CallState.ENDED
+                        return@launch
+                    }
+                }
+
+                // 发送打招呼
+                _callState.value = CallState.THINKING
+                try {
+                    val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
+                        pcmData = ByteArray(0),
+                        systemPrompt = systemPrompt,
+                        history = emptyList(),
+                        mode = currentMode,
+                        isAutoGreeting = true,
+                        autoGreetingText = "你好",
+                        overrideRefAudioBase64 = preset.refAudioBase64,
+                        overrideRefAudioMime = preset.refAudioMime,
+                        onStateChange = { state -> _callState.value = state },
+                        onPartialResponse = { partial -> _currentResponse.value = partial }
+                    )
+                    val newMessages = mutableListOf(userMsg)
+                    if (assistantMsg != null) newMessages.add(assistantMsg)
+                    _messages.value = newMessages
+                    _currentResponse.value = ""
+                    currentSession?.let { session ->
+                        manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("CallVM", "预设打招呼失败: ${e.message}")
+                    _callState.value = CallState.ENDED
+                    return@launch
+                }
 
                 _callState.value = CallState.LISTENING
                 startListening()
+            } else {
+                android.util.Log.e("CallVM", "预设不存在: $presetId")
+                _callState.value = CallState.ENDED
             }
         }
     }
@@ -164,6 +215,8 @@ class CallViewModel(
                     systemPrompt = systemPrompt,
                     history = _messages.value,
                     mode = currentMode,
+                    overrideRefAudioBase64 = presetRefAudioBase64,
+                    overrideRefAudioMime = presetRefAudioMime,
                     onStateChange = { state -> _callState.value = state },
                     onPartialResponse = { partial -> _currentResponse.value = partial }
                 )
@@ -206,6 +259,8 @@ class CallViewModel(
                     mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = text,
+                    overrideRefAudioBase64 = presetRefAudioBase64,
+                    overrideRefAudioMime = presetRefAudioMime,
                     onStateChange = { state -> _callState.value = state },
                     onPartialResponse = { partial -> _currentResponse.value = partial }
                 )
@@ -254,6 +309,10 @@ class CallViewModel(
     override fun onCleared() {
         super.onCleared()
         audioRecorder.release()
+        // audioPlayer是共享单例，只停止播放不释放资源
+        audioPlayer.stopCurrentPlayback()
+        presetRefAudioBase64 = null
+        presetRefAudioMime = null
     }
 
     class Factory(

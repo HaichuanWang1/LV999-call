@@ -4,6 +4,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
+import kotlinx.coroutines.launch
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -148,18 +149,20 @@ fun NavGraph() {
                     navController.popBackStack()
                 },
                 onStartCall = { name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
-                    // 先保存预设
-                    presetViewModel.savePreset(
-                        id = if (presetId > 0) presetId else null,
-                        name = name,
-                        prompt = prompt,
-                        refAudioBase64 = refAudioBase64,
-                        refAudioMime = refAudioMime,
-                        avatarUri = avatarUri ?: "",
-                        backgroundUri = backgroundUri ?: ""
-                    )
-                    // 导航到通话页（需要把presetId传过去）
-                    navController.navigate("preset_call/$presetId")
+                    // 先保存预设并获取ID，再导航
+                    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
+                    scope.launch {
+                        val newId = presetViewModel.savePresetAndGetId(
+                            id = if (presetId > 0) presetId else null,
+                            name = name,
+                            prompt = prompt,
+                            refAudioBase64 = refAudioBase64,
+                            refAudioMime = refAudioMime,
+                            avatarUri = avatarUri ?: "",
+                            backgroundUri = backgroundUri ?: ""
+                        )
+                        navController.navigate("preset_call/$newId")
+                    }
                 },
                 onBack = { navController.popBackStack() }
             )
@@ -287,6 +290,7 @@ fun NavGraph() {
                 config = config,
                 voskModels = com.lv999call.app.audio.VoskModelManager.AVAILABLE_MODELS,
                 voskDownloadState = voskDownloadState,
+                isModelDownloaded = { modelId -> viewModel.isModelDownloaded(modelId) },
                 onSave = { newConfig -> viewModel.saveConfig(newConfig); navController.popBackStack() },
                 onFetchModels = { baseUrl, apiKey -> viewModel.fetchModelsWithContext(baseUrl, apiKey) },
                 onDownloadVoskModel = { model -> viewModel.downloadVoskModel(model) },

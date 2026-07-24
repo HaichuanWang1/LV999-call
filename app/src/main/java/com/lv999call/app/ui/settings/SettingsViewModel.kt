@@ -44,11 +44,17 @@ class SettingsViewModel(
         }
     }
 
-    /** 获取模型列表，抛出异常时由调用方处理 */
+    /** 获取模型列表，失败时抛出异常 */
     suspend fun fetchModelsWithContext(baseUrl: String, apiKey: String): Pair<List<String>, Int> {
-        val items = chatRepository.fetchModels(baseUrl, apiKey)
+        val result = chatRepository.fetchModels(baseUrl, apiKey)
+        val items = result.getOrThrow()
         val maxContext = items.mapNotNull { it.context_length }.maxOrNull() ?: 200000
         return Pair(items.map { it.id }, maxContext)
+    }
+
+    /** 检查模型是否已下载到本地 */
+    fun isModelDownloaded(modelId: String): Boolean {
+        return voskModelManager.isModelAvailable(modelId)
     }
 
     /** 下载 Vosk 模型 */

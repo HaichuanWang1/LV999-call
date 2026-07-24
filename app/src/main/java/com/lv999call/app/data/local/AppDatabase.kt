@@ -53,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "lv999call_db"
                 )
                     .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }
             }

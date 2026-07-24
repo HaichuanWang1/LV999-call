@@ -22,10 +22,12 @@ interface LlmApiService {
     companion object {
         fun buildFullUrl(baseUrl: String): String {
             val base = baseUrl.trimEnd('/')
-            return if (base.endsWith("/v1/chat/completions")) {
-                base
-            } else if (base.endsWith("/v1")) {
-                "$base/chat/completions"
+            // 已包含完整端点
+            if (base.endsWith("/chat/completions")) return base
+            // 提取版本前缀（如 /v1, /v4, /api/paas/v4 等），在其后追加 /chat/completions
+            val versionMatch = Regex("(.*/v\\d+)$").find(base)
+            return if (versionMatch != null) {
+                "${versionMatch.groupValues[1]}/chat/completions"
             } else {
                 "$base/v1/chat/completions"
             }
