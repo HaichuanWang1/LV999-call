@@ -29,6 +29,15 @@
 -keep class com.ultraflow.silverwolf.data.remote.** { *; }
 -keep class com.ultraflow.silverwolf.domain.model.** { *; }
 
+# Keep ViewModel classes (accessed via reflection by ViewModelProvider)
+-keep class * extends androidx.lifecycle.ViewModel { *; }
+-keep class * extends androidx.lifecycle.AndroidViewModel { *; }
+-keepclassmembers class * implements androidx.lifecycle.ViewModelProvider$Factory { *; }
+
+# Keep app DI module and UseCase classes
+-keep class com.ultraflow.silverwolf.di.** { *; }
+-keep class com.ultraflow.silverwolf.domain.usecase.** { *; }
+
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
