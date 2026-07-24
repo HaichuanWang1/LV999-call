@@ -43,8 +43,6 @@ class ChatRepository(
         private val REGEX_THINKING = Regex("<think>[\\s\\S]*?</think>|<thinking>[\\s\\S]*?</thinking>")
         // 匹配语气/风格标注括号: (温柔), （慵懒）, [笑声] 等
         private val REGEX_STYLE_ANNOTATION = Regex("[（(][^）)]{1,10}[）)]|\\[[^\\]]{1,10}]")
-        // 匹配特殊装饰符号（箭头、几何形状等TTS无法处理的）
-        private val REGEX_SYMBOLS = Regex("[◆◇○●□■△▽▲▼→←↑↓↔►◄★☆♦♣♠♥⬡⬢⏣⎔]")
     }
 
     /**
