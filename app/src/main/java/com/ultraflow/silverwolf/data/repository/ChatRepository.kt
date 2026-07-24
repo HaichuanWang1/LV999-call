@@ -30,15 +30,16 @@ class ChatRepository(
     private val gson = Gson()
 
     companion object {
-        // 匹配emoji (仅真正的emoji，不包含常用符号)
+        // 匹配emoji和特殊符号（TTS无法处理的）— 逐字符列出，避免代理对正则在Android上崩溃
         private val REGEX_EMOJI = Regex(
-            "[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]|" +  // 双字节emoji (U+1F000-U+1FFFF)
-            "[\\u200D\\uFE0F\\u20E3]|" +               // 组合标记
-            "[\\u2702-\\u27B0]|" +                      // 杂项符号(✂✉✏等)
-            "[\\uD83C\\uDDE0-\\uDDFF]{2}"              // 旗标emoji
+            "[☀☁☂☃☄★☇☈☉☊☋☌☍☎☏☐☑☒☓☔☕☖☘☙☚☛☜☝☞☟☠☡☢☣☤☥☦☧☨☩☪☫☬☭☮☯☰☱" +
+            "☲☳☴☵☶☷☸☹☺☻☼☽☾☿♀♁♂♃♄♅♆♇♈♉♊♋♌♍♎♏♐♑♒♓♔♕♖♗♘♙♚♛♜♝♞♟" +
+            "♠♡♢♣♤♥♦♧♨♩♪♫♬♭♮♯♰♱♲♻♾♿⚀⚁⚂⚃⚄⚅⚆⚈⚉⚐⚑⚒⚓⚔⚕⚖⚗⚘⚙⚚⚛⚜⚝⚞⚟" +
+            "⚠⚡⚢⚣⚤⚥⚦⚧⚨⚩⚪⚫⚬⚭⚮⚯⚰⚱⚲⚳⚴⚵⚶⚷⚸⚹⚺⚻⚼⚽⚾⚿⛀⛁⛂⛃⛏⛍⛎⛏⛐⛑⛒⛓⛔⛕⛖⛗⛘⛙⛚⛛⛜⛝⛞⛟⛠⛡⛢⛣⛤⛥⛦⛧⛨⛩⛪⛫⛬⛭⛮⛯" +
+            "⛰⛱⛲⛳⛴⛵⛶⛷⛸⛹⛺⛻⛼⛽⛾⛿✀✁✂✃✄✅✆✇✈✉✊✋✌✍✎✏✐✑✒✓✔✕✖✗✘✙✚✛✜✝✞✟✠✡✢✣✤✥✦✧✨✩✪✫✬✭✮✯✰✱✲✳✴✵✶✷✸✹✺✻✼" +
+            "✽✾✿❀❁❂❃❄❅❆❇❈❉❊❋❌❍❎❏❐❑❒❓❔❕❖❗❘❙❚❛❜❝❞❟❠❡❢❣❤❥❦❧❨❩❪❫❬❭❮❯❰❱❲❳❴❵❶❷❸❹❺❻❼❽❾❿➀➁➂➃➄➅➆➇➈➉" +
+            "➊➋➌➍➎➏➐➑➒➓➔➕➖➗➘➙➚➛➜➝➞➟➠➡➢➣➤➥➦➧➨➩➪➫➬➭➮➯"
         )
-        // 匹配特殊符号（TTS无法识别的）
-        private val REGEX_SYMBOLS = Regex("[◆◇○●□■△▽▲▼→←↑↓↔►◄★☆♦♣♠♥⬡⬢⏣⎔☀☁☂❄♨✦✧❖⚑⚐⚡⚑❶❷❸❹❺❻❼❽❾❿]")
         // 匹配LLM thinking标签
         private val REGEX_THINKING = Regex("<think>[\\s\\S]*?</think>|<thinking>[\\s\\S]*?</thinking>")
         // 匹配语气/风格标注括号: (温柔), （慵懒）, [笑声] 等
@@ -157,7 +158,6 @@ class ChatRepository(
             .replace(REGEX_THINKING, "")
             .replace(REGEX_STYLE_ANNOTATION, "")
             .replace(REGEX_EMOJI, "")
-            .replace(REGEX_SYMBOLS, "")
             .replace("~", "，")
             .trim()
         if (cleanText.isBlank()) return null
