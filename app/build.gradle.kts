@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.ultraflow.silverwolf"
+    namespace = "com.lv999call.app"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.ultraflow.silverwolf"
+        applicationId = "com.lv999call.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
