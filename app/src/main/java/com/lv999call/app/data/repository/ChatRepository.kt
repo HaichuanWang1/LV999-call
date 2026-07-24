@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -44,13 +45,53 @@ class ChatRepository(
     suspend fun fetchModels(baseUrl: String, apiKey: String): List<ModelsResponse.ModelItem> {
         val url = ModelsApiService.buildUrl(baseUrl)
         android.util.Log.d("ChatRepo", "获取模型: $url")
-        val response = modelsApi.listModels(url, apiKey, "Bearer $apiKey")
-        val models = response.data ?: emptyList()
-        android.util.Log.d("ChatRepo", "模型响应: ${models.size}个模型")
-        models.forEach {
-            android.util.Log.d("ChatRepo", "  模型: ${it.id}, ctx=${it.context_length}")
+
+        // 直接用OkHttp请求，避免Retrofit+Gson反序列化问题
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", "Bearer $apiKey")
+                    .addHeader("api-key", apiKey)
+                    .get()
+                    .build()
+
+                val response = com.lv999call.app.data.remote.NetworkClient.okHttpClient.newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                android.util.Log.d("ChatRepo", "模型原始响应(${response.code}): ${body.take(300)}")
+
+                if (!response.isSuccessful) {
+                    android.util.Log.e("ChatRepo", "模型请求失败: ${response.code}")
+                    return@withContext emptyList()
+                }
+
+                // 手动解析JSON
+                val jsonObj = org.json.JSONObject(body)
+                val dataArray = jsonObj.optJSONArray("data")
+                if (dataArray == null || dataArray.length() == 0) {
+                    android.util.Log.w("ChatRepo", "响应中无data数组或为空")
+                    return@withContext emptyList()
+                }
+
+                val models = mutableListOf<ModelsResponse.ModelItem>()
+                for (i in 0 until dataArray.length()) {
+                    val item = dataArray.getJSONObject(i)
+                    models.add(
+                        ModelsResponse.ModelItem(
+                            id = item.optString("id", ""),
+                            `object` = item.optString("object", "model"),
+                            owned_by = item.optString("owned_by", ""),
+                            context_length = if (item.has("context_length")) item.optInt("context_length") else null
+                        )
+                    )
+                }
+                android.util.Log.d("ChatRepo", "解析到 ${models.size} 个模型")
+                models
+            } catch (e: Exception) {
+                android.util.Log.e("ChatRepo", "获取模型异常: ${e.message}")
+                emptyList()
+            }
         }
-        return models
     }
 
     /**
