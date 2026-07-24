@@ -60,7 +60,6 @@ class ChatRepository(
                 ModelsResponse.ModelItem(id = "mimo-v2.5-tts"),
                 ModelsResponse.ModelItem(id = "mimo-v2.5-tts-voicedesign")
             )
-            )
         }
     }
 
