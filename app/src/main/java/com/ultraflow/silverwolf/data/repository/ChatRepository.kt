@@ -146,8 +146,9 @@ class ChatRepository(
         // 去除emoji、特殊符号、LLM推理标签、语气标注，TTS无法处理会导致乱音/卡顿
         val cleanText = text
             .replace(REGEX_THINKING, "")
-            .replace(REGEX_STYLE_ANNOTATION, "")
+            .replace(REGEX_STYLE_ANNOTATION, " ")
             .replace("~", "，")
+            .replace(Regex("\\s+"), " ")
             .trim()
         if (cleanText.isBlank()) return null
 
