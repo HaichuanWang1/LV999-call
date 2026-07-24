@@ -44,12 +44,22 @@ class ChatRepository(
     suspend fun fetchModels(baseUrl: String, apiKey: String): List<ModelsResponse.ModelItem> {
         return try {
             val url = ModelsApiService.buildUrl(baseUrl)
+            android.util.Log.d("ChatRepo", "获取模型: $url")
             val response = modelsApi.listModels(url, apiKey, "Bearer $apiKey")
+            android.util.Log.d("ChatRepo", "模型响应: ${response.data.size}个模型")
+            response.data.forEach {
+                android.util.Log.d("ChatRepo", "  模型: ${it.id}, ctx=${it.context_length}")
+            }
             response.data
         } catch (e: Exception) {
+            android.util.Log.e("ChatRepo", "获取模型失败: ${e.message}")
+            // 返回MiMo全系列模型作为备选
             listOf(
+                ModelsResponse.ModelItem(id = "mimo-v2.5"),
                 ModelsResponse.ModelItem(id = "mimo-v2.5-tts-voiceclone"),
-                ModelsResponse.ModelItem(id = "mimo-v2.5-tts")
+                ModelsResponse.ModelItem(id = "mimo-v2.5-tts"),
+                ModelsResponse.ModelItem(id = "mimo-v2.5-tts-voicedesign")
+            )
             )
         }
     }

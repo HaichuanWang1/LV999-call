@@ -5,7 +5,7 @@ data class ApiConfig(
     // LLM配置
     val llmBaseUrl: String = "",
     val llmApiKey: String = "",
-    val llmModel: String = "groq/llama3-70b-8192",
+    val llmModel: String = "mimo-v2.5",
     val maxContextTokens: Int = 200000,  // 上下文窗口上限（token）
 
     // ASR配置

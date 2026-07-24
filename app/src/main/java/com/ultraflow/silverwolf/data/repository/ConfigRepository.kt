@@ -50,7 +50,7 @@ class ConfigRepository(private val context: Context) {
         ApiConfig(
             llmBaseUrl = prefs[LLM_BASE_URL] ?: "",
             llmApiKey = prefs[LLM_API_KEY] ?: "",
-            llmModel = prefs[LLM_MODEL] ?: "groq/llama3-70b-8192",
+            llmModel = prefs[LLM_MODEL] ?: "mimo-v2.5",
             maxContextTokens = prefs[MAX_CONTEXT_TOKENS]?.toIntOrNull() ?: 200000,
             asrProvider = prefs[ASR_PROVIDER] ?: "custom",
             asrBaseUrl = prefs[ASR_BASE_URL] ?: "",

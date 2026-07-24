@@ -26,6 +26,7 @@
 
 # Keep data models
 -keep class com.ultraflow.silverwolf.data.local.entity.** { *; }
+-keep class com.ultraflow.silverwolf.data.remote.** { *; }
 -keep class com.ultraflow.silverwolf.domain.model.** { *; }
 
 # kotlinx.serialization
