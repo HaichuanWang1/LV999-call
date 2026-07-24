@@ -37,3 +37,6 @@ Thumbs.db
 *.log
 *.7z
 sourse/
+
+# Release signing
+release.jks
