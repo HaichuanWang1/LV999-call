@@ -37,6 +37,12 @@ class ChatRepository(
             "[\\u2702-\\u27B0]|" +                      // 杂项符号(✂✉✏等)
             "[\\uD83C\\uDDE0-\\uDDFF]{2}"              // 旗标emoji
         )
+        // 匹配特殊符号（TTS无法识别的）
+        private val REGEX_SYMBOLS = Regex("[◆◇○●□■△▽▲▼→←↑↓↔►◄★☆♦♣♠♥⬡⬢⏣⎔☀☁☂❄♨✦✧❖⚑⚐⚡⚑❶❷❸❹❺❻❼❽❾❿]")
+        // 匹配LLM thinking标签
+        private val REGEX_THINKING = Regex("<think>[\\s\\S]*?</think>|<thinking>[\\s\\S]*?</thinking>")
+        // 匹配语气/风格标注括号: (温柔), （慵懒）, [笑声] 等
+        private val REGEX_STYLE_ANNOTATION = Regex("[（(][^）)]{1,10}[）)]|\\[[^\\]]{1,10}]")
         // 匹配特殊装饰符号（箭头、几何形状等TTS无法处理的）
         private val REGEX_SYMBOLS = Regex("[◆◇○●□■△▽▲▼→←↑↓↔►◄★☆♦♣♠♥⬡⬢⏣⎔]")
     }
@@ -148,8 +154,14 @@ class ChatRepository(
         refAudioBase64: String = config.ttsReferenceAudioBase64,
         refAudioMime: String = config.ttsReferenceAudioMime
     ): InputStream? {
-        // 去除emoji和特殊Unicode符号，TTS无法处理会导致乱音/卡顿
-        val cleanText = text.replace(REGEX_EMOJI, "").replace(REGEX_SYMBOLS, "").replace("~", "，").trim()
+        // 去除emoji、特殊符号、LLM推理标签、语气标注，TTS无法处理会导致乱音/卡顿
+        val cleanText = text
+            .replace(REGEX_THINKING, "")
+            .replace(REGEX_STYLE_ANNOTATION, "")
+            .replace(REGEX_EMOJI, "")
+            .replace(REGEX_SYMBOLS, "")
+            .replace("~", "，")
+            .trim()
         if (cleanText.isBlank()) return null
 
         return try {

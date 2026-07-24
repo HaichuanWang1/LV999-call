@@ -82,13 +82,22 @@ class ProcessAudioUseCase(
                 config, systemPrompt, contextMessages + userMessage
             ).collect { chunk ->
                 fullResponse.append(chunk)
-                onPartialResponse(fullResponse.toString())
+                // 实时去除thinking标签再显示
+                val display = fullResponse.toString()
+                    .replace(Regex("<think>[\\s\\S]*?</think>"), "")
+                    .replace(Regex("<thinking>[\\s\\S]*?</thinking>"), "")
+                    .trim()
+                onPartialResponse(display)
             }
         } catch (e: Exception) {
             Log.e(TAG, "LLM调用失败: ${e.message}")
         }
 
+        // 去除LLM推理标签(<think>...</think>等)
         val aiResponse = fullResponse.toString()
+            .replace(Regex("<think>[\\s\\S]*?</think>"), "")
+            .replace(Regex("<thinking>[\\s\\S]*?</thinking>"), "")
+            .trim()
         if (aiResponse.isBlank()) {
             Log.w(TAG, "LLM响应为空")
             return Pair(userMessage, null)
