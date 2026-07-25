@@ -1,4 +1,4 @@
-# ultraflow · 银狼AI通话
+# lv999call · 银狼AI通话
 
 基于 Jetpack Compose 的 Android 语音对话 Agent 应用，支持角色扮演式语音交互。
 
@@ -7,7 +7,7 @@
 ### 三种对话模式
 - **快速** — 简短提示词，即刻开聊
 - **长提示词** — 深度角色扮演，银狼人设完整设定
-- **自定义** — 自定义提示词 + 角色头像 + 背景图 + 参考音频
+- **自定义** — 完全自定义：提示词 + 角色头像/背景 + 参考音频 + TTS风格提示词
 
 ### 全链路语音交互
 ```
@@ -17,12 +17,18 @@
 ### MiMo-V2.5-TTS-VoiceClone 集成
 - 上传参考音频（5~15秒），克隆任意音色
 - 全局默认音色（快速/长提示词）与自定义模式音色独立配置
-- 自动获取可用模型列表
+- TTS 风格提示词（控制语气、情感、语速等）
+- 支持语速调节（0.5x ~ 2.0x）
+
+### ASR 双引擎
+- **自定义 HTTP**：兼容 OpenAI Whisper 等任意 ASR API
+- **Vosk 离线**：内置中文模型，无需网络即可识别
 
 ### 核心能力
 - 沉浸式通话界面，头像呼吸灯动画，状态实时指示（聆听/思考/说话）
 - 对话历史本地持久化（Room），支持"继续上次对话"
 - 全配置可调：LLM / ASR / TTS 的 URL、Key、模型、语速等
+- 支持本地局域网部署（明文 HTTP 流量已放行）
 
 ## 技术栈
 
@@ -43,14 +49,15 @@
 ## 项目结构
 
 ```
-app/src/main/java/com/ultraflow/silverwolf/
+app/src/main/java/com/lv999call/app/
 ├── audio/                  # 音频引擎
 │   ├── AudioRecorder.kt    #   录音 + VAD
 │   ├── AudioPlayer.kt      #   流式播放 (WAV自动检测)
 │   ├── VadDetector.kt      #   语音活动检测
-│   └── AsrEngine.kt        #   ASR引擎 (PCM→WAV转换)
+│   ├── AsrEngine.kt        #   ASR引擎 (PCM→WAV转换)
+│   └── VoskModelManager.kt #   Vosk离线模型管理
 ├── data/
-│   ├── local/              #   Room数据库 + DAO
+│   ├── local/              #   Room数据库 + DAO + Entity
 │   ├── remote/             #   API服务 (LLM/ASR/TTS/Models)
 │   └── repository/         #   数据仓库
 ├── domain/
@@ -89,6 +96,8 @@ cd LV999-call
 4. 点击 🔄 按钮自动获取模型列表，选择模型
 5. 上传一段参考音频作为默认音色
 6. 保存设置，返回首页开始通话
+
+> 如果使用本地局域网部署的模型（如 192.168.x.x），直接填入 HTTP 地址即可，已放行明文流量。
 
 ## API 兼容性
 
