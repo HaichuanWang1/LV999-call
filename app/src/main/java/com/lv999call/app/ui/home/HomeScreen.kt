@@ -1,6 +1,7 @@
 package com.lv999call.app.ui.home
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -152,11 +155,20 @@ private fun PresetCard(
                     .background(if (isBuiltIn) colors.secondary.copy(alpha = 0.2f) else colors.tertiary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = if (isBuiltIn) "🐺" else "✦",
-                    fontSize = if (isBuiltIn) 20.sp else 18.sp,
-                    color = if (isBuiltIn) colors.secondary else colors.tertiary
-                )
+                if (isBuiltIn) {
+                    Image(
+                        painter = painterResource(id = com.lv999call.app.R.drawable.touxiang),
+                        contentDescription = "银狼头像",
+                        modifier = Modifier.size(40.dp).clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(
+                        text = "✦",
+                        fontSize = 18.sp,
+                        color = colors.tertiary
+                    )
+                }
             }
             Spacer(modifier = Modifier.width(16.dp))
             Column {

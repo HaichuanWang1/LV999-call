@@ -123,7 +123,13 @@ class ProcessAudioUseCase(
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
-                // 等待TTS播放完毕再返回，录音在TTS播完后启动，避免录到TTS声音
+                // 等待TTS真正开始播放（playStream内部是异步启动的）
+                kotlinx.coroutines.withTimeoutOrNull(5_000L) {
+                    while (!audioPlayer.isPlaying.value) {
+                        kotlinx.coroutines.delay(50)
+                    }
+                }
+                // 等待TTS播放完毕
                 kotlinx.coroutines.withTimeoutOrNull(120_000L) {
                     while (audioPlayer.isPlaying.value) {
                         kotlinx.coroutines.delay(100)
