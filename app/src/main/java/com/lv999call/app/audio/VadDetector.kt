@@ -12,8 +12,8 @@ class VadDetector {
         private const val TAG = "VadDetector"
         private const val ENERGY_THRESHOLD = 0.02f       // 能量阈值
         private const val SPEECH_MIN_FRAMES = 5          // 最少说话帧数（避免噪声误触发）
-        private const val SILENCE_AFTER_SPEECH_FRAMES = 15 // 说话后静默帧数阈值（约300ms@16kHz/512）
-        private const val MAX_SPEECH_FRAMES = 500        // 最大说话帧数（约10秒）
+        private const val SILENCE_AFTER_SPEECH_FRAMES = 45 // 说话后静默帧数阈值（约1.5s@16kHz/512）
+        private const val MAX_SPEECH_FRAMES = 1500       // 最大说话帧数（约30秒）
     }
 
     private var state = VadState.WAITING

@@ -123,14 +123,14 @@ class ProcessAudioUseCase(
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
-                // 如果开启了等待TTS，阻塞到播放完毕再返回（最多等待60秒）
-                if (config.waitTtsBeforeRecord) {
-                    kotlinx.coroutines.withTimeoutOrNull(60_000L) {
-                        while (audioPlayer.isPlaying.value) {
-                            kotlinx.coroutines.delay(100)
-                        }
+                // 等待TTS播放完毕再返回，避免录音与朗读重叠
+                kotlinx.coroutines.withTimeoutOrNull(120_000L) {
+                    while (audioPlayer.isPlaying.value) {
+                        kotlinx.coroutines.delay(100)
                     }
                 }
+                // TTS播放结束后短暂延迟，避免麦克风拾取尾音
+                kotlinx.coroutines.delay(300)
             }
         } catch (e: Exception) {
             Log.e(TAG, "TTS播放失败: ${e.message}")
