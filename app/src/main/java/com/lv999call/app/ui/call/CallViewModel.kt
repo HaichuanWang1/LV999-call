@@ -229,6 +229,10 @@ class CallViewModel(
     private fun processUserAudio(pcmData: ByteArray) {
         viewModelScope.launch {
             try {
+                // TTS播放前停止录音，避免麦克风录到TTS声音导致VAD混乱
+                audioRecorder.stopRecording()
+                listeningTimeoutJob?.cancel()
+
                 // 整体超时保护（60秒），防止ASR/LLM/TTS任一步骤卡死
                 val result = kotlinx.coroutines.withTimeoutOrNull(60_000L) {
                     processAudioUseCase.processAudio(
