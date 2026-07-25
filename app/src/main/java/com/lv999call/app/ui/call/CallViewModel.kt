@@ -44,6 +44,8 @@ class CallViewModel(
     private var systemPrompt: String? = null
     @Volatile
     private var isProcessing = false
+    // 监听超时Job，防止VAD卡死导致UI永久停在"聆听"
+    private var listeningTimeoutJob: kotlinx.coroutines.Job? = null
     // 预设专用的TTS参考音频（不污染全局配置）
     private var presetRefAudioBase64: String? = null
     private var presetRefAudioMime: String? = null
@@ -197,8 +199,19 @@ class CallViewModel(
     private fun startListening() {
         if (_callState.value == CallState.ENDED) return
 
+        // 启动监听超时（30秒无响应自动重启，防止VAD卡死）
+        listeningTimeoutJob?.cancel()
+        listeningTimeoutJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(30_000L)
+            if (_callState.value == CallState.LISTENING && !isProcessing) {
+                android.util.Log.w("CallVM", "监听超时，自动重启录音")
+                startListening()
+            }
+        }
+
         audioRecorder.startRecording(
             onSpeechEnd = { pcmData ->
+                listeningTimeoutJob?.cancel()
                 if (!isProcessing) {
                     isProcessing = true
                     processUserAudio(pcmData)
@@ -291,6 +304,7 @@ class CallViewModel(
 
     fun hangUp() {
         _callState.value = CallState.ENDED
+        listeningTimeoutJob?.cancel()
         audioRecorder.stopRecording()
         audioPlayer.stopCurrentPlayback()
 
