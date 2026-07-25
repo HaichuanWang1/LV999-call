@@ -229,27 +229,32 @@ class CallViewModel(
     private fun processUserAudio(pcmData: ByteArray) {
         viewModelScope.launch {
             try {
-                val (userMessage, assistantMessage) = processAudioUseCase.processAudio(
-                    pcmData = pcmData,
-                    systemPrompt = systemPrompt,
-                    history = _messages.value,
-                    mode = currentMode,
-                    overrideRefAudioBase64 = presetRefAudioBase64,
-                    overrideRefAudioMime = presetRefAudioMime,
-                    ttsPrompt = currentTtsPrompt,
-                    onStateChange = { state -> _callState.value = state },
-                    onPartialResponse = { partial -> _currentResponse.value = partial }
-                )
-
-                // 始终添加用户消息
-                val newMessages = mutableListOf(userMessage)
-                if (assistantMessage != null) newMessages.add(assistantMessage)
-
-                _messages.value = _messages.value + newMessages
-                _currentResponse.value = ""
-
-                currentSession?.let { session ->
-                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                // 整体超时保护（60秒），防止ASR/LLM/TTS任一步骤卡死
+                val result = kotlinx.coroutines.withTimeoutOrNull(60_000L) {
+                    processAudioUseCase.processAudio(
+                        pcmData = pcmData,
+                        systemPrompt = systemPrompt,
+                        history = _messages.value,
+                        mode = currentMode,
+                        overrideRefAudioBase64 = presetRefAudioBase64,
+                        overrideRefAudioMime = presetRefAudioMime,
+                        ttsPrompt = currentTtsPrompt,
+                        onStateChange = { state -> _callState.value = state },
+                        onPartialResponse = { partial -> _currentResponse.value = partial }
+                    )
+                }
+                if (result != null) {
+                    val (userMessage, assistantMessage) = result
+                    val newMessages = mutableListOf(userMessage)
+                    if (assistantMessage != null) newMessages.add(assistantMessage)
+                    _messages.value = _messages.value + newMessages
+                    _currentResponse.value = ""
+                    currentSession?.let { session ->
+                        manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                    }
+                } else {
+                    android.util.Log.w("CallVM", "处理音频超时")
+                    _currentResponse.value = ""
                 }
             } catch (e: Exception) {
                 _currentResponse.value = ""
