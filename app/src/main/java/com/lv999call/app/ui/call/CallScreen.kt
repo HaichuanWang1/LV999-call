@@ -42,6 +42,7 @@ fun CallScreen(
     currentResponse: String,
     audioLevel: Float,
     avatarUri: String?,
+    avatarResId: Int? = null,
     backgroundUri: String? = null,
     backgroundResId: Int? = null,
     onHangUp: () -> Unit,
@@ -128,7 +129,7 @@ fun CallScreen(
                         )
                     } else {
                         Image(
-                            painter = painterResource(id = com.lv999call.app.R.drawable.touxiang),
+                            painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
                             contentDescription = "角色头像",
                             modifier = Modifier.size(88.dp).clip(CircleShape),
                             contentScale = ContentScale.Crop
@@ -146,9 +147,9 @@ fun CallScreen(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
                 state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages) { MessageBubble(message = it) }
+                items(messages) { MessageBubble(message = it, avatarResId = avatarResId) }
                 if (currentResponse.isNotEmpty()) {
-                    item { MessageBubble(message = ChatMessage(role = "assistant", content = currentResponse), isStreaming = true) }
+                    item { MessageBubble(message = ChatMessage(role = "assistant", content = currentResponse), isStreaming = true, avatarResId = avatarResId) }
                 }
             }
 
@@ -245,7 +246,7 @@ private fun CallStatusIndicator(callState: CallState) {
 }
 
 @Composable
-private fun MessageBubble(message: ChatMessage, isStreaming: Boolean = false) {
+private fun MessageBubble(message: ChatMessage, isStreaming: Boolean = false, avatarResId: Int? = null) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
     val ext = UltraFlowTheme.extendedColors
@@ -253,7 +254,7 @@ private fun MessageBubble(message: ChatMessage, isStreaming: Boolean = false) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
         if (!isUser) {
             Image(
-                painter = painterResource(id = com.lv999call.app.R.drawable.touxiang),
+                painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
                 contentDescription = null,
                 modifier = Modifier.size(32.dp).clip(CircleShape),
                 contentScale = ContentScale.Crop

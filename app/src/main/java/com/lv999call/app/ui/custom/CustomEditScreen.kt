@@ -62,6 +62,17 @@ fun CustomEditScreen(
     var showSourceDialog by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
+    // 当加载的预设数据变化时，同步到本地状态
+    LaunchedEffect(currentName, currentPrompt, currentRefAudioBase64, currentAvatarUri, currentBackgroundUri) {
+        name = currentName
+        prompt = currentPrompt
+        refAudioBase64 = currentRefAudioBase64
+        refAudioMime = currentRefAudioMime
+        refAudioName = if (currentRefAudioBase64.isNotEmpty()) "已加载" else ""
+        avatarUri = currentAvatarUri
+        backgroundUri = currentBackgroundUri
+    }
+
     val avatarLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { avatarUri = it.toString() }
     }

@@ -241,6 +241,7 @@ fun NavGraph() {
                 currentResponse = currentResponse,
                 audioLevel = 0f,
                 avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
+                avatarResId = com.lv999call.app.R.drawable.default_avatar,
                 backgroundUri = presetBgUri?.ifEmpty { null },
                 onHangUp = { viewModel.hangUp() },
                 onToggleMute = { viewModel.toggleMute() },
