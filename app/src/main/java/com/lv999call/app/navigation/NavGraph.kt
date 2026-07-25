@@ -5,6 +5,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -68,11 +69,42 @@ fun NavGraph() {
 
         // ===== 银狼准备页 =====
         composable(Routes.SILVERWOLF_PREPARE) {
+            val configRepository = appModule.configRepository
+            val config by configRepository.configFlow.collectAsState(initial = com.lv999call.app.domain.model.ApiConfig())
+            val scope = rememberCoroutineScope()
+
             PrepareScreen(
                 mode = DialogMode.LONG,
                 promptPreview = "",  // 内置提示词，不预览
                 backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
+                hasCustomAudio = config.ttsReferenceAudioBase64.isNotEmpty(),
                 onStartCall = { navController.navigate(Routes.SILVERWOLF_CALL) },
+                onSelectAudio = { uri ->
+                    // 在IO线程提取WAV并保存到配置
+                    scope.launch {
+                        val result = com.lv999call.app.audio.AudioExtractor.extractWav(context, uri)
+                        result.onSuccess { wavBytes ->
+                            val base64 = android.util.Base64.encodeToString(wavBytes, android.util.Base64.NO_WRAP)
+                            val currentConfig = configRepository.configFlow.first()
+                            configRepository.saveConfig(currentConfig.copy(
+                                ttsReferenceAudioBase64 = base64,
+                                ttsReferenceAudioMime = "audio/wav"
+                            ))
+                        }
+                        result.onFailure { e ->
+                            android.util.Log.e("NavGraph", "音频提取失败: ${e.message}")
+                        }
+                    }
+                },
+                onClearAudio = {
+                    scope.launch {
+                        val currentConfig = configRepository.configFlow.first()
+                        configRepository.saveConfig(currentConfig.copy(
+                            ttsReferenceAudioBase64 = "",
+                            ttsReferenceAudioMime = "audio/wav"
+                        ))
+                    }
+                },
                 onBack = { navController.popBackStack() }
             )
         }

@@ -1,5 +1,8 @@
 package com.lv999call.app.ui.prepare
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -8,19 +11,23 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.lv999call.app.audio.AudioExtractor
 import com.lv999call.app.domain.model.DialogMode
 
 @Composable
@@ -29,12 +36,31 @@ fun PrepareScreen(
     promptPreview: String = "",
     backgroundResId: Int? = null,
     backgroundUri: String? = null,
+    hasCustomAudio: Boolean = false,
     onStartCall: () -> Unit,
+    onSelectAudio: (Uri) -> Unit,
+    onClearAudio: () -> Unit,
     onBack: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
     val scrollState = rememberScrollState()
+    val context = LocalContext.current
+
+    // 音频选择状态
+    var selectedAudioName by remember { mutableStateOf("") }
+    var isExtractingAudio by remember { mutableStateOf(false) }
+    var extractError by remember { mutableStateOf<String?>(null) }
+
+    val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        uri?.let {
+            selectedAudioName = it.lastPathSegment ?: "audio"
+            isExtractingAudio = true
+            extractError = null
+            onSelectAudio(it)
+            isExtractingAudio = false
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 背景图（模糊）
@@ -122,6 +148,67 @@ fun PrepareScreen(
                                 lineHeight = 22.sp
                             )
                         }
+                    }
+                }
+
+                // ===== 参考音频设置 =====
+                Spacer(modifier = Modifier.height(20.dp))
+                Text("参考音色", style = MaterialTheme.typography.titleMedium, color = colors.tertiary)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = shapes.medium,
+                    colors = CardDefaults.cardColors(containerColor = colors.surfaceContainer.copy(alpha = 0.8f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (hasCustomAudio) {
+                            // 已设置自定义音色
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.MusicNote, contentDescription = null,
+                                    tint = colors.primary, modifier = Modifier.size(20.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("已设置自定义音色", style = MaterialTheme.typography.bodyMedium,
+                                    color = colors.primary, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { onClearAudio(); selectedAudioName = "" },
+                                    modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.Close, "清除", tint = colors.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        } else {
+                            // 使用内置音色
+                            Text("当前：内置银狼音色", style = MaterialTheme.typography.bodyMedium,
+                                color = colors.onSurfaceVariant)
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // 选择音频文件按钮
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { audioLauncher.launch("audio/*") },
+                                enabled = !isExtractingAudio,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.MusicNote, contentDescription = null,
+                                    modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(if (isExtractingAudio) "处理中..." else "选择音频",
+                                    style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+
+                        // 错误提示
+                        extractError?.let { error ->
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(error, style = MaterialTheme.typography.bodySmall, color = colors.error)
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("支持 mp3/wav 格式，最长15秒，自动转为参考音色",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSurfaceVariant.copy(alpha = 0.6f))
                     }
                 }
 
