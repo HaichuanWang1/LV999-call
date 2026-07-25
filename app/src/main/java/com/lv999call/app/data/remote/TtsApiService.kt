@@ -23,6 +23,7 @@ object TtsModels {
         val model: String = "mimo-v2.5-tts-voiceclone",
         val messages: List<TtsMessage>,
         val audio: TtsAudioConfig,
+        val speed: Float = 1.0f,
         val stream: Boolean = true
     )
 

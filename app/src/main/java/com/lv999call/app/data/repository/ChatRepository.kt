@@ -234,6 +234,7 @@ class ChatRepository(
                     format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
                     voice = voiceUri
                 ),
+                speed = config.ttsSpeed,
                 stream = true
             )
 
