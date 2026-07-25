@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -53,6 +54,9 @@ fun PrepareScreen(
     var selectedAudioName by remember { mutableStateOf("") }
     var isExtractingAudio by remember { mutableStateOf(false) }
     var extractError by remember { mutableStateOf<String?>(null) }
+
+    // TTS提示词本地状态（避免每次按键都写DataStore）
+    var localTtsPrompt by remember(ttsPrompt) { mutableStateOf(ttsPrompt) }
 
     val audioLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let {
@@ -221,9 +225,10 @@ fun PrepareScreen(
                 Text("控制语音合成的语气、情感、语速等", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = ttsPrompt,
-                    onValueChange = onTtsPromptChange,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    value = localTtsPrompt,
+                    onValueChange = { localTtsPrompt = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)
+                        .onFocusChanged { if (!it.isFocused) onTtsPromptChange(localTtsPrompt) },
                     placeholder = { Text("例如：用温柔的声音、带有笑意地说", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
