@@ -97,7 +97,10 @@ fun PrepareScreen(
                 modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(onClick = {
+                    onTtsPromptChange(localTtsPrompt)
+                    onBack()
+                }) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = colors.onSurface)
                 }
                 Text(
@@ -246,7 +249,10 @@ fun PrepareScreen(
                 contentAlignment = Alignment.Center
             ) {
                 FilledTonalButton(
-                    onClick = onStartCall,
+                    onClick = {
+                        onTtsPromptChange(localTtsPrompt)
+                        onStartCall()
+                    },
                     modifier = Modifier.size(120.dp),
                     shape = CircleShape,
                     colors = ButtonDefaults.filledTonalButtonColors(
