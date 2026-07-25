@@ -111,10 +111,10 @@ class ProcessAudioUseCase(
         // Step 3: 单次TTS合成完整响应并播放
         onStateChange(CallState.SPEAKING)
         try {
-            // 优先级：预设override > 配置音频 > 银狼内置音频(所有模式兜底)
+            // 优先级：预设override > 配置音频 > 银狼内置音频（仅银狼模式兜底）
             val refAudio: String = overrideRefAudioBase64?.takeIf { it.isNotEmpty() }
                 ?: config.getRefAudioForMode(mode).takeIf { it.isNotEmpty() }
-                ?: silverWolfRefAudioBase64
+                ?: silverWolfRefAudioBase64.takeIf { it.isNotEmpty() && mode != DialogMode.CUSTOM }
                 ?: ""
             val refMime: String = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true }
                 ?: config.getRefAudioMimeForMode(mode).takeIf { config.getRefAudioForMode(mode).isNotEmpty() }
