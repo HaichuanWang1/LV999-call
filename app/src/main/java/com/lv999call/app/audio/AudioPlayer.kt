@@ -109,6 +109,11 @@ class AudioPlayer {
                 }
                 _isPlaying.value = true
 
+                // 非WAV格式：把已读取的字节作为音频数据写入（避免丢失开头）
+                if (!isWav && headerRead > 0 && _isPlaying.value) {
+                    audioTrack?.write(headerBuf, 0, headerRead)
+                }
+
                 val buffer = ByteArray(4096)
                 var bytesRead: Int
 

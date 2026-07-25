@@ -66,7 +66,7 @@ interface TtsApiService {
         @Header("Authorization") auth: String,
         @Header("api-key") apiKey: String,
         @Body request: TtsModels.TtsChatRequest
-    ): ResponseBody
+    ): retrofit2.Response<ResponseBody>
 
     companion object {
         fun buildUrl(baseUrl: String): String {

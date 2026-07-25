@@ -242,7 +242,16 @@ class ChatRepository(
             val voicePreview = voiceUri.take(60)
             android.util.Log.d("ChatRepo", "TTS: url=$url, model=${request.model}, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
 
-            val responseBody = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
+            val response = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
+            if (!response.isSuccessful) {
+                val errorBody = response.errorBody()?.string()?.take(500) ?: "无响应体"
+                android.util.Log.e("ChatRepo", "TTS API错误: HTTP ${response.code()}, $errorBody")
+                return null
+            }
+            val responseBody = response.body() ?: run {
+                android.util.Log.e("ChatRepo", "TTS API返回空响应体")
+                return null
+            }
             try {
                 parseTtsAudioStream(responseBody.byteStream())
             } finally {
@@ -256,6 +265,7 @@ class ChatRepository(
 
     /**
      * 解析MiMo TTS的SSE流式响应，提取base64音频块并解码为字节流
+     * 兼容两种格式: delta.audio 为字符串 或 delta.audio.data 为字符串
      */
     private fun parseTtsAudioStream(inputStream: InputStream): InputStream {
         val audioOutput = java.io.ByteArrayOutputStream()
@@ -274,15 +284,27 @@ class ChatRepository(
                     if (data == "[DONE]") break
 
                     try {
-                        val chunk = gson.fromJson(data, TtsModels.TtsStreamResponse::class.java)
-                        val audioData = chunk.choices?.firstOrNull()?.delta?.audioData?.data
-                        if (!audioData.isNullOrEmpty()) {
-                            val decoded = android.util.Base64.decode(audioData, android.util.Base64.DEFAULT)
+                        // 使用 org.json 手动解析，兼容 audio 为字符串或对象两种格式
+                        val jsonObj = org.json.JSONObject(data)
+                        val choices = jsonObj.optJSONArray("choices")
+                        if (choices == null || choices.length() == 0) continue
+                        val delta = choices.getJSONObject(0).optJSONObject("delta") ?: continue
+
+                        // 兼容: "audio": "base64string" 或 "audio": {"data": "base64string"}
+                        val audio = delta.opt("audio")
+                        val base64Data: String? = when (audio) {
+                            is String -> audio
+                            is org.json.JSONObject -> audio.optString("data", "").takeIf { it.isNotEmpty() }
+                            else -> null
+                        }
+
+                        if (!base64Data.isNullOrEmpty()) {
+                            val decoded = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                             audioOutput.write(decoded)
                             chunkCount++
                         }
                     } catch (e: Exception) {
-                        android.util.Log.w("ChatRepo", "TTS JSON解析失败: $data, 原因: ${e.message}")
+                        android.util.Log.w("ChatRepo", "TTS JSON解析失败: ${data.take(200)}, 原因: ${e.message}")
                     }
                 }
             }
