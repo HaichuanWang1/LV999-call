@@ -38,12 +38,13 @@ fun CustomEditScreen(
     presetId: Long?,
     currentName: String,
     currentPrompt: String,
+    currentTtsPrompt: String,
     currentRefAudioBase64: String,
     currentRefAudioMime: String,
     currentAvatarUri: String?,
     currentBackgroundUri: String?,
-    onSave: (name: String, prompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
-    onStartCall: (name: String, prompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
+    onSave: (name: String, prompt: String, ttsPrompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
+    onStartCall: (name: String, prompt: String, ttsPrompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
     onBack: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
@@ -53,6 +54,7 @@ fun CustomEditScreen(
 
     var name by remember { mutableStateOf(currentName) }
     var prompt by remember { mutableStateOf(currentPrompt) }
+    var ttsPrompt by remember { mutableStateOf(currentTtsPrompt) }
     var refAudioBase64 by remember { mutableStateOf(currentRefAudioBase64) }
     var refAudioMime by remember { mutableStateOf(currentRefAudioMime) }
     var refAudioName by remember { mutableStateOf(if (currentRefAudioBase64.isNotEmpty()) "已加载" else "") }
@@ -63,9 +65,10 @@ fun CustomEditScreen(
     val scrollState = rememberScrollState()
 
     // 当加载的预设数据变化时，同步到本地状态
-    LaunchedEffect(currentName, currentPrompt, currentRefAudioBase64, currentAvatarUri, currentBackgroundUri) {
+    LaunchedEffect(currentName, currentPrompt, currentTtsPrompt, currentRefAudioBase64, currentAvatarUri, currentBackgroundUri) {
         name = currentName
         prompt = currentPrompt
+        ttsPrompt = currentTtsPrompt
         refAudioBase64 = currentRefAudioBase64
         refAudioMime = currentRefAudioMime
         refAudioName = if (currentRefAudioBase64.isNotEmpty()) "已加载" else ""
@@ -180,6 +183,24 @@ fun CustomEditScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
+                // TTS风格提示词
+                Text("TTS 风格提示词", style = MaterialTheme.typography.titleMedium, color = colors.tertiary)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("控制语音合成的语气、情感、语速等", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = ttsPrompt, onValueChange = { ttsPrompt = it },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    placeholder = { Text("例如：用温柔的声音、带有笑意地说", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
+                        focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
+                    ),
+                    shape = shapes.small
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
                 // 提示词
                 Text("系统提示词", style = MaterialTheme.typography.titleMedium, color = colors.tertiary)
                 Spacer(modifier = Modifier.height(4.dp))
@@ -205,7 +226,7 @@ fun CustomEditScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
-                    onClick = { onSave(name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
+                    onClick = { onSave(name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
                     modifier = Modifier.weight(1f).height(48.dp),
                     shape = shapes.medium
                 ) {
@@ -214,7 +235,7 @@ fun CustomEditScreen(
                     Text("保存")
                 }
                 Button(
-                    onClick = { onStartCall(name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
+                    onClick = { onStartCall(name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
                     modifier = Modifier.weight(1f).height(48.dp),
                     shape = shapes.medium,
                     colors = ButtonDefaults.buttonColors(containerColor = colors.primary)

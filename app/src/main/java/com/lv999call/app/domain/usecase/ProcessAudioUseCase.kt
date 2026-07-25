@@ -54,6 +54,7 @@ class ProcessAudioUseCase(
         autoGreetingText: String = "",
         overrideRefAudioBase64: String? = null,
         overrideRefAudioMime: String? = null,
+        ttsPrompt: String = "",
         onStateChange: (CallState) -> Unit,
         onPartialResponse: (String) -> Unit
     ): Pair<ChatMessage, ChatMessage?> {
@@ -120,7 +121,7 @@ class ProcessAudioUseCase(
                 ?: "audio/wav"
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime")
 
-            val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime)
+            val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime, ttsPrompt)
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
                 // 等待TTS真正开始播放（playStream内部是异步启动的）

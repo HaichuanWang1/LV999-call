@@ -34,7 +34,8 @@ object TtsModels {
     data class TtsAudioConfig(
         val format: String = "wav",   // 文档支持: wav, mp3
         val voice: String,            // "data:{MIME};base64,{BASE64_AUDIO}"
-        val speed: Float = 1.0f
+        val speed: Float = 1.0f,
+        val prompt: String? = null    // TTS风格提示词
     )
 
     /** 流式响应中的音频块 */

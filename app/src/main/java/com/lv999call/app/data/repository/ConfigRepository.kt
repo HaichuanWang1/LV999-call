@@ -34,6 +34,7 @@ class ConfigRepository(private val context: Context) {
         val TTS_MODEL = stringPreferencesKey("tts_model")
         val TTS_VOICE_ID = stringPreferencesKey("tts_voice_id")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
+        val TTS_PROMPT = stringPreferencesKey("tts_prompt")
         val TTS_REF_AUDIO_BASE64 = stringPreferencesKey("tts_ref_audio_base64")
         val TTS_REF_AUDIO_MIME = stringPreferencesKey("tts_ref_audio_mime")
 
@@ -64,6 +65,7 @@ class ConfigRepository(private val context: Context) {
             ttsModel = prefs[TTS_MODEL] ?: "mimo-v2.5-tts-voiceclone",
             ttsVoiceId = prefs[TTS_VOICE_ID] ?: "",
             ttsSpeed = prefs[TTS_SPEED] ?: 1.0f,
+            ttsPrompt = prefs[TTS_PROMPT] ?: "",
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
             ttsReferenceAudioMime = prefs[TTS_REF_AUDIO_MIME] ?: "audio/wav",
             customTtsReferenceAudioBase64 = prefs[CUSTOM_TTS_REF_AUDIO_BASE64] ?: "",
@@ -92,6 +94,7 @@ class ConfigRepository(private val context: Context) {
             prefs[TTS_MODEL] = config.ttsModel
             prefs[TTS_VOICE_ID] = config.ttsVoiceId
             prefs[TTS_SPEED] = config.ttsSpeed
+            prefs[TTS_PROMPT] = config.ttsPrompt
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64
             prefs[TTS_REF_AUDIO_MIME] = config.ttsReferenceAudioMime
             prefs[CUSTOM_TTS_REF_AUDIO_BASE64] = config.customTtsReferenceAudioBase64

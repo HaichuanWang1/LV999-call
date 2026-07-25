@@ -37,6 +37,8 @@ fun PrepareScreen(
     backgroundResId: Int? = null,
     backgroundUri: String? = null,
     hasCustomAudio: Boolean = false,
+    ttsPrompt: String = "",
+    onTtsPromptChange: (String) -> Unit = {},
     onStartCall: () -> Unit,
     onSelectAudio: (Uri) -> Unit,
     onClearAudio: () -> Unit,
@@ -211,6 +213,24 @@ fun PrepareScreen(
                             color = colors.onSurfaceVariant.copy(alpha = 0.6f))
                     }
                 }
+
+                // TTS风格提示词
+                Spacer(modifier = Modifier.height(20.dp))
+                Text("TTS 风格提示词", style = MaterialTheme.typography.titleMedium, color = colors.tertiary)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("控制语音合成的语气、情感、语速等", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = ttsPrompt,
+                    onValueChange = onTtsPromptChange,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp),
+                    placeholder = { Text("例如：用温柔的声音、带有笑意地说", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
+                        focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
+                    ),
+                    shape = shapes.small
+                )
 
                 Spacer(modifier = Modifier.height(32.dp))
             }

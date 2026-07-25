@@ -199,7 +199,8 @@ class ChatRepository(
         config: ApiConfig,
         text: String,
         refAudioBase64: String = config.ttsReferenceAudioBase64,
-        refAudioMime: String = config.ttsReferenceAudioMime
+        refAudioMime: String = config.ttsReferenceAudioMime,
+        ttsPrompt: String = ""
     ): InputStream? {
         // 去除emoji、特殊符号、LLM推理标签、语气标注，TTS无法处理会导致乱音/卡顿
         val cleanText = text
@@ -233,7 +234,8 @@ class ChatRepository(
                 audio = TtsModels.TtsAudioConfig(
                     format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
                     voice = voiceUri,
-                    speed = config.ttsSpeed
+                    speed = config.ttsSpeed,
+                    prompt = ttsPrompt.ifEmpty { null }
                 ),
                 stream = true
             )

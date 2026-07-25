@@ -22,6 +22,7 @@ data class ApiConfig(
     val ttsModel: String = "mimo-v2.5-tts-voiceclone",
     val ttsVoiceId: String = "",
     val ttsSpeed: Float = 1.0f,
+    val ttsPrompt: String = "",
 
     // 全局默认参考音频（设置页管理，快速/长提示词模式使用）
     val ttsReferenceAudioBase64: String = "",

@@ -9,6 +9,7 @@ data class PresetEntity(
     val id: Long = 0,
     val name: String,                    // 预设名称
     val prompt: String = "",             // 系统提示词
+    val ttsPrompt: String = "",          // TTS风格提示词
     val refAudioBase64: String = "",     // 参考音频base64
     val refAudioMime: String = "audio/wav",
     val avatarUri: String = "",          // 角色头像URI

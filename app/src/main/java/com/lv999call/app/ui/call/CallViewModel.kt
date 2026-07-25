@@ -47,6 +47,8 @@ class CallViewModel(
     // 预设专用的TTS参考音频（不污染全局配置）
     private var presetRefAudioBase64: String? = null
     private var presetRefAudioMime: String? = null
+    // 当前通话使用的TTS提示词（银狼模式用config，自定义模式用preset）
+    private var currentTtsPrompt: String = ""
 
     val config: StateFlow<ApiConfig> = configRepository.configFlow
         .stateIn(
@@ -74,6 +76,7 @@ class CallViewModel(
             }
 
             // 自动发送"你好"发起对话
+            currentTtsPrompt = currentConfig.ttsPrompt
             _callState.value = CallState.THINKING
             val greetingPcm = ByteArray(0) // 空音频，跳过ASR
             try {
@@ -84,6 +87,7 @@ class CallViewModel(
                     mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = "你好",
+                    ttsPrompt = currentTtsPrompt,
                     onStateChange = { state -> _callState.value = state },
                     onPartialResponse = { partial -> _currentResponse.value = partial }
                 )
@@ -139,6 +143,7 @@ class CallViewModel(
                 // 保存预设音频到ViewModel本地字段，不污染全局配置
                 presetRefAudioBase64 = preset.refAudioBase64
                 presetRefAudioMime = preset.refAudioMime
+                currentTtsPrompt = preset.ttsPrompt
 
                 // 如果使用 Vosk，初始化模型
                 val currentConfig = configRepository.configFlow.first()
@@ -163,6 +168,7 @@ class CallViewModel(
                         autoGreetingText = "你好",
                         overrideRefAudioBase64 = preset.refAudioBase64,
                         overrideRefAudioMime = preset.refAudioMime,
+                        ttsPrompt = currentTtsPrompt,
                         onStateChange = { state -> _callState.value = state },
                         onPartialResponse = { partial -> _currentResponse.value = partial }
                     )
@@ -217,6 +223,7 @@ class CallViewModel(
                     mode = currentMode,
                     overrideRefAudioBase64 = presetRefAudioBase64,
                     overrideRefAudioMime = presetRefAudioMime,
+                    ttsPrompt = currentTtsPrompt,
                     onStateChange = { state -> _callState.value = state },
                     onPartialResponse = { partial -> _currentResponse.value = partial }
                 )
@@ -261,6 +268,7 @@ class CallViewModel(
                     autoGreetingText = text,
                     overrideRefAudioBase64 = presetRefAudioBase64,
                     overrideRefAudioMime = presetRefAudioMime,
+                    ttsPrompt = currentTtsPrompt,
                     onStateChange = { state -> _callState.value = state },
                     onPartialResponse = { partial -> _currentResponse.value = partial }
                 )

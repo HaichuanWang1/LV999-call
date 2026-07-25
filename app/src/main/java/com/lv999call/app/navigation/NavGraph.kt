@@ -78,6 +78,13 @@ fun NavGraph() {
                 promptPreview = "",  // 内置提示词，不预览
                 backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
                 hasCustomAudio = config.ttsReferenceAudioBase64.isNotEmpty(),
+                ttsPrompt = config.ttsPrompt,
+                onTtsPromptChange = { newPrompt ->
+                    scope.launch {
+                        val currentConfig = configRepository.configFlow.first()
+                        configRepository.saveConfig(currentConfig.copy(ttsPrompt = newPrompt))
+                    }
+                },
                 onStartCall = { navController.navigate(Routes.SILVERWOLF_CALL) },
                 onSelectAudio = { uri ->
                     // 在IO线程提取WAV并保存到配置
@@ -164,15 +171,17 @@ fun NavGraph() {
                 presetId = if (presetId > 0) presetId else null,
                 currentName = loadedPreset?.name ?: "",
                 currentPrompt = loadedPreset?.prompt ?: "",
+                currentTtsPrompt = loadedPreset?.ttsPrompt ?: "",
                 currentRefAudioBase64 = loadedPreset?.refAudioBase64 ?: "",
                 currentRefAudioMime = loadedPreset?.refAudioMime ?: "audio/wav",
                 currentAvatarUri = loadedPreset?.avatarUri,
                 currentBackgroundUri = loadedPreset?.backgroundUri,
-                onSave = { name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
+                onSave = { name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
                     presetViewModel.savePreset(
                         id = if (presetId > 0) presetId else null,
                         name = name,
                         prompt = prompt,
+                        ttsPrompt = ttsPrompt,
                         refAudioBase64 = refAudioBase64,
                         refAudioMime = refAudioMime,
                         avatarUri = avatarUri ?: "",
@@ -180,7 +189,7 @@ fun NavGraph() {
                     )
                     navController.popBackStack()
                 },
-                onStartCall = { name, prompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
+                onStartCall = { name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
                     // 先保存预设并获取ID，再导航
                     val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
                     scope.launch {
@@ -188,6 +197,7 @@ fun NavGraph() {
                             id = if (presetId > 0) presetId else null,
                             name = name,
                             prompt = prompt,
+                            ttsPrompt = ttsPrompt,
                             refAudioBase64 = refAudioBase64,
                             refAudioMime = refAudioMime,
                             avatarUri = avatarUri ?: "",
