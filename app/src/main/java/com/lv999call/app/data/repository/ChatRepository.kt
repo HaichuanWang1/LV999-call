@@ -232,9 +232,9 @@ class ChatRepository(
                 ),
                 audio = TtsModels.TtsAudioConfig(
                     format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
-                    voice = voiceUri
+                    voice = voiceUri,
+                    speed = config.ttsSpeed
                 ),
-                speed = config.ttsSpeed,
                 stream = true
             )
 

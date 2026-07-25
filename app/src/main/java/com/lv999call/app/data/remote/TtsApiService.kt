@@ -23,7 +23,6 @@ object TtsModels {
         val model: String = "mimo-v2.5-tts-voiceclone",
         val messages: List<TtsMessage>,
         val audio: TtsAudioConfig,
-        val speed: Float = 1.0f,
         val stream: Boolean = true
     )
 
@@ -34,7 +33,8 @@ object TtsModels {
 
     data class TtsAudioConfig(
         val format: String = "wav",   // 文档支持: wav, mp3
-        val voice: String       // "data:{MIME};base64,{BASE64_AUDIO}"
+        val voice: String,            // "data:{MIME};base64,{BASE64_AUDIO}"
+        val speed: Float = 1.0f
     )
 
     /** 流式响应中的音频块 */
