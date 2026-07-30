@@ -171,29 +171,17 @@ fun SettingsScreen(
 
                 // ===== ASR =====
                 SectionHeader(title = "🎤 ASR 语音识别")
-                Text("服务商", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 12.dp)) {
-                    FilterChip(selected = asrProvider == "custom", onClick = { asrProvider = "custom" }, label = { Text("自定义HTTP") },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = colors.primary.copy(alpha = 0.2f), selectedLabelColor = colors.primary))
-                    FilterChip(selected = asrProvider == "vosk", onClick = { asrProvider = "vosk" }, label = { Text("Vosk离线") },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = colors.primary.copy(alpha = 0.2f), selectedLabelColor = colors.primary))
-                }
-
-                if (asrProvider == "custom") {
-                    SettingsTextField("ASR URL", asrBaseUrl, { asrBaseUrl = it }, "https://api.openai.com/v1/audio/transcriptions")
-                    SettingsTextField("ASR API Key", asrApiKey, { asrApiKey = it }, isPassword = !showApiKey, placeholder = "sk-xxx...")
-                }
+                Text("当前：Vosk 离线识别", style = MaterialTheme.typography.bodyMedium, color = colors.primary, modifier = Modifier.padding(bottom = 12.dp))
 
                 // Vosk 离线模型管理
-                if (asrProvider == "vosk") {
-                    Text("离线模型", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                Text("离线模型", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
 
-                    voskModels.forEach { model ->
-                        val isDownloaded = isModelDownloaded(model.id)
-                        val isSelected = asrVoskModelId == model.id
-                        val isDownloading = voskDownloadState is SettingsViewModel.VoskDownloadState.Downloading
-                            && voskDownloadState.modelId == model.id
-                        val downloadProgress = if (isDownloading) (voskDownloadState as SettingsViewModel.VoskDownloadState.Downloading).progress else 0f
+                voskModels.forEach { model ->
+                    val isDownloaded = isModelDownloaded(model.id)
+                    val isSelected = asrVoskModelId == model.id
+                    val isDownloading = voskDownloadState is SettingsViewModel.VoskDownloadState.Downloading
+                        && voskDownloadState.modelId == model.id
+                    val downloadProgress = if (isDownloading) (voskDownloadState as SettingsViewModel.VoskDownloadState.Downloading).progress else 0f
 
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -400,9 +388,8 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
-    }
 
-    // 模型选择弹窗（LLM / TTS 共用）
+        // 模型选择弹窗（LLM / TTS 共用）
     if (showModelDialog) {
         val currentSelected = if (modelDialogTarget == "llm") llmModel else ttsModel
         val dialogTitle = if (modelDialogTarget == "llm") "选择LLM模型" else "选择TTS模型"

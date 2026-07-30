@@ -3,13 +3,13 @@ package com.lv999call.app.domain.model
 /** API配置 */
 data class ApiConfig(
     // LLM配置
-    val llmBaseUrl: String = "",
-    val llmApiKey: String = "",
+    val llmBaseUrl: String = "https://api.xiaomimimo.com",
+    val llmApiKey: String = "sk-cf2i5hjyod6wkhy6au3ul7whpxrhahoiou1929hlyny00wdf",
     val llmModel: String = "mimo-v2.5",
     val maxContextTokens: Int = 200000,  // 上下文窗口上限（token）
 
     // ASR配置
-    val asrProvider: String = "custom",  // "custom" | "vosk"
+    val asrProvider: String = "vosk",  // "custom" | "vosk"
     val asrBaseUrl: String = "",
     val asrApiKey: String = "",
     val asrLanguage: String = "zh-CN",
@@ -17,8 +17,8 @@ data class ApiConfig(
 
     // TTS配置 (MiMo-V2.5-TTS-VoiceClone)
     val ttsProvider: String = "mimo",
-    val ttsBaseUrl: String = "",
-    val ttsApiKey: String = "",
+    val ttsBaseUrl: String = "https://api.xiaomimimo.com",
+    val ttsApiKey: String = "sk-cf2i5hjyod6wkhy6au3ul7whpxrhahoiou1929hlyny00wdf",
     val ttsModel: String = "mimo-v2.5-tts-voiceclone",
     val ttsVoiceId: String = "",
     val ttsSpeed: Float = 1.0f,
