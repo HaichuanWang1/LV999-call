@@ -12,6 +12,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.ByteArrayOutputStream
 
 /**
@@ -31,6 +33,8 @@ class AudioRecorder(private val context: Context) {
     private var recordingJob: Job? = null
     // 每次录音使用独立的scope，避免release后复用失效
     private var scope: CoroutineScope? = null
+    // 保证 read() 和 stop() 不并发
+    private val recordMutex = Mutex()
 
     private val _isRecording = MutableStateFlow(false)
     val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
@@ -54,92 +58,101 @@ class AudioRecorder(private val context: Context) {
             return
         }
 
-        // 先停止之前的录音（防止重叠）
-        stopRecording()
+        // 非阻塞停止旧录音
+        _isRecording.value = false
+        recordingJob?.cancel()
 
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
-            Log.e(TAG, "无法获取合适的缓冲区大小")
-            return
-        }
+        // 每次录音创建新的scope（先取消旧的避免泄漏）
+        scope?.cancel()
+        val newScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        scope = newScope
 
-        try {
-            audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
-                SAMPLE_RATE,
-                CHANNEL_CONFIG,
-                AUDIO_FORMAT,
-                bufferSize * 2
-            )
+        recordingJob = newScope.launch {
+            val bufferSize: Int
+            // Mutex 保证旧 AudioRecord 已 stop 后再创建新的
+            recordMutex.withLock {
+                try { audioRecord?.stop() } catch (_: Exception) {}
 
-            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "AudioRecord初始化失败")
-                release()
-                return
+                bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+                if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
+                    Log.e(TAG, "无法获取合适的缓冲区大小")
+                    return@launch
+                }
+
+                try {
+                    audioRecord = AudioRecord(
+                        MediaRecorder.AudioSource.MIC,
+                        SAMPLE_RATE,
+                        CHANNEL_CONFIG,
+                        AUDIO_FORMAT,
+                        bufferSize * 2
+                    )
+
+                    if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                        Log.e(TAG, "AudioRecord初始化失败")
+                        release()
+                        return@launch
+                    }
+
+                    audioRecord?.startRecording()
+                    _isRecording.value = true
+                    vadDetector.reset()
+                } catch (e: Exception) {
+                    Log.e(TAG, "录音启动失败: ${e.message}")
+                    release()
+                    return@launch
+                }
             }
 
-            audioRecord?.startRecording()
-            _isRecording.value = true
-            vadDetector.reset()
+            // 捕获本协程持有的 AudioRecord 实例，防止被新协程覆盖后误停
+            val myRecord = audioRecord
 
-            // 每次录音创建新的scope（先取消旧的避免泄漏）
-            scope?.cancel()
-            val newScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            scope = newScope
+            val allAudioData = ByteArrayOutputStream()
+            val buffer = ShortArray(bufferSize / 2)
+            var silenceFrames = 0
+            val maxSilenceFrames = (SAMPLE_RATE * 3.0 / (bufferSize / 2)).toInt()
 
-            recordingJob = newScope.launch {
-                // 使用 ByteArrayOutputStream 避免 O(n²) 复制
-                val allAudioData = ByteArrayOutputStream()
-                val buffer = ShortArray(bufferSize / 2)
-                var silenceFrames = 0
-                val maxSilenceFrames = (SAMPLE_RATE * 3.0 / (bufferSize / 2)).toInt()
+            while (isActive && _isRecording.value) {
+                val readSize = recordMutex.withLock {
+                    audioRecord?.read(buffer, 0, buffer.size) ?: -1
+                }
+                if (readSize > 0) {
+                    val rms = calculateRMS(buffer, readSize)
+                    _audioLevel.value = rms
 
-                while (isActive && _isRecording.value) {
-                    val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: -1
-                    if (readSize > 0) {
-                        val rms = calculateRMS(buffer, readSize)
-                        _audioLevel.value = rms
+                    val byteBuffer = shortsToBytes(buffer, readSize)
+                    allAudioData.write(byteBuffer, 0, byteBuffer.size)
 
-                        // 直接写入ByteArrayOutputStream，避免逐字节复制
-                        val byteBuffer = shortsToBytes(buffer, readSize)
-                        allAudioData.write(byteBuffer, 0, byteBuffer.size)
-
-                        val isSpeaking = vadDetector.isSpeaking(buffer, readSize)
-                        if (!isSpeaking) {
-                            silenceFrames++
-                            if (silenceFrames > maxSilenceFrames) {
-                                withContext(Dispatchers.Main) { onSilence() }
-                                break
-                            }
-                        } else {
-                            silenceFrames = 0
-                        }
-
-                        if (vadDetector.hasFinishedSpeaking()) {
-                            _isRecording.value = false
-                            val pcmData = allAudioData.toByteArray()
-                            withContext(Dispatchers.Main) { onSpeechEnd(pcmData) }
+                    val isSpeaking = vadDetector.isSpeaking(buffer, readSize)
+                    if (!isSpeaking) {
+                        silenceFrames++
+                        if (silenceFrames > maxSilenceFrames) {
+                            withContext(Dispatchers.Main) { onSilence() }
                             break
                         }
+                    } else {
+                        silenceFrames = 0
+                    }
+
+                    if (vadDetector.hasFinishedSpeaking()) {
+                        _isRecording.value = false
+                        val pcmData = allAudioData.toByteArray()
+                        withContext(Dispatchers.Main) { onSpeechEnd(pcmData) }
+                        break
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "录音启动失败: ${e.message}")
-            release()
+
+            // 退出循环后安全停止本协程的 AudioRecord
+            recordMutex.withLock {
+                try { myRecord?.stop() } catch (_: Exception) {}
+            }
         }
     }
 
     fun stopRecording() {
         _isRecording.value = false
         recordingJob?.cancel()
-        // 等待录音协程退出后再操作AudioRecord，避免并发
-        try {
-            kotlinx.coroutines.runBlocking { recordingJob?.join() }
-        } catch (_: Exception) {}
-        try {
-            audioRecord?.stop()
-        } catch (_: Exception) {}
     }
 
     fun release() {

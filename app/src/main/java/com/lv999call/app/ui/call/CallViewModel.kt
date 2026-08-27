@@ -220,7 +220,7 @@ class CallViewModel(
             onSilence = {
                 if (_callState.value != CallState.ENDED) {
                     _callState.value = CallState.LISTENING
-                    startListening()
+                    viewModelScope.launch { startListening() }
                 }
             }
         )
