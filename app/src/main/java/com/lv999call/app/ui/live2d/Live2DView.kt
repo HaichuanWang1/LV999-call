@@ -160,15 +160,30 @@ class Live2DController internal constructor() {
         }
     }
 
-    internal fun dispose() {
-        val wv = webView
+    /**
+     * 释放 WebView 与 JS 侧模型
+     *
+     * 注意：必须先取出引用再置空，且销毁动作要放在同一个方法内完成，
+     * 否则调用方拿到的 webView 已是 null，destroy() 会被静默跳过（内存泄漏）。
+     */
+    internal fun release() {
+        val wv = webView ?: return
         webView = null
         status = Live2DStatus.LOADING
-        if (wv != null) {
-            try {
-                wv.evaluateJavascript("window.L2D && window.L2D.dispose()", null)
-            } catch (_: Exception) {
-            }
+
+        // 先让 JS 侧释放 PIXI / Live2D 资源
+        try {
+            wv.evaluateJavascript("window.L2D && window.L2D.dispose()", null)
+        } catch (_: Exception) {
+        }
+
+        // 再销毁 WebView 本体
+        try {
+            wv.stopLoading()
+            wv.loadUrl("about:blank")
+            wv.destroy()
+        } catch (e: Exception) {
+            Log.w(TAG, "WebView 释放异常: ${e.message}")
         }
     }
 }
@@ -290,18 +305,8 @@ fun Live2DView(
         }
     }
 
-    // 随 Composable 销毁释放 WebView
+    // 随 Composable 销毁释放 WebView（含 JS 侧模型）
     DisposableEffect(Unit) {
-        onDispose {
-            controller.dispose()
-            controller.webView?.let { wv ->
-                runCatching {
-                    wv.stopLoading()
-                    wv.loadUrl("about:blank")
-                    wv.destroy()
-                }.onFailure { Log.w(TAG, "WebView 释放异常: ${it.message}") }
-                controller.webView = null
-            }
-        }
+        onDispose { controller.release() }
     }
 }
