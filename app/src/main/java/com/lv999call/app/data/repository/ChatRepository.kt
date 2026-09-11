@@ -1,6 +1,7 @@
 package com.lv999call.app.data.repository
 
 import com.google.gson.Gson
+import com.lv999call.app.audio.AudioPipe
 import com.lv999call.app.data.remote.AsrApiService
 import com.lv999call.app.data.remote.LlmApiService
 import com.lv999call.app.data.remote.LlmModels
@@ -10,14 +11,18 @@ import com.lv999call.app.data.remote.TtsApiService
 import com.lv999call.app.data.remote.TtsModels
 import com.lv999call.app.domain.model.ApiConfig
 import com.lv999call.app.domain.model.ChatMessage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.ResponseBody
 import java.io.InputStream
 
 /** 对话仓库 - 处理LLM/ASR/TTS的网络调用 */
@@ -29,11 +34,22 @@ class ChatRepository(
 ) {
     private val gson = Gson()
 
+    /**
+     * TTS 流式解码用的后台作用域。
+     *
+     * 为什么不用调用方的作用域：解码要「边收边喂」给播放器，生命周期跟着音频流走，
+     * 而不是跟着某一次 processAudio 的调用走（后者会在主线程上等）。
+     */
+    private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     companion object {
         // 匹配LLM thinking标签
         private val REGEX_THINKING = Regex("<think>[\\s\\S]*?</think>|<thinking>[\\s\\S]*?</thinking>")
         // 匹配语气/风格标注括号: (温柔), （慵懒）, [笑声] 等
         private val REGEX_STYLE_ANNOTATION = Regex("[（(][^）)]{1,10}[）)]|\\[[^\\]]{1,10}]")
+
+        /** 流式播放管道容量：写满即阻塞（背压），64KB ≈ 1.3s @24kHz/mono */
+        private const val TTS_PIPE_BUFFER_BYTES = 64 * 1024
     }
 
     /** 获取可用模型列表 */
@@ -190,7 +206,17 @@ class ChatRepository(
     }
 
     /**
-     * 调用TTS合成语音，返回PCM音频流
+     * 调用TTS合成语音，返回**边收边播**的PCM音频流（调用方读完即 EOF）。
+     *
+     * 两个历史坑：
+     * 1. 老实现把整段 SSE 音频解析进 ByteArrayOutputStream 才返回 —— 「开口前的静默期」
+     *    等于整段合成时长，句子越长越明显；
+     * 2. 这段解析是同步阻塞的，而调用链是 viewModelScope（主线程），
+     *    于是整段合成期间主线程被占死，表现出来就是「开口前 UI 卡一下」，很像死锁。
+     *
+     * 现在：请求/响应头阶段在 IO 线程；音频交给后台协程边解码边写管道，播放器边读边放。
+     * 管道写满自然阻塞形成背压，内存占用有上限（[TTS_PIPE_BUFFER_BYTES]），不会攒整段音频。
+     *
      * MiMo-V2.5-TTS: 通过 chat completions 端点，文本放 assistant 消息，参考音频放 audio.voice
      * @param refAudioBase64 模式对应的参考音频base64（为空则使用默认音色）
      * @param refAudioMime 参考音频MIME类型
@@ -211,71 +237,100 @@ class ChatRepository(
             .trim()
         if (cleanText.isBlank()) return null
 
-        return try {
-            val voiceUri = if (refAudioBase64.isNotEmpty()) {
-                // MiMo限制: base64不超过10MB
-                if (refAudioBase64.length > 10 * 1024 * 1024) {
-                    android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
-                    return null
-                }
-                "data:$refAudioMime;base64,$refAudioBase64"
-            } else {
-                // voiceclone模型必须有参考音频，无音频则跳过TTS
-                android.util.Log.w("ChatRepo", "无参考音频，voiceclone模型无法工作，跳过TTS")
-                return null
-            }
-
-            val request = TtsModels.TtsChatRequest(
-                model = config.ttsModel.ifEmpty { "mimo-v2.5-tts-voiceclone" },
-                messages = listOf(
-                    TtsModels.TtsMessage(role = "user", content = ""),
-                    TtsModels.TtsMessage(role = "assistant", content = cleanText)
-                ),
-                audio = TtsModels.TtsAudioConfig(
-                    format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
-                    voice = voiceUri,
-                    speed = config.ttsSpeed,
-                    prompt = ttsPrompt.ifEmpty { null }
-                ),
-                stream = true
-            )
-
-            // TTS锁死MiMo端点，当前只支持MiMo-V2.5-TTS-VoiceClone格式
-            val url = "https://api.xiaomimimo.com/v1/chat/completions"
-            val voicePreview = voiceUri.take(60)
-            android.util.Log.d("ChatRepo", "TTS: url=$url, model=${request.model}, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
-
-            val response = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
-            if (!response.isSuccessful) {
-                val errorBody = response.errorBody()?.string()?.take(500) ?: "无响应体"
-                android.util.Log.e("ChatRepo", "TTS API错误: HTTP ${response.code()}, $errorBody")
-                return null
-            }
-            val responseBody = response.body() ?: run {
-                android.util.Log.e("ChatRepo", "TTS API返回空响应体")
-                return null
-            }
+        // 请求体里塞着整段参考音频（~900KB base64），构建 + 网络 + 响应头都在 IO 线程做
+        return withContext(Dispatchers.IO) {
             try {
-                parseTtsAudioStream(responseBody.byteStream())
-            } finally {
-                responseBody.close()
+                val voiceUri = if (refAudioBase64.isNotEmpty()) {
+                    // MiMo限制: base64不超过10MB
+                    if (refAudioBase64.length > 10 * 1024 * 1024) {
+                        android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
+                        return@withContext null
+                    }
+                    "data:$refAudioMime;base64,$refAudioBase64"
+                } else {
+                    // voiceclone模型必须有参考音频，无音频则跳过TTS
+                    android.util.Log.w("ChatRepo", "无参考音频，voiceclone模型无法工作，跳过TTS")
+                    return@withContext null
+                }
+
+                val request = TtsModels.TtsChatRequest(
+                    model = config.ttsModel.ifEmpty { "mimo-v2.5-tts-voiceclone" },
+                    messages = listOf(
+                        TtsModels.TtsMessage(role = "user", content = ""),
+                        TtsModels.TtsMessage(role = "assistant", content = cleanText)
+                    ),
+                    audio = TtsModels.TtsAudioConfig(
+                        format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
+                        voice = voiceUri,
+                        speed = config.ttsSpeed,
+                        prompt = ttsPrompt.ifEmpty { null }
+                    ),
+                    stream = true
+                )
+
+                // TTS锁死MiMo端点，当前只支持MiMo-V2.5-TTS-VoiceClone格式
+                val url = "https://api.xiaomimimo.com/v1/chat/completions"
+                val voicePreview = voiceUri.take(60)
+                android.util.Log.d("ChatRepo", "TTS: url=$url, model=${request.model}, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
+
+                val response = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
+                if (!response.isSuccessful) {
+                    val errorBody = response.errorBody()?.string()?.take(500) ?: "无响应体"
+                    android.util.Log.e("ChatRepo", "TTS API错误: HTTP ${response.code()}, $errorBody")
+                    return@withContext null
+                }
+                val responseBody = response.body() ?: run {
+                    android.util.Log.e("ChatRepo", "TTS API返回空响应体")
+                    return@withContext null
+                }
+                openPcmPipe(responseBody)
+            } catch (e: Exception) {
+                android.util.Log.e("ChatRepo", "TTS合成异常: ${e.message}", e)
+                null
             }
-        } catch (e: Exception) {
-            android.util.Log.e("ChatRepo", "TTS合成异常: ${e.message}", e)
-            null
         }
     }
 
     /**
-     * 解析MiMo TTS的SSE流式响应，提取base64音频块并解码为字节流
-     * 兼容两种格式: delta.audio 为字符串 或 delta.audio.data 为字符串
+     * 把 SSE 音频响应接到一根管道上：后台协程边解析边写，播放器边读边放。
+     *
+     * 消费端（AudioPlayer）提前关闭流时，写入会抛 IOException，属正常打断路径。
+     * 连接由解码协程统一收尾，避免上游 socket 泄漏。
      */
-    private fun parseTtsAudioStream(inputStream: InputStream): InputStream {
-        val audioOutput = java.io.ByteArrayOutputStream()
+    private fun openPcmPipe(responseBody: ResponseBody): InputStream {
+        val pipe = AudioPipe(TTS_PIPE_BUFFER_BYTES)
+        val source = responseBody.byteStream()
+
+        ioScope.launch {
+            val startedAt = android.os.SystemClock.uptimeMillis()
+            try {
+                val bytes = decodeTtsSseToPcm(source, pipe)
+                android.util.Log.d(
+                    "ChatRepo",
+                    "TTS流式解码完成: 字节=$bytes, 耗时=${android.os.SystemClock.uptimeMillis() - startedAt}ms"
+                )
+            } catch (e: Exception) {
+                // 挂断/打断时消费端先关流，这里必然报错，不当异常处理
+                android.util.Log.d("ChatRepo", "TTS流式解码中断: ${e.message}")
+            } finally {
+                runCatching { pipe.closeWriter() }
+                runCatching { responseBody.close() }
+            }
+        }
+        return pipe
+    }
+
+    /**
+     * 解析MiMo TTS的SSE流式响应，解码出的 PCM 立刻写进 [out]（不再整段缓存）。
+     * 兼容两种格式: delta.audio 为字符串 或 delta.audio.data 为字符串
+     * @return 写入的字节数
+     */
+    private fun decodeTtsSseToPcm(inputStream: InputStream, out: AudioPipe): Int {
         val reader = inputStream.bufferedReader()
         var line: String?
         var lineCount = 0
         var chunkCount = 0
+        var byteCount = 0
 
         try {
             while (reader.readLine().also { line = it } != null) {
@@ -303,8 +358,10 @@ class ChatRepository(
 
                         if (!base64Data.isNullOrEmpty()) {
                             val decoded = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
-                            audioOutput.write(decoded)
+                            // 管道满则阻塞在这里 → 背压，播放多快就解码多快
+                            out.write(decoded)
                             chunkCount++
+                            byteCount += decoded.size
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("ChatRepo", "TTS JSON解析失败: ${data.take(200)}, 原因: ${e.message}")
@@ -316,8 +373,7 @@ class ChatRepository(
             inputStream.close()
         }
 
-        val result = audioOutput.toByteArray()
-        android.util.Log.d("ChatRepo", "TTS解析: 行=$lineCount, 块=$chunkCount, 字节=${result.size}")
-        return result.inputStream()
+        android.util.Log.d("ChatRepo", "TTS解析: 行=$lineCount, 块=$chunkCount, 字节=$byteCount")
+        return byteCount
     }
 }

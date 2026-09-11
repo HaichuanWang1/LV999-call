@@ -147,18 +147,19 @@ class ProcessAudioUseCase(
 
             val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime, ttsPrompt)
             if (audioStream != null) {
+                val speakRequestedAt = android.os.SystemClock.uptimeMillis()
                 audioPlayer.playStream(audioStream)
-                // 等待TTS真正开始播放（playStream内部是异步启动的）
-                kotlinx.coroutines.withTimeoutOrNull(5_000L) {
-                    while (!audioPlayer.isPlaying.value) {
-                        kotlinx.coroutines.delay(50)
-                    }
-                }
-                // 等待TTS播放完毕
-                kotlinx.coroutines.withTimeoutOrNull(120_000L) {
-                    while (audioPlayer.isPlaying.value) {
-                        kotlinx.coroutines.delay(100)
-                    }
+                // 等到本轮播放真正结束再返回。
+                // 这里刻意不轮询 isPlaying：音频是边收边播的，首块到达时间不确定，
+                // 轮询既会误判「没开声」，也会在服务端一块都没下发时白等一个超时。
+                // 开声时机由 AudioPlayer 自己打日志（开始出声: 自playStream=Xms）。
+                val finished = audioPlayer.awaitPlaybackEnd(120_000L)
+                if (!finished) {
+                    Log.w(
+                        TAG,
+                        "TTS 播放超时（已等 ${android.os.SystemClock.uptimeMillis() - speakRequestedAt}ms），强制停止"
+                    )
+                    audioPlayer.stopCurrentPlayback()
                 }
                 // TTS播放结束后短暂延迟，避免麦克风拾取尾音
                 kotlinx.coroutines.delay(300)

@@ -24,12 +24,37 @@ class AudioPlayer {
     }
 
     private var audioTrack: AudioTrack? = null
+
+    /** 当前播放任务；[awaitPlaybackEnd] 会跨线程读它，必须 volatile */
+    @Volatile
     private var playbackJob: Job? = null
+
+    /** 当前正在消费的音频流；[stopCurrentPlayback] 需要跨线程 close 它来解除 read 阻塞 */
+    @Volatile
+    private var currentStream: InputStream? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val trackLock = Any() // 保护audioTrack的并发访问
 
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
+
+    /**
+     * 等当前这次播放结束。
+     *
+     * 比起「轮询 isPlaying」：TTS 是边收边播的，如果服务端一块音频都没下发，
+     * isPlaying 会在一帧内 true→false，轮询很容易整个错过、白等一个超时。
+     * 直接 join 播放任务则不会漏掉这种「没出声就结束」的失败路径。
+     *
+     * @return false 表示超时（被打断不算，被打断时任务同样会结束）
+     */
+    suspend fun awaitPlaybackEnd(timeoutMs: Long): Boolean {
+        val job = playbackJob ?: return true
+        if (job.isCompleted) return true
+        return withTimeoutOrNull(timeoutMs) {
+            job.join()
+            true
+        } ?: false
+    }
 
     /**
      * 当前播放音量（16bit PCM 的 RMS，归一化到 0f~1f）
@@ -81,6 +106,12 @@ class AudioPlayer {
 
         stopCurrentPlayback()
 
+        currentStream = inputStream
+
+        // 用于量「开口前等了多久」：TTS 是边收边播的，第一个音频块到得越晚，
+        // 用户听到的第一个字就越晚。这条链路出问题时先看这个数。
+        val requestedAt = android.os.SystemClock.uptimeMillis()
+
         playbackJob = scope.launch {
             try {
                 // 检测是否为WAV格式（前4字节为"RIFF"）
@@ -98,6 +129,9 @@ class AudioPlayer {
                     headerBuf[2] == 'F'.code.toByte() &&
                     headerBuf[3] == 'F'.code.toByte()
 
+                var logSampleRate = SAMPLE_RATE
+                var logChannels = 1
+
                 if (isWav && headerRead == 44) {
                     // 从WAV头解析采样率和声道数
                     val sampleRate = (headerBuf[24].toInt() and 0xFF) or
@@ -106,10 +140,18 @@ class AudioPlayer {
                         ((headerBuf[27].toInt() and 0xFF) shl 24)
                     val channels = (headerBuf[22].toInt() and 0xFF) or
                         ((headerBuf[23].toInt() and 0xFF) shl 8)
+                    logSampleRate = sampleRate
+                    logChannels = channels
 
                     // 用WAV头中的参数重新配置AudioTrack
                     reinitWithParams(sampleRate, channels)
                 }
+
+                Log.d(
+                    TAG,
+                    "音频流就绪: wav=$isWav headerRead=$headerRead sr=$logSampleRate ch=$logChannels " +
+                        "首块等待=${android.os.SystemClock.uptimeMillis() - requestedAt}ms"
+                )
 
                 if (audioTrack?.playState != AudioTrack.PLAYSTATE_PLAYING) {
                     audioTrack?.play()
@@ -123,6 +165,7 @@ class AudioPlayer {
 
                 val buffer = ByteArray(4096)
                 var bytesRead: Int
+                var firstFrameLogged = false
 
                 while (isActive) {
                     bytesRead = inputStream.read(buffer)
@@ -131,6 +174,13 @@ class AudioPlayer {
                     if (_isPlaying.value) {
                         audioTrack?.write(buffer, 0, bytesRead)
                         _amplitude.value = calculateRms16(buffer, bytesRead)
+                        if (!firstFrameLogged) {
+                            firstFrameLogged = true
+                            Log.d(
+                                TAG,
+                                "开始出声: 自playStream=${android.os.SystemClock.uptimeMillis() - requestedAt}ms"
+                            )
+                        }
                     } else {
                         break
                     }
@@ -141,6 +191,7 @@ class AudioPlayer {
                 Log.e(TAG, "播放错误: ${e.message}")
             } finally {
                 try { inputStream.close() } catch (_: Exception) {}
+                if (currentStream === inputStream) currentStream = null
                 _isPlaying.value = false
                 _amplitude.value = 0f
             }
@@ -221,6 +272,10 @@ class AudioPlayer {
         _isPlaying.value = false
         _amplitude.value = 0f
         playbackJob?.cancel()
+        // 关掉输入流：播放线程可能正阻塞在 read 上等下一块音频，
+        // 取消协程叫不醒阻塞中的读，只有 close 才能让它立刻收摊（AudioPipe 会唤醒读写两端）。
+        runCatching { currentStream?.close() }
+        currentStream = null
         synchronized(trackLock) {
             try {
                 audioTrack?.stop()

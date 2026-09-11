@@ -18,6 +18,7 @@
 - 全局默认音色与自定义模式音色独立配置
 - TTS 风格提示词（控制语气、情感、语速等）
 - 支持语速调节（0.5x ~ 2.0x）
+- **边收边播**：SSE 分块解码后直接喂给 AudioTrack，不等整段合成完（详见「TTS 播放链路」）
 - > TTS 当前仅支持 MiMo 系列（目前免费），仍需自行申请 API Key
 
 ### ASR 双引擎
@@ -65,6 +66,7 @@ app/src/main/java/com/lv999call/app/
 ├── audio/                  # 音频引擎
 │   ├── AudioRecorder.kt    #   录音 + VAD
 │   ├── AudioPlayer.kt      #   流式播放 (WAV自动检测)
+│   ├── AudioPipe.kt        #   边收边播用的有界字节管道
 │   ├── VadDetector.kt      #   语音活动检测
 │   ├── AsrEngine.kt        #   ASR引擎 (PCM→WAV转换)
 │   └── VoskModelManager.kt #   Vosk离线模型管理
@@ -99,9 +101,11 @@ app/src/main/assets/live2d/  # Live2D 资源
 tools/
 ├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
 ├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
-├── live2d_selftest.cjs        # 桥接层自测（31 项断言）
+├── live2d_selftest.cjs        # 桥接层自测（30 项断言）
 ├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
-└── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
+├── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
+├── audio_pipe_test.sh         # AudioPipe 自测（12 项断言，JVM 直跑真实 .class）
+└── AudioPipeTest.java         #   ↑ 的测试主体
 ```
 
 ## 快速开始
@@ -249,10 +253,15 @@ WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测�
 node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 容错
 node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
 node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
+bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形回绕
 ```
 
 > `check_expression_names.cjs` 的价值在于：模型表情名少写一个空格 pixi 只会静默忽略，
 > 现象是「表情没变」且没有任何报错，肉眼审查根本发现不了。
+
+> `audio_pipe_test.sh` 直接拿 Gradle 编出来的 `.class` 在桌面 JVM 上跑 ——
+> `AudioPipe` 是纯 JDK 实现（不碰 Android API），测的就是真正进 APK 的那份代码。
+> 换掉 `PipedInputStream` 那个坑就是它逮出来的（见下文「TTS 播放链路」）。
 
 ### 许可提醒
 
@@ -263,6 +272,53 @@ node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对
 - 本项目定位个人自用；若要公开发布，请确保对所用模型拥有合法授权
 
 详见 [`app/src/main/assets/live2d/LICENSES.md`](app/src/main/assets/live2d/LICENSES.md)。
+
+## TTS 播放链路（边收边播）
+
+```
+MiMo SSE 分块(base64) → decodeTtsSseToPcm 逐块解码 → AudioPipe → AudioPlayer.read → AudioTrack.write
+```
+
+- **真流式**：老实现把整段 SSE 音频攒进 `ByteArrayOutputStream` 才返回 InputStream，
+  「开口前的静默期」就等于整段合成时长（句子越长越明显）。现在第一块音频到达即可出声。
+- **不占主线程**：整条链路跑在 `viewModelScope`（主线程）上，而老实现的解析是同步阻塞的，
+  于是**整段合成期间主线程被堵满** —— 现象是「开口前 UI 卡一下」，非常像死锁，但不是：
+  没有任何锁循环等待，是同步 I/O 直接压在主线程上。
+  现在请求/响应头在 IO 线程，解码在 `ChatRepository.ioScope`，播放器在自己的 IO 作用域。
+- **背压**：`AudioPipe` 只有 64KB，写满即阻塞，播放多快就解码多快，不会把整段音频攒内存里。
+- **可打断**：挂断/退出时 `AudioPlayer.stopCurrentPlayback()` 会 `close()` 当前流，
+  同时唤醒阻塞在 `read` 的播放线程和阻塞在 `write` 的解码线程
+  （`Job.cancel()` 叫不醒阻塞中的 `read`，只有 close 才行）。
+- **播放收尾**：`AudioPlayer.awaitPlaybackEnd()` 直接 join 播放任务，不再轮询 `isPlaying` ——
+  服务端一块音频都没下发时 `isPlaying` 会在一帧内 true→false，轮询会整个错过、白等一个超时。
+
+### 为什么不用 `java.io.PipedInputStream`
+
+它的写端在缓冲区**没写满**时不会唤醒阻塞中的读端：`receive()` 里只有
+「缓冲区已满」(`awaitSpace`) 和写端关闭 (`receivedLast`) 两处 `notifyAll()`，
+正常写入路径一句都没有，读端只能靠 `wait(1000)` 超时才发现有新数据。
+
+Android 源码（`$SDK/sources/android-36.1/java/io/PipedInputStream.java`）和 JDK 21 都是这样；
+实测「写一小段、缓冲区远没满」时读端要 **~800ms** 才被唤醒 —— 边收边播会被切成
+~1 秒一顿的节奏，比原来的「等整段合成」还糟。所以用
+`ReentrantLock + Condition` 自己实现了 [`AudioPipe.kt`](app/src/main/java/com/lv999call/app/audio/AudioPipe.kt)。
+
+### 排查播放链路问题看这些日志
+
+```bash
+adb logcat -s ChatRepo:D AudioPlayer:D ProcessAudioUseCase:D
+```
+
+| 日志 | 含义 |
+|------|------|
+| `TTS解析: 行=N, 块=N, 字节=N` | SSE 解码统计（**块数=1 说明服务端根本没在流式下发**，边收边播会退化成整段等待） |
+| `音频流就绪: wav=.. headerRead=.. sr=.. ch=.. 首块等待=Xms` | 从 `playStream` 到首个音频块到达 —— **X 就是「开口前」的等待时间** |
+| `开始出声: 自playStream=Xms` | 第一帧真正写进 AudioTrack 的时刻 |
+| `TTS流式解码完成: 字节=N, 耗时=Xms` | 整段解码耗时（现在不该再等于静默期） |
+| `TTS 播放超时（已等 Xms）` | 120s 兜底：音频一直没放完，已强制停止 |
+
+> 参考音频（`assets/silverwolf/ref_voice.wav`，约 640KB，base64 后 ~880KB）每轮都要
+> 随请求上传，这是「开口前等待」里除服务端合成之外的另一块固定成本。
 
 ## API 兼容性
 
