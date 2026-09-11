@@ -24,8 +24,16 @@
 - **自定义 HTTP**：兼容 OpenAI Whisper 等任意 ASR API
 - **Vosk 离线**：内置中文模型，无需网络即可识别
 
+### Live2D 动态形象
+- 通话界面可显示 Live2D 角色，替代静态头像
+- **口型同步**：TTS 播放音量实时驱动嘴型张合（快张慢合 + 轻微抖动）
+- **状态联动**：聆听/思考/说话/结束各有对应动作与表情
+- 空闲时轻微视线游移，角色观感更自然
+- 设置页可开关；模型加载失败自动回退静态头像
+- 离线可用：运行时与模型全部内置于 APK，不依赖网络 CDN
+
 ### 核心能力
-- 沉浸式通话界面，头像呼吸灯动画，状态实时指示（聆听/思考/说话）
+- 沉浸式通话界面，状态实时指示（聆听/思考/说话）
 - 对话历史本地持久化（Room），支持"继续上次对话"
 - 全配置可调：LLM / ASR / TTS 的 URL、Key、模型、语速等
 - 支持本地局域网部署（明文 HTTP 流量已放行）
@@ -45,6 +53,7 @@
 | ASR | 自定义 HTTP / Vosk 离线 |
 | TTS | MiMo-V2.5-TTS-VoiceClone (OpenAI 兼容) |
 | 图片 | Coil |
+| Live2D | WebView + PixiJS 6 + pixi-live2d-display (Cubism 4) |
 
 ## 项目结构
 
@@ -69,10 +78,20 @@ app/src/main/java/com/lv999call/app/
     ├── home/               #     首页
     ├── prepare/            #     对话准备页
     ├── call/               #     通话页
+    ├── live2d/             #     Live2D 形象容器
+    │   ├── Live2DView.kt        #   Compose 容器 + 控制器
+    │   └── Live2DAssetLoader.kt #   WebView 资源拦截加载
     ├── history/            #     历史记录页
     ├── custom/             #     自定义编辑页
     ├── settings/           #     设置页
     └── theme/              #     Material 3 主题
+
+app/src/main/assets/live2d/  # Live2D 资源
+├── index.html               #   承载页面
+├── js/bridge.js             #   状态机 + 口型同步
+├── lib/                     #   PixiJS / Cubism Core / pixi-live2d-display
+├── models/haru/             #   示例模型（需替换为自有模型）
+└── LICENSES.md              #   第三方许可声明
 ```
 
 ## 快速开始
@@ -98,6 +117,51 @@ cd LV999-call
 6. 保存设置，返回首页开始通话
 
 > 如果使用本地局域网部署的模型（如 192.168.x.x），直接填入 HTTP 地址即可，已放行明文流量。
+
+## Live2D 形象
+
+### 工作原理
+
+```
+Compose (CallScreen)
+  └── AndroidView → WebView（透明背景 + 硬件加速）
+        └── assets/live2d/index.html
+              └── PixiJS → pixi-live2d-display → Cubism 4 模型
+                    ↑
+        口型值 / 状态指令（evaluateJavascript）
+                    ↓
+        CallViewModel.audioLevel ← AudioPlayer.amplitude (RMS)
+```
+
+- 页面通过**虚拟域名 + `shouldInterceptRequest`** 供源，而非 `file://`。
+  因为 WebView 下 `file://` 的 XHR 会被同源策略拦截，导致模型无法加载；
+  该方案等价于 `WebViewAssetLoader`，但无需引入额外依赖。
+- 口型注入点使用 pixi-live2d-display 的 `beforeModelUpdate` 事件，
+  即模型 `update()` 前的最后一刻（该库自身 TODO 预留的 lip sync 位置）。
+
+### 更换模型
+
+1. 把模型放到 `app/src/main/assets/live2d/models/<your-model>/`
+2. 修改 `js/bridge.js` 顶部 `CFG.modelUrl` 指向新的 `.model3.json`
+3. 若模型口型参数不是 `ParamMouthOpenY`，同步调整 `CFG.lipSyncParams`
+4. 按需调整 `CFG.states` 里各状态对应的表情名（示例模型的 f01/f03/f05
+   为占位映射，建议按实际观感微调）
+
+### 自测
+
+WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测脚本验证
+状态机与口型链路（mock PIXI/DOM 直接驱动 bridge.js）：
+
+```bash
+node tools/live2d_selftest.cjs
+```
+
+### 许可提醒
+
+内置的 Haru 为 **Live2D 官方示例模型，仅用于技术验证**；
+Live2D Cubism Core 亦有其独立授权条款。
+正式发布前请替换为自有或已授权模型，详见
+[`app/src/main/assets/live2d/LICENSES.md`](app/src/main/assets/live2d/LICENSES.md)。
 
 ## API 兼容性
 

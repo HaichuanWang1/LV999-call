@@ -51,12 +51,16 @@ internal object Live2DAssetLoader {
             if (relative.contains("..")) return null
             val stream = context.assets.open("$ASSET_ROOT/$relative")
             WebResourceResponse(mimeOf(relative), encodingOf(relative), stream).apply {
-                // 同源资源，允许缓存，减少重复读取
-                responseHeaders = mapOf("Cache-Control" to "max-age=3600")
+                // 禁用缓存：资源随 APK 版本变化，但 URL 不变，
+                // 若命中 WebView 缓存会导致升级后仍加载旧模型。
+                responseHeaders = mapOf("Cache-Control" to "no-store")
             }
         } catch (e: IOException) {
-            // 资源不存在：返回 404 响应，避免 WebView 报未知错误
-            WebResourceResponse("text/plain", "utf-8", 404, "Not Found", emptyMap(), null)
+            // 资源不存在：返回 404（空流而非 null，部分 WebView 版本不接受 null）
+            WebResourceResponse(
+                "text/plain", "utf-8", 404, "Not Found", emptyMap(),
+                java.io.ByteArrayInputStream(ByteArray(0))
+            )
         }
     }
 
