@@ -30,6 +30,16 @@ internal object Live2DAssetLoader {
     val INDEX_URL: String = "https://$HOST$URL_PREFIX" + "index.html"
 
     /**
+     * 带模型参数入口地址
+     *
+     * 通过 `?model=` 让 Kotlin 侧指定模型，换模型无需改 JS。
+     * 传空则使用 bridge.js 中的默认路径。
+     */
+    fun indexUrl(modelPath: String? = null): String =
+        if (modelPath.isNullOrBlank()) INDEX_URL
+        else "$INDEX_URL?model=" + Uri.encode(modelPath)
+
+    /**
      * 命中虚拟域名时返回 assets 内容，否则返回 null 交由系统处理
      */
     fun intercept(context: Context, url: Uri): WebResourceResponse? {

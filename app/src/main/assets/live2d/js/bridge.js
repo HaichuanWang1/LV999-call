@@ -46,6 +46,22 @@
     }
   };
 
+  // 允许宿主通过 ?model= 指定模型，换模型无需改本文件
+  (function () {
+    try {
+      var m = null;
+      var q = window.location && window.location.search;
+      if (q && typeof URLSearchParams === 'function') {
+        m = new URLSearchParams(q).get('model');
+      } else if (q) {
+        // 兜底解析，兼容不支持 URLSearchParams 的环境
+        var hit = /[?&]model=([^&]*)/.exec(q);
+        if (hit) m = decodeURIComponent(hit[1]);
+      }
+      if (m) CFG.modelUrl = m;
+    } catch (e) { /* 解析失败则沿用默认模型 */ }
+  })();
+
   // ============================ 状态 ============================
   var app = null;           // PIXI.Application
   var model = null;         // Live2DModel
@@ -74,11 +90,17 @@
     notify('error', { message: String(message) });
   }
 
+  /**
+   * 降级提示
+   *
+   * 可见的错误 UI 由 Compose 侧接管（加载失败会回退到静态头像），
+   * 这里只在页面内留个印记，避免与原生降级界面叠字。
+   */
   function showFallback(text) {
     var el = document.getElementById('fallback');
     if (el) {
       el.textContent = text;
-      el.classList.add('show');
+      el.classList.remove('show');
     }
   }
 

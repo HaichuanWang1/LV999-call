@@ -40,3 +40,15 @@ sourse/
 
 # Release signing
 release.jks
+
+# ============================================================
+# Live2D 第三方资源（不入库 / 不随仓库分发）
+# ============================================================
+# 原因：模型美术与 Live2D Cubism Core 的版权均不归本项目所有，
+# 公开仓库分发存在法律风险。请用 tools/setup_live2d_assets.sh
+# 在本地拉取，或放入自备模型。缺失时 App 会自动回退静态头像。
+/app/src/main/assets/live2d/lib/
+/app/src/main/assets/live2d/models/
+
+# 自备/私有模型（防止误提交）
+# 放到上述 models/ 目录即可，已被整目录忽略

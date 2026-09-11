@@ -30,7 +30,8 @@
 - **状态联动**：聆听/思考/说话/结束各有对应动作与表情
 - 空闲时轻微视线游移，角色观感更自然
 - 设置页可开关；模型加载失败自动回退静态头像
-- 离线可用：运行时与模型全部内置于 APK，不依赖网络 CDN
+- 离线可用：运行时与模型本地内置，不依赖网络 CDN
+- **合规**：第三方模型与运行时不入库，需本地获取（见下）
 
 ### 核心能力
 - 沉浸式通话界面，状态实时指示（聆听/思考/说话）
@@ -87,11 +88,17 @@ app/src/main/java/com/lv999call/app/
     └── theme/              #     Material 3 主题
 
 app/src/main/assets/live2d/  # Live2D 资源
-├── index.html               #   承载页面
-├── js/bridge.js             #   状态机 + 口型同步
-├── lib/                     #   PixiJS / Cubism Core / pixi-live2d-display
-├── models/haru/             #   示例模型（需替换为自有模型）
-└── LICENSES.md              #   第三方许可声明
+├── index.html               #   承载页面            [入库]
+├── js/bridge.js             #   状态机 + 口型同步    [入库]
+├── LICENSES.md              #   第三方许可声明       [入库]
+├── lib/                     #   运行时              [不入库，需本地获取]
+└── models/                  #   模型                [不入库，需本地获取]
+
+tools/
+├── setup_live2d_assets.sh   # 一键获取 lib/ 与示例模型
+├── live2d_postprocess.py    # 下载后处理（剥离 sourceMapping 等）
+├── live2d_selftest.cjs      # 桥接层自测（19 项断言）
+└── live2d_fallback_test.cjs # 降级路径测试（9 项断言）
 ```
 
 ## 快速开始
@@ -107,6 +114,20 @@ git clone https://github.com/HaichuanWang1/LV999-call.git
 cd LV999-call
 ```
 用 Android Studio 打开项目，Sync Gradle 后运行。
+
+### 启用 Live2D（可选）
+
+Live2D 的运行时与模型因版权原因不入库，需先本地获取：
+
+```bash
+bash tools/setup_live2d_assets.sh
+```
+
+该脚本会下载 PixiJS / Cubism Core / pixi-live2d-display 到 `lib/`，
+以及 Live2D 官方示例模型 Haru 到 `models/haru/`。
+
+> 跳过此步也能正常构建运行，只是通话界面会回退到静态头像。
+> 使用自备模型见下方「Live2D 形象 → 使用自备模型」。
 
 ### 首次配置
 1. 打开 App → 点击右下角 ⚙️ **设置**
@@ -139,13 +160,27 @@ Compose (CallScreen)
 - 口型注入点使用 pixi-live2d-display 的 `beforeModelUpdate` 事件，
   即模型 `update()` 前的最后一刻（该库自身 TODO 预留的 lip sync 位置）。
 
-### 更换模型
+### 资源不入库
+
+`lib/` 与 `models/` 已被 `.gitignore` 排除，原因：
+
+- 模型美术版权属于模型作者，并非本项目所有，公开分发存在法律风险
+- Live2D Cubism Core 为专有组件，仅授予「作为应用一部分」的分发权
+
+因此本仓库只包含自研代码（`index.html` / `bridge.js`），
+第三方资源请用 `tools/setup_live2d_assets.sh` 在本地获取。
+
+### 使用自备模型
 
 1. 把模型放到 `app/src/main/assets/live2d/models/<your-model>/`
-2. 修改 `js/bridge.js` 顶部 `CFG.modelUrl` 指向新的 `.model3.json`
-3. 若模型口型参数不是 `ParamMouthOpenY`，同步调整 `CFG.lipSyncParams`
-4. 按需调整 `CFG.states` 里各状态对应的表情名（示例模型的 f01/f03/f05
-   为占位映射，建议按实际观感微调）
+2. 指定模型路径，二选一：
+   - 改 `js/bridge.js` 顶部的 `CFG.modelUrl`
+   - 或从 Kotlin 传参：`Live2DView(modelPath = "models/<your-model>/xxx.model3.json")`
+3. 若模型口型参数不是 `ParamMouthOpenY`，调整 `CFG.lipSyncParams`
+4. 按实际观感调整 `CFG.states` 中各状态的表情名
+   （示例模型的 f01/f03/f05 为占位映射）
+
+> 自备模型同样在 `.gitignore` 覆盖范围内，不会被误提交。
 
 ### 自测
 
@@ -153,15 +188,19 @@ WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测�
 状态机与口型链路（mock PIXI/DOM 直接驱动 bridge.js）：
 
 ```bash
-node tools/live2d_selftest.cjs
+node tools/live2d_selftest.cjs        # 状态机 / 口型注入 / 布局 / 容错
+node tools/live2d_fallback_test.cjs   # 资源缺失时的降级上报
 ```
 
 ### 许可提醒
 
-内置的 Haru 为 **Live2D 官方示例模型，仅用于技术验证**；
-Live2D Cubism Core 亦有其独立授权条款。
-正式发布前请替换为自有或已授权模型，详见
-[`app/src/main/assets/live2d/LICENSES.md`](app/src/main/assets/live2d/LICENSES.md)。
+- 本地获取的 Haru 为 **Live2D 官方示例模型，仅用于技术验证**，
+  请勿随产品分发或商用
+- Live2D Cubism Core 受 Live2D 独立授权条款约束，
+  商用达到一定规模需购买授权
+- 本项目定位个人自用；若要公开发布，请确保对所用模型拥有合法授权
+
+详见 [`app/src/main/assets/live2d/LICENSES.md`](app/src/main/assets/live2d/LICENSES.md)。
 
 ## API 兼容性
 

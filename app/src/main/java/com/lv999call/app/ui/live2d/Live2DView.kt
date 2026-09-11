@@ -26,6 +26,15 @@ import org.json.JSONObject
 
 private const val TAG = "Live2DView"
 
+/**
+ * 加载超时（毫秒）
+ *
+ * 资源缺失或 JS 整体异常时可能永远收不到 ready/error 回调，
+ * 若不设兜底，UI 会停在 LOADING → live2dActive 恒为 true →
+ * 用户看到的是一片空白而不是静态头像。
+ */
+private const val LOAD_TIMEOUT_MS = 8_000L
+
 /** Live2D 形象的加载状态 */
 enum class Live2DStatus {
     /** 正在加载模型 */
@@ -138,6 +147,15 @@ class Live2DController internal constructor() {
         }
     }
 
+    /** 超时兜底：仍处于 LOADING 则判定失败，让 UI 回退静态头像 */
+    internal fun markLoadTimeout() {
+        if (status == Live2DStatus.LOADING) {
+            status = Live2DStatus.ERROR
+            lastError = "Live2D 加载超时（资源缺失或 WebView 异常）"
+            Log.w(TAG, lastError!!)
+        }
+    }
+
     internal fun handleEvent(type: String, payload: String) {
         when (type) {
             "ready" -> {
@@ -196,7 +214,11 @@ private fun String.jsEscape(): String =
  * 创建并配置承载 Live2D 的 WebView
  */
 @SuppressLint("SetJavaScriptEnabled")
-private fun createWebView(context: android.content.Context, controller: Live2DController): WebView {
+private fun createWebView(
+    context: android.content.Context,
+    controller: Live2DController,
+    modelPath: String? = null
+): WebView {
     return WebView(context).apply {
         // 透明背景 + 硬件加速，才能叠在 Compose 渐变之上
         setBackgroundColor(Color.TRANSPARENT)
@@ -257,7 +279,7 @@ private fun createWebView(context: android.content.Context, controller: Live2DCo
             }
         }
 
-        loadUrl(Live2DAssetLoader.INDEX_URL)
+        loadUrl(Live2DAssetLoader.indexUrl(modelPath))
     }
 }
 /** 记住一个 Live2D 控制器，随 Composable 生命周期自动释放 */
@@ -276,6 +298,8 @@ fun rememberLive2DController(): Live2DController = remember { Live2DController()
  * ```
  *
  * @param controller 由 [rememberLive2DController] 创建
+ * @param modelPath 模型相对 assets/live2d 的路径，如
+ *        `models/haru/haru_greeter_t03.model3.json`；传 null 用 JS 默认值
  * @param paused 为 true 时暂停渲染以省电（例如通话结束）
  * @param onStatusChange 状态变化回调，可据此回退到静态头像
  */
@@ -283,19 +307,26 @@ fun rememberLive2DController(): Live2DController = remember { Live2DController()
 fun Live2DView(
     controller: Live2DController,
     modifier: Modifier = Modifier,
+    modelPath: String? = null,
     paused: Boolean = false,
     onStatusChange: (Live2DStatus) -> Unit = {}
 ) {
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            createWebView(ctx, controller).also { controller.webView = it }
+            createWebView(ctx, controller, modelPath).also { controller.webView = it }
         }
     )
 
     // 状态变化向上汇报
     LaunchedEffect(controller.status) {
         onStatusChange(controller.status)
+    }
+
+    // 加载超时兜底：避免资源缺失时停在 LOADING 导致空白
+    LaunchedEffect(controller) {
+        kotlinx.coroutines.delay(LOAD_TIMEOUT_MS)
+        controller.markLoadTimeout()
     }
 
     // 暂停 / 恢复渲染
