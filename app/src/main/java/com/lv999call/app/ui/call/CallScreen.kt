@@ -1,5 +1,6 @@
 package com.lv999call.app.ui.call
 
+import android.os.SystemClock
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -38,6 +39,8 @@ import com.lv999call.app.ui.live2d.Live2DView
 import com.lv999call.app.ui.live2d.rememberLive2DController
 import com.lv999call.app.ui.theme.UltraFlowTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 通话状态 → Live2D 状态标识 */
 private fun CallState.toLive2DState(): String = when (this) {
@@ -51,10 +54,16 @@ private fun CallState.toLive2DState(): String = when (this) {
 /**
  * LLM 情绪表情的保持时长。
  *
- * 取 7 秒是折中：标签通常出现在流式回复的开头，TTS 要等整段生成完才开始播，
- * 留短了「刚开始说话表情就没了」，留长了又会让一张生气的脸挂到下一轮对话。
+ * 不按「触发后固定 N 秒」计时 —— 标签是在**生成阶段**就到的，而 TTS 要等整段回复
+ * 生成完、再合成参考音色，慢的时候好几秒。固定计时器会在角色刚开口时正好到期，
+ * 玩家看到的就是「表情闪一下就没了」，跟没做一样。
+ *
+ * 因此改成跟着这一轮走：保持到状态回到聆听态（本轮说完）为止，
+ * 另加最短/最长兜底 —— 最短保证「刚到就结束」也有个可感的停留，
+ * 最长防止状态机卡住时表情永久糊在脸上。
  */
-private const val EXPRESSION_HOLD_MS = 7_000L
+private const val EXPRESSION_MIN_HOLD_MS = 1_500L
+private const val EXPRESSION_MAX_HOLD_MS = 30_000L
 
 @Composable
 fun CallScreen(
@@ -99,13 +108,29 @@ fun CallScreen(
         if (callState == CallState.SPEAKING) l2d.setMouth(audioLevel)
     }
 
-    // 情绪表情联动：LLM 触发后保持一段时间，再回落到状态默认表情。
+    // 情绪表情联动：LLM 触发后保持到这一轮说完，再回落到状态默认表情。
     // 同时依赖 l2dStatus —— 模型晚于标签就绪时，这里会补一次下发。
+    //
+    // 必须走 rememberUpdatedState：callState 在这里是普通参数（快照状态在 NavGraph
+    // 那层就读掉了），直接写 snapshotFlow { callState } 只会捕获协程启动那一刻的值，
+    // 状态一变它永远不会重新 emit —— 实测表现就是表情一直挂着不复位。
+    val latestCallState by rememberUpdatedState(callState)
     LaunchedEffect(expressionCue?.seq, l2dStatus) {
         val cue = expressionCue ?: return@LaunchedEffect
         if (l2dStatus != Live2DStatus.READY) return@LaunchedEffect
         l2d.setExpression(cue.modelName)
-        delay(EXPRESSION_HOLD_MS)
+
+        val shownFrom = SystemClock.uptimeMillis()
+        // 等回到聆听态 = 本轮（生成 + 朗读）结束
+        withTimeoutOrNull(EXPRESSION_MAX_HOLD_MS) {
+            snapshotFlow { latestCallState }.first {
+                it == CallState.LISTENING || it == CallState.ENDED
+            }
+        }
+        val shownMs = SystemClock.uptimeMillis() - shownFrom
+        if (shownMs < EXPRESSION_MIN_HOLD_MS) delay(EXPRESSION_MIN_HOLD_MS - shownMs)
+
+        // 新一轮的 cue 会取消本协程，因此这里只可能是「本轮正常结束」或「超时兜底」
         l2d.setExpression(null)
     }
 
