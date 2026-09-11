@@ -1,0 +1,44 @@
+# ============================================================
+# 行尾统一策略
+# ============================================================
+# 仓库内文本一律存 LF，避免 Windows/macOS 协作时产生无意义 diff
+* text=auto eol=lf
+
+# ------------------------------------------------------------
+# 二进制资源：禁止任何行尾转换，否则会损坏文件
+# ------------------------------------------------------------
+# 图片
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.webp   binary
+*.gif    binary
+*.ico    binary
+
+# Live2D 资产
+*.moc3   binary
+*.motion3.json text eol=lf
+
+# 音频
+*.wav    binary
+*.mp3    binary
+*.ogg    binary
+*.m4a    binary
+
+# 压缩包 / 签名 / 构建产物
+*.jar    binary
+*.jks    binary
+*.keystore binary
+*.apk    binary
+*.aab    binary
+*.zip    binary
+
+# Vosk 离线模型（大文件，二进制）
+*.fst    binary
+*.mdl    binary
+*.dubm   binary
+*.ie     binary
+*.mat    binary
+*.stats  binary
+*.int    binary
+*.dubm   binary
