@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -32,8 +33,20 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
+import com.lv999call.app.ui.live2d.Live2DStatus
+import com.lv999call.app.ui.live2d.Live2DView
+import com.lv999call.app.ui.live2d.rememberLive2DController
 import com.lv999call.app.ui.theme.UltraFlowTheme
 import kotlinx.coroutines.delay
+
+/** 通话状态 → Live2D 状态标识 */
+private fun CallState.toLive2DState(): String = when (this) {
+    CallState.IDLE -> "idle"
+    CallState.LISTENING -> "listening"
+    CallState.THINKING -> "thinking"
+    CallState.SPEAKING -> "speaking"
+    CallState.ENDED -> "ended"
+}
 
 @Composable
 fun CallScreen(
@@ -48,13 +61,33 @@ fun CallScreen(
     onHangUp: () -> Unit,
     onToggleMute: () -> Unit,
     onSendText: (String) -> Unit,
-    isMuted: Boolean = false
+    isMuted: Boolean = false,
+    /** 是否启用 Live2D 形象（加载失败时自动回退到静态头像） */
+    live2dEnabled: Boolean = true
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
     val ext = UltraFlowTheme.extendedColors
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
+
+    // ===================== Live2D 形象 =====================
+    val l2d = rememberLive2DController()
+    var l2dStatus by remember { mutableStateOf(Live2DStatus.LOADING) }
+    // 只有启用且未出错时才用 Live2D 渲染，否则回退到静态头像
+    val live2dActive = live2dEnabled && l2dStatus != Live2DStatus.ERROR
+
+    // 状态联动：等模型就绪后再下发，避免指令丢失
+    LaunchedEffect(callState, l2dStatus) {
+        if (l2dStatus != Live2DStatus.READY) return@LaunchedEffect
+        l2d.setState(callState.toLive2DState())
+        l2d.setMouthEnabled(callState == CallState.SPEAKING)
+    }
+
+    // 口型驱动：每帧把最新音量推给控制器（控制器内部已限流到 ~60fps）
+    SideEffect {
+        if (callState == CallState.SPEAKING) l2d.setMouth(audioLevel)
+    }
 
     LaunchedEffect(messages.size, currentResponse) {
         if (messages.isNotEmpty() || currentResponse.isNotEmpty()) {
@@ -66,7 +99,7 @@ fun CallScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 背景图
+        // ---------- 背景图 ----------
         when {
             backgroundResId != null -> {
                 Image(
@@ -86,70 +119,67 @@ fun CallScreen(
             }
         }
 
+        // ---------- 整体渐变遮罩 ----------
         Box(
             modifier = Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
-                    colors = listOf(colors.background.copy(alpha = 0.8f), colors.background.copy(alpha = 0.6f), colors.background.copy(alpha = 0.9f))
+                    colors = listOf(
+                        colors.background.copy(alpha = 0.8f),
+                        colors.background.copy(alpha = 0.6f),
+                        colors.background.copy(alpha = 0.9f)
+                    )
                 )
             )
         )
 
+        // ---------- Live2D 模型层 ----------
+        if (live2dActive) {
+            Live2DView(
+                controller = l2d,
+                modifier = Modifier.fillMaxSize(),
+                paused = callState == CallState.ENDED,
+                onStatusChange = { l2dStatus = it }
+            )
+        }
+
+        // ---------- 内容层 ----------
         Column(
             modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
         ) {
             Spacer(modifier = Modifier.height(24.dp))
 
-            // 头像
-            Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.Center) {
-                val infiniteTransition = rememberInfiniteTransition(label = "breathing")
-                val breathScale by infiniteTransition.animateFloat(
-                    initialValue = 1f,
-                    targetValue = if (callState == CallState.SPEAKING) 1.08f else 1.02f,
-                    animationSpec = infiniteRepeatable(animation = tween(1500, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
-                    label = "breathScale"
-                )
-                Box(
-                    modifier = Modifier.scale(breathScale).size(100.dp).clip(CircleShape).background(
-                        Brush.radialGradient(
-                            colors = when (callState) {
-                                CallState.LISTENING -> listOf(ext.listening.copy(alpha = 0.4f), ext.listening.copy(alpha = 0.1f))
-                                CallState.THINKING -> listOf(ext.thinking.copy(alpha = 0.4f), ext.thinking.copy(alpha = 0.1f))
-                                CallState.SPEAKING -> listOf(ext.speaking.copy(alpha = 0.4f), ext.speaking.copy(alpha = 0.1f))
-                                else -> listOf(colors.primary.copy(alpha = 0.3f), colors.primary.copy(alpha = 0.1f))
-                            }
-                        )
-                    ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (!avatarUri.isNullOrEmpty()) {
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current).data(avatarUri).crossfade(true).build(),
-                            contentDescription = "角色头像",
-                            modifier = Modifier.size(88.dp).clip(CircleShape), contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Image(
-                            painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
-                            contentDescription = "角色头像",
-                            modifier = Modifier.size(88.dp).clip(CircleShape),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                }
+            // Live2D 可用时，模型本身就是角色形象，不再显示静态头像
+            if (!live2dActive) {
+                StaticAvatar(callState, avatarUri, avatarResId)
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
             CallStatusIndicator(callState)
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (live2dActive) {
+                // 上半部留白，把角色让出来
+                Spacer(modifier = Modifier.weight(1f))
+            }
 
             // 消息列表
             LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
-                state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(if (live2dActive) 1.7f else 1f)
+                    .padding(horizontal = 16.dp),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(messages) { MessageBubble(message = it, avatarResId = avatarResId) }
                 if (currentResponse.isNotEmpty()) {
-                    item { MessageBubble(message = ChatMessage(role = "assistant", content = currentResponse), isStreaming = true, avatarResId = avatarResId) }
+                    item {
+                        MessageBubble(
+                            message = ChatMessage(role = "assistant", content = currentResponse),
+                            isStreaming = true,
+                            avatarResId = avatarResId
+                        )
+                    }
                 }
             }
 
@@ -213,6 +243,57 @@ fun CallScreen(
                 }
                 Spacer(modifier = Modifier.width(32.dp))
                 Spacer(modifier = Modifier.size(56.dp))
+            }
+        }
+    }
+}
+
+/**
+ * 静态头像（Live2D 不可用时的降级形态）
+ * 保留原有的呼吸缩放与状态光晕效果。
+ */
+@Composable
+private fun StaticAvatar(callState: CallState, avatarUri: String?, avatarResId: Int?) {
+    val colors = MaterialTheme.colorScheme
+    val ext = UltraFlowTheme.extendedColors
+
+    Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.Center) {
+        val infiniteTransition = rememberInfiniteTransition(label = "breathing")
+        val breathScale by infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = if (callState == CallState.SPEAKING) 1.08f else 1.02f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "breathScale"
+        )
+        Box(
+            modifier = Modifier.scale(breathScale).size(100.dp).clip(CircleShape).background(
+                Brush.radialGradient(
+                    colors = when (callState) {
+                        CallState.LISTENING -> listOf(ext.listening.copy(alpha = 0.4f), ext.listening.copy(alpha = 0.1f))
+                        CallState.THINKING -> listOf(ext.thinking.copy(alpha = 0.4f), ext.thinking.copy(alpha = 0.1f))
+                        CallState.SPEAKING -> listOf(ext.speaking.copy(alpha = 0.4f), ext.speaking.copy(alpha = 0.1f))
+                        else -> listOf(colors.primary.copy(alpha = 0.3f), colors.primary.copy(alpha = 0.1f))
+                    }
+                )
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!avatarUri.isNullOrEmpty()) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(avatarUri).crossfade(true).build(),
+                    contentDescription = "角色头像",
+                    modifier = Modifier.size(88.dp).clip(CircleShape), contentScale = ContentScale.Crop
+                )
+            } else {
+                Image(
+                    painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
+                    contentDescription = "角色头像",
+                    modifier = Modifier.size(88.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
             }
         }
     }
