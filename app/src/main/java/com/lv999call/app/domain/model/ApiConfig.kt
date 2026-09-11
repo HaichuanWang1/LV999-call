@@ -40,7 +40,10 @@ data class ApiConfig(
     val customPrompt: String = "",
 
     // TTS播放完毕后才开始录音（防止录到TTS声音）
-    val waitTtsBeforeRecord: Boolean = true
+    val waitTtsBeforeRecord: Boolean = true,
+
+    // 通话界面使用 Live2D 动态形象（关闭后回退到静态头像）
+    val live2dEnabled: Boolean = true
 ) {
     /** 根据对话模式获取对应的参考音频 */
     fun getRefAudioForMode(mode: DialogMode): String {

@@ -68,6 +68,7 @@ fun SettingsScreen(
 
     var showApiKey by remember { mutableStateOf(false) }
     var waitTts by remember(config) { mutableStateOf(config.waitTtsBeforeRecord) }
+    var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
     val scrollState = rememberScrollState()
 
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -376,6 +377,16 @@ fun SettingsScreen(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(checked = live2dEnabled, onCheckedChange = { live2dEnabled = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text("启用 Live2D 形象", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                        Text("通话界面显示动态角色；关闭或加载失败时回退为静态头像", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Button(
@@ -386,7 +397,8 @@ fun SettingsScreen(
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
-                            waitTtsBeforeRecord = waitTts
+                            waitTtsBeforeRecord = waitTts,
+                            live2dEnabled = live2dEnabled
                         ))
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

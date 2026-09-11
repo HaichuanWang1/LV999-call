@@ -144,6 +144,7 @@ fun NavGraph() {
                 messages = messages,
                 currentResponse = currentResponse,
                 audioLevel = audioLevel,
+                live2dEnabled = config.live2dEnabled,
                 avatarUri = config.characterAvatarUri,
                 backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
                 onHangUp = { viewModel.hangUp() },
@@ -252,6 +253,7 @@ fun NavGraph() {
                 messages = messages,
                 currentResponse = currentResponse,
                 audioLevel = audioLevel,
+                live2dEnabled = config.live2dEnabled,
                 avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
                 avatarResId = com.lv999call.app.R.drawable.default_avatar,
                 backgroundUri = presetBgUri?.ifEmpty { null },
@@ -292,7 +294,7 @@ fun NavGraph() {
 
             CallScreen(
                 callState = callState, messages = messages, currentResponse = currentResponse,
-                audioLevel = audioLevel, avatarUri = config.characterAvatarUri,
+                audioLevel = audioLevel, live2dEnabled = config.live2dEnabled, avatarUri = config.characterAvatarUri,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted
             )
