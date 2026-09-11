@@ -126,6 +126,7 @@ fun NavGraph() {
             val currentResponse by viewModel.currentResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
+            val audioLevel by viewModel.audioLevel.collectAsState()
 
             LaunchedEffect(Unit) { viewModel.startCall(DialogMode.LONG) }
 
@@ -142,7 +143,7 @@ fun NavGraph() {
                 callState = callState,
                 messages = messages,
                 currentResponse = currentResponse,
-                audioLevel = 0f,
+                audioLevel = audioLevel,
                 avatarUri = config.characterAvatarUri,
                 backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
                 onHangUp = { viewModel.hangUp() },
@@ -225,6 +226,7 @@ fun NavGraph() {
             val currentResponse by viewModel.currentResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
+            val audioLevel by viewModel.audioLevel.collectAsState()
 
             // 加载预设数据用于显示
             var presetBgUri by remember { mutableStateOf<String?>(null) }
@@ -249,7 +251,7 @@ fun NavGraph() {
                 callState = callState,
                 messages = messages,
                 currentResponse = currentResponse,
-                audioLevel = 0f,
+                audioLevel = audioLevel,
                 avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
                 avatarResId = com.lv999call.app.R.drawable.default_avatar,
                 backgroundUri = presetBgUri?.ifEmpty { null },
@@ -275,6 +277,7 @@ fun NavGraph() {
             val currentResponse by viewModel.currentResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
+            val audioLevel by viewModel.audioLevel.collectAsState()
 
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
 
@@ -289,7 +292,7 @@ fun NavGraph() {
 
             CallScreen(
                 callState = callState, messages = messages, currentResponse = currentResponse,
-                audioLevel = 0f, avatarUri = config.characterAvatarUri,
+                audioLevel = audioLevel, avatarUri = config.characterAvatarUri,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted
             )

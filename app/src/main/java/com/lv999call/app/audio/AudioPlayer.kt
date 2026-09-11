@@ -31,6 +31,13 @@ class AudioPlayer {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    /**
+     * 当前播放音量（16bit PCM 的 RMS，归一化到 0f~1f）
+     * 供 Live2D 口型同步使用；停止播放时归零。
+     */
+    private val _amplitude = MutableStateFlow(0f)
+    val amplitude: StateFlow<Float> = _amplitude.asStateFlow()
+
     private val _isInitialized = MutableStateFlow(false)
 
     init {
@@ -123,6 +130,7 @@ class AudioPlayer {
 
                     if (_isPlaying.value) {
                         audioTrack?.write(buffer, 0, bytesRead)
+                        _amplitude.value = calculateRms16(buffer, bytesRead)
                     } else {
                         break
                     }
@@ -134,6 +142,7 @@ class AudioPlayer {
             } finally {
                 try { inputStream.close() } catch (_: Exception) {}
                 _isPlaying.value = false
+                _amplitude.value = 0f
             }
         }
     }
@@ -183,6 +192,7 @@ class AudioPlayer {
                 audioTrack?.play()
                 _isPlaying.value = true
                 audioTrack?.write(pcmData, 0, pcmData.size)
+                _amplitude.value = calculateRms16(pcmData, pcmData.size)
                 delay(100)
             } catch (e: Exception) {
                 Log.e(TAG, "播放错误: ${e.message}")
@@ -197,6 +207,7 @@ class AudioPlayer {
      */
     fun pause() {
         _isPlaying.value = false
+        _amplitude.value = 0f
         try {
             audioTrack?.pause()
             audioTrack?.flush()
@@ -208,6 +219,7 @@ class AudioPlayer {
      */
     fun stopCurrentPlayback() {
         _isPlaying.value = false
+        _amplitude.value = 0f
         playbackJob?.cancel()
         synchronized(trackLock) {
             try {
@@ -215,6 +227,26 @@ class AudioPlayer {
                 audioTrack?.flush()
             } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * 计算 16bit 小端 PCM 的 RMS 音量，归一化到 0f~1f
+     * 与 AudioRecorder.calculateRMS 保持一致的量纲。
+     */
+    private fun calculateRms16(data: ByteArray, length: Int): Float {
+        if (length < 2) return 0f
+        var sum = 0.0
+        var count = 0
+        var i = 0
+        while (i + 1 < length) {
+            // 小端序：低字节在前
+            val sample = (((data[i + 1].toInt() and 0xFF) shl 8) or (data[i].toInt() and 0xFF)).toShort().toInt()
+            sum += sample.toDouble() * sample
+            count++
+            i += 2
+        }
+        if (count == 0) return 0f
+        return (Math.sqrt(sum / count) / Short.MAX_VALUE).toFloat().coerceIn(0f, 1f)
     }
 
     /**

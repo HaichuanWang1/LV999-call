@@ -39,6 +39,26 @@ class CallViewModel(
     private val _isMuted = MutableStateFlow(false)
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
+    /**
+     * 实时音量（0f ~ 1f），用于驱动 Live2D 口型同步。
+     *
+     * - SPEAKING：取 TTS 播放音量（口型跟着合成语音张合）
+     * - 其他状态：取麦克风输入音量（可做呼吸/聆听反馈）
+     *
+     * 两路数据源：AudioRecorder.audioLevel 与 AudioPlayer.amplitude。
+     */
+    val audioLevel: StateFlow<Float> = combine(
+        _callState,
+        audioRecorder.audioLevel,
+        audioPlayer.amplitude
+    ) { state, micLevel, ttsLevel ->
+        if (state == CallState.SPEAKING) ttsLevel else micLevel
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(1_000),
+        initialValue = 0f
+    )
+
     private var currentSession: Session? = null
     private var currentMode: DialogMode = DialogMode.QUICK
     private var systemPrompt: String? = null
