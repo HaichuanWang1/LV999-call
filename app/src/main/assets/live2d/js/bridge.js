@@ -22,9 +22,9 @@
     lipSyncParams: ['ParamMouthOpenY', 'ParamMouthOpen'],
 
     // 布局
-    fillRatio: 1.18,   // 模型高度 / 视口高度（>1 表示略大于屏幕，视觉更饱满）
+    fillRatio: 1.05,   // 模型高度 / 视口高度（>1 表示略大于屏幕，视觉更饱满）
     offsetX: 0.0,      // 水平偏移，视口宽度的比例
-    offsetY: 0.02,     // 垂直偏移，视口高度的比例（正数 = 下移）
+    offsetY: 0.08,     // 垂直偏移，视口高度的比例（正数 = 下移）
 
     // 口型动态
     mouthGain: 1.55,   // 音量 → 张口幅度 增益
@@ -105,6 +105,25 @@
   }
 
   // ========================== 工具函数 ==========================
+  /**
+   * 取视口尺寸，带兜底
+   *
+   * window.innerWidth/Height 在少数时机可能为 0（布局未完成），
+   * 若直接用于创建画布会得到 0x0，导致模型完全不可见。
+   */
+  function viewportSize() {
+    var w = window.innerWidth || 0;
+    var h = window.innerHeight || 0;
+    if (!w || !h) {
+      var de = document.documentElement;
+      if (de) { w = w || de.clientWidth; h = h || de.clientHeight; }
+    }
+    if (!w || !h) {
+      var c = document.getElementById('stage');
+      if (c) { w = w || c.clientWidth; h = h || c.clientHeight; }
+    }
+    return { w: w || 360, h: h || 640 };
+  }
   function clamp(v, lo, hi) {
     return v < lo ? lo : (v > hi ? hi : v);
   }
@@ -350,6 +369,7 @@
     } catch (e) { reportError('运行库检测失败: ' + e.message); return; }
 
     // ---- 创建渲染器 ----
+    var vp = viewportSize();
     try {
       app = new PIXI.Application({
         view: document.getElementById('stage'),
@@ -358,8 +378,8 @@
         autoStart: true,
         autoDensity: true,
         resolution: Math.min(window.devicePixelRatio || 1, CFG.maxResolution),
-        width: window.innerWidth,
-        height: window.innerHeight
+        width: vp.w,
+        height: vp.h
       });
     } catch (e) {
       reportError('WebGL 初始化失败: ' + e.message);
@@ -369,7 +389,8 @@
 
     // 视口变化时重新适配
     window.addEventListener('resize', function () {
-      if (app) app.renderer.resize(window.innerWidth, window.innerHeight);
+      var v = viewportSize();
+      if (app) app.renderer.resize(v.w, v.h);
       layout();
     });
 
@@ -394,6 +415,9 @@
 
         currentState = 'idle';
         applyState('idle');
+
+        // 布局可能受异步字体/尺寸影响，下一帧再校正一次
+        requestAnimationFrame(function () { layout(); });
 
         notify('ready', collectInfo());
       })

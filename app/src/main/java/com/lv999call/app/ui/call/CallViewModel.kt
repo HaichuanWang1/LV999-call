@@ -47,17 +47,25 @@ class CallViewModel(
      *
      * 两路数据源：AudioRecorder.audioLevel 与 AudioPlayer.amplitude。
      */
-    val audioLevel: StateFlow<Float> = combine(
-        _callState,
-        audioRecorder.audioLevel,
-        audioPlayer.amplitude
-    ) { state, micLevel, ttsLevel ->
-        if (state == CallState.SPEAKING) ttsLevel else micLevel
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(1_000),
-        initialValue = 0f
-    )
+    private val _audioLevel = MutableStateFlow(0f)
+    val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
+
+    init {
+        // 常驻收集，不用 stateIn(WhileSubscribed)：
+        // 后者在订阅者短暂断开（页面重组 / 切页）时会取消上游，
+        // 实测会导致 TTS 播放期间口型完全收不到音量。
+        viewModelScope.launch {
+            combine(
+                _callState,
+                audioRecorder.audioLevel,
+                audioPlayer.amplitude
+            ) { state, micLevel, ttsLevel ->
+                if (state == CallState.SPEAKING) ttsLevel else micLevel
+            }.collect { level ->
+                _audioLevel.value = level
+            }
+        }
+    }
 
     private var currentSession: Session? = null
     private var currentMode: DialogMode = DialogMode.QUICK

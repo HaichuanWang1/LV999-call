@@ -52,10 +52,12 @@ enum class Live2DStatus {
  *
  * 注意：方法运行在 WebView 的 JS 线程，实现方需自行切回主线程。
  */
-private class Live2DBridge(private val onEvent: (type: String, payload: String) -> Unit) {
+private class Live2DBridge(private val handler: (type: String, payload: String) -> Unit) {
     @JavascriptInterface
     fun onEvent(type: String, payload: String) {
-        onEvent(type, payload)
+        // 注意：属性名不能与该方法同名，否则 Kotlin 会把 onEvent(...) 解析为
+        // 递归调用方法自身，导致 StackOverflowError（JS 回调全部丢失）。
+        handler(type, payload)
     }
 }
 
@@ -220,9 +222,14 @@ private fun createWebView(
     modelPath: String? = null
 ): WebView {
     return WebView(context).apply {
-        // 透明背景 + 硬件加速，才能叠在 Compose 渐变之上
+        // 透明背景，才能叠在 Compose 渐变之上。
+        //
+        // 切勿对 WebView 调用 setLayerType(LAYER_TYPE_HARDWARE)：
+        // WebView 走自己的 Chromium 合成管线（RenderThread + Surface），
+        // 外层硬套硬件层会让内容完全无法上屏 —— 表现为视图层级里
+        // WebView 全屏可见、页面内部渲染正常（canvas 有像素），
+        // 但屏幕上什么都看不到。
         setBackgroundColor(Color.TRANSPARENT)
-        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
         settings.apply {
             javaScriptEnabled = true

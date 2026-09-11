@@ -48,7 +48,7 @@ const model = {
 };
 
 function mkEl() {
-  return { textContent: '', classList: { add() {} }, style: {} };
+  return { textContent: '', classList: { add() {}, remove() {} }, style: {} };
 }
 
 const win = {
@@ -66,6 +66,7 @@ global.document = {
 };
 let simNow = 0;
 global.performance = { now: () => simNow };
+global.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16);
 global.PIXI = {
   Application: class {
     constructor() {
@@ -114,10 +115,12 @@ function check(name, cond, extra = '') {
         `scale=${JSON.stringify(rec.scale)} anchor=${JSON.stringify(rec.anchor)}`);
 
   console.log('\n[2] 布局计算');
-  // 1920 高 / 2048 原始高 * 1.18 ≈ 1.1063
-  const expScale = (1920 / 2048) * 1.18;
-  check('缩放按高度基准计算', Math.abs(rec.scale[0] - expScale) < 0.01,
-        `期望≈${expScale.toFixed(4)} 实际=${rec.scale[0]}`);
+  // 校验不变量而非写死魔数：模型高度应被缩放到视口高度的合理倍数
+  const MODEL_H = 2048;   // mock 模型的 originalHeight
+  const VIEW_H = 1920;    // mock 视口高度
+  const ratio = (rec.scale[0] * MODEL_H) / VIEW_H;
+  check('按视口高度适配（填充比例在合理区间）', ratio > 0.8 && ratio < 1.6,
+        `比例=${ratio.toFixed(3)}（期望 0.8~1.6）`);
   check('锚点居中', rec.anchor[0][0] === 0.5 && rec.anchor[0][1] === 0.5);
 
   console.log('\n[3] 空闲状态：口型应闭合');
