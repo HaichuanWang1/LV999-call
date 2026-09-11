@@ -51,13 +51,17 @@
     // 银狼模型的动作组只有 Transform / AngryLoop / Sleep（变身、生气循环、睡觉），
     // 没有通用待机动作 —— 待机感由 ParamBreath 呼吸 + EyeBlink 眨眼 + 物理驱动。
     // 因此这里 motion 一律留空，避免播放不合时宜的特效动画。
-    // 表情可用值见该模型 model3.json 的 Expressions[].Name。
+    //
+    // expression 一律留空是刻意的：情绪表情由 LLM 通过 [[e:标签]] 驱动
+    // （见 applyStateExpression 的 _cue 覆盖层）。早期 thinking 占位用了 '06 0.0'，
+    // 而 LLM 打招呼时最爱选的恰好也是 0.0（死鱼眼），两者撞车的结果是
+    // 「明明触发成功但脸没变化」，被误判成功能失效。状态表情与情绪表达必须解耦。
     states: {
-      idle:      { expression: null,    motion: null, focus: 0.25 },
-      listening: { expression: null,    motion: null, focus: 0.55 },
-      thinking:  { expression: '06 0.0', motion: null, focus: 0.10 },
-      speaking:  { expression: null,    motion: null, focus: 0.35 },
-      ended:     { expression: null,    motion: null, focus: 0.0  }
+      idle:      { expression: null, motion: null, focus: 0.25 },
+      listening: { expression: null, motion: null, focus: 0.55 },
+      thinking:  { expression: null, motion: null, focus: 0.10 },
+      speaking:  { expression: null, motion: null, focus: 0.35 },
+      ended:     { expression: null, motion: null, focus: 0.0  }
     }
   };
 
@@ -83,6 +87,7 @@
   var modelReady = false;
   var currentState = 'idle';
   var mouthEnabled = true;
+  var _cue = null;          // 情绪覆盖层：LLM 触发的表情名，非空时优先于状态默认表情
 
   var _mouthTarget = 0;     // Android 推来的原始音量 (0~1)
   var _mouthValue = 0;      // 平滑后的实际张口值 (0~1)
@@ -158,6 +163,33 @@
     var im = model.internalModel;
     if (!im) return null;
     return (im.motionManager && im.motionManager.expressionManager) || im.expressionManager || null;
+  }
+
+  /**
+   * 把外部传入的表情名解析成模型里真实存在的名字。
+   *
+   * 模型作者写的名字经常空格不统一甚至带编号（"03 生气" / "01黑脸" / "月卡"），
+   * 名字对不上时 pixi 会静默忽略 —— 现象就是「调了表情但脸没变」。
+   * 这里先精确匹配，再退化成「忽略所有空白」的宽松匹配。
+   *
+   * @returns 模型里的真实名字；模型里没有该表情时返回 null
+   */
+  function resolveExpressionName(name) {
+    var want = String(name);
+    var em = exprManager();
+    var defs = (em && em.definitions) || null;
+    if (!defs || !defs.length) return want;   // 拿不到定义表时不拦，交给 pixi 判断
+    var i, n;
+    for (i = 0; i < defs.length; i++) {
+      n = defs[i] && defs[i].Name;
+      if (n === want) return n;
+    }
+    var norm = want.replace(/\s+/g, '');
+    for (i = 0; i < defs.length; i++) {
+      n = defs[i] && defs[i].Name;
+      if (n && String(n).replace(/\s+/g, '') === norm) return n;
+    }
+    return null;
   }
 
   // ======================= 模型布局适配 =======================
@@ -335,21 +367,38 @@
   }
 
   // ========================= 状态切换 =========================
+  /**
+   * 决定当前该显示哪张脸。
+   *
+   * 优先级：情绪覆盖层 _cue（LLM 触发的表情） > 状态默认表情 > 模型默认表情。
+   *
+   * _cue 必须在这里重新应用一次：thinking→speaking 的状态切换会重走 applyState，
+   * 如果只在 setExpression 里调一次 model.expression()，刚触发的情绪会被
+   * resetExpression() 冲掉，玩家看到的现象就是「LLM 调了表情但脸没变」。
+   */
+  function applyStateExpression() {
+    if (!model) return;
+    var s = CFG.states[currentState] || CFG.states.idle;
+    try {
+      if (_cue) {
+        model.expression(_cue);
+      } else if (s.expression) {
+        model.expression(s.expression);
+      } else {
+        // 无表情时恢复模型默认表情
+        var em = exprManager();
+        if (em) em.resetExpression();
+      }
+    } catch (e) { /* 模型无此表情时忽略 */ }
+  }
+
   function applyState(state) {
     if (!modelReady || !model) return;
 
     var s = CFG.states[state] || CFG.states.idle;
 
     // 表情
-    try {
-      var em = exprManager();
-      if (s.expression) {
-        model.expression(s.expression);
-      } else if (em) {
-        // 无表情时恢复模型默认表情
-        em.resetExpression();
-      }
-    } catch (e) { /* 模型无此表情时忽略 */ }
+    applyStateExpression();
 
     // 动作（循环播放指定动作组）
     try {
@@ -403,14 +452,33 @@
       if (!mouthEnabled) _mouthTarget = 0;
     },
 
-    /** 指定表情（null 恢复默认） */
+    /**
+     * 指定情绪表情（传模型真实表情名；null 复位）
+     *
+     * 记为「情绪覆盖层」：后续状态切换会重新应用它（见 applyStateExpression），
+     * 直到宿主显式传 null 复位 —— 复位后回落到当前状态的默认表情。
+     */
     setExpression: function (name) {
       if (!modelReady || !model) return;
-      try {
-        if (name) model.expression(String(name));
-        else { var em = exprManager(); if (em) em.resetExpression(); }
-      } catch (e) { /* ignore */ }
+      if (!name) {
+        _cue = null;
+        console.log('[L2D] 情绪表情 → 复位');
+        applyStateExpression();
+        return;
+      }
+      var resolved = resolveExpressionName(name);
+      if (resolved === null) {
+        // 名字对不上时 pixi 会静默无效，这里必须留下痕迹否则无从排查
+        console.warn('[L2D] 模型没有这个表情: ' + name);
+        return;
+      }
+      _cue = resolved;
+      console.log('[L2D] 情绪表情 → ' + resolved);
+      applyStateExpression();
     },
+
+    /** 当前情绪表情名，null 表示未设置（调试/自测用） */
+    get expression() { return _cue; },
 
     /** 播放指定动作组（group 为空则忽略） */
     playMotion: function (group, index) {
@@ -498,6 +566,7 @@
         out.currentMouth = _mouthValue;
         out.appliedMouth = _applyStats;
         out.state = currentState;
+        out.expression = _cue;
       } catch (e) { out.error = String(e); }
       return JSON.stringify(out);
     },

@@ -137,6 +137,18 @@ class Live2DController internal constructor() {
         eval("window.L2D && window.L2D.playMotion('${group.jsEscape()}', $idx)")
     }
 
+    /**
+     * 情绪表情（传模型 Expressions[].Name 的真实值，如 `"03生气"`；null 复位）。
+     *
+     * 与 [setState] 的关系：JS 侧把它记为「情绪覆盖层」，状态切换时仍然优先生效
+     * （否则 thinking→speaking 的状态切换会把刚触发的情绪表情冲掉），
+     * 只有显式传 null 才回落到当前状态的默认表情。
+     */
+    fun setExpression(name: String?) {
+        val arg = name?.let { "'${it.jsEscape()}'" } ?: "null"
+        eval("window.L2D && window.L2D.setExpression($arg)")
+    }
+
     // ------------------------- 内部实现 -------------------------
 
     private fun eval(js: String) {

@@ -14,6 +14,14 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+/**
+ * 一次 LLM 触发的表情指令。
+ *
+ * 用自增 [seq] 而不是裸字符串：连说两句都「生气」时，Compose 侧如果只比较字符串，
+ * LaunchedEffect 不会重启，第二次的保持时长就白算了。
+ */
+data class ExpressionCue(val modelName: String, val seq: Long)
+
 class CallViewModel(
     private val appModule: AppModule,
     private val application: android.app.Application
@@ -49,6 +57,15 @@ class CallViewModel(
      */
     private val _audioLevel = MutableStateFlow(0f)
     val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
+
+    /**
+     * LLM 通过回复里的 [[e:标签]] 触发的情绪表情（null 表示无）。
+     *
+     * 由 [ProcessAudioUseCase] 在流式解析时回调，UI 层负责保持一段时间后复位。
+     */
+    private val _expressionCue = MutableStateFlow<ExpressionCue?>(null)
+    val expressionCue: StateFlow<ExpressionCue?> = _expressionCue.asStateFlow()
+    private var expressionSeq = 0L
 
     init {
         // 常驻收集，不用 stateIn(WhileSubscribed)：
@@ -87,6 +104,18 @@ class CallViewModel(
             initialValue = ApiConfig()
         )
 
+    /**
+     * 收到 LLM 表情标签。
+     *
+     * 只做记录 + 递增序号，实际下发与保持时长由 UI 层决定
+     * （静默音频、页面不可见等情况不该由 ViewModel 猜）。
+     */
+    private fun cueExpression(expression: Live2DExpression) {
+        expressionSeq += 1
+        _expressionCue.value = ExpressionCue(expression.modelName, expressionSeq)
+        android.util.Log.d("CallVM", "LLM 表情: ${expression.key} → ${expression.modelName}")
+    }
+
     fun startCall(mode: DialogMode) {
         viewModelScope.launch {
             currentMode = mode
@@ -119,7 +148,8 @@ class CallViewModel(
                     autoGreetingText = "你好",
                     ttsPrompt = currentTtsPrompt,
                     onStateChange = { state -> _callState.value = state },
-                    onPartialResponse = { partial -> _currentResponse.value = partial }
+                    onPartialResponse = { partial -> _currentResponse.value = partial },
+                    onExpression = ::cueExpression
                 )
 
                 val newMessages = mutableListOf(userMsg)
@@ -200,7 +230,8 @@ class CallViewModel(
                         overrideRefAudioMime = preset.refAudioMime,
                         ttsPrompt = currentTtsPrompt,
                         onStateChange = { state -> _callState.value = state },
-                        onPartialResponse = { partial -> _currentResponse.value = partial }
+                        onPartialResponse = { partial -> _currentResponse.value = partial },
+                        onExpression = ::cueExpression
                     )
                     val newMessages = mutableListOf(userMsg)
                     if (assistantMsg != null) newMessages.add(assistantMsg)
@@ -268,7 +299,8 @@ class CallViewModel(
                         overrideRefAudioMime = presetRefAudioMime,
                         ttsPrompt = currentTtsPrompt,
                         onStateChange = { state -> _callState.value = state },
-                        onPartialResponse = { partial -> _currentResponse.value = partial }
+                        onPartialResponse = { partial -> _currentResponse.value = partial },
+                        onExpression = ::cueExpression
                     )
                 }
                 if (result != null) {
@@ -316,7 +348,8 @@ class CallViewModel(
                     overrideRefAudioMime = presetRefAudioMime,
                     ttsPrompt = currentTtsPrompt,
                     onStateChange = { state -> _callState.value = state },
-                    onPartialResponse = { partial -> _currentResponse.value = partial }
+                    onPartialResponse = { partial -> _currentResponse.value = partial },
+                    onExpression = ::cueExpression
                 )
                 val newMessages = mutableListOf(userMsg)
                 if (assistantMsg != null) newMessages.add(assistantMsg)

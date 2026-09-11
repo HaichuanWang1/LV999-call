@@ -8,6 +8,7 @@ import com.lv999call.app.data.repository.ConfigRepository
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.domain.model.DialogMode
+import com.lv999call.app.domain.model.Live2DExpression
 import kotlinx.coroutines.flow.first
 
 /**
@@ -24,6 +25,18 @@ class ProcessAudioUseCase(
     companion object {
         private const val TAG = "ProcessAudioUseCase"
         private const val RESPONSE_TOKEN_RESERVE = 2048
+
+        /** LLM 的推理过程标签：既不显示也不朗读 */
+        private val REASONING_TAGS = listOf(
+            Regex("<think>[\\s\\S]*?</think>"),
+            Regex("<thinking>[\\s\\S]*?</thinking>")
+        )
+
+        private fun stripReasoningTags(text: String): String {
+            var out = text
+            for (r in REASONING_TAGS) out = r.replace(out, "")
+            return out
+        }
     }
 
     private fun estimateTokens(text: String): Int {
@@ -56,7 +69,9 @@ class ProcessAudioUseCase(
         overrideRefAudioMime: String? = null,
         ttsPrompt: String = "",
         onStateChange: (CallState) -> Unit,
-        onPartialResponse: (String) -> Unit
+        onPartialResponse: (String) -> Unit,
+        /** LLM 通过 [[e:标签]] 触发表情时回调（Live2D 关闭时不会被触发） */
+        onExpression: (Live2DExpression) -> Unit = {}
     ): Pair<ChatMessage, ChatMessage?> {
         val config = configRepository.configFlow.first()
 
@@ -81,29 +96,38 @@ class ProcessAudioUseCase(
         val contextMessages = truncateHistory(history, config.maxContextTokens)
         val fullResponse = StringBuilder()
 
+        // Live2D 开着才把表情标签协议拼进 system prompt：
+        // 关掉形象时 LLM 根本不知道这套机制，既省 token 也不会跑偏。
+        val effectivePrompt = systemPrompt?.let {
+            if (config.live2dEnabled) it + Live2DExpression.promptBlock() else it
+        }
+        // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来
+        val tagParser = ExpressionTagParser(onExpression)
+
         try {
             chatRepository.streamChatCompletion(
-                config, systemPrompt, contextMessages + userMessage
+                config, effectivePrompt, contextMessages + userMessage
             ).collect { chunk ->
                 fullResponse.append(chunk)
                 // 实时去除thinking标签再显示
-                val display = fullResponse.toString()
-                    .replace(Regex("<think>[\\s\\S]*?</think>"), "")
-                    .replace(Regex("<thinking>[\\s\\S]*?</thinking>"), "")
-                    .trim()
+                val display = tagParser.consume(stripReasoningTags(fullResponse.toString())).trim()
                 onPartialResponse(display)
             }
         } catch (e: Exception) {
             Log.e(TAG, "LLM调用失败: ${e.message}")
         }
 
-        // 去除LLM推理标签(<think>...</think>等)
-        val aiResponse = fullResponse.toString()
-            .replace(Regex("<think>[\\s\\S]*?</think>"), "")
-            .replace(Regex("<thinking>[\\s\\S]*?</thinking>"), "")
-            .trim()
+        // 去除LLM推理标签(<think>...</think>等)与表情标签
+        val rawResponse = stripReasoningTags(fullResponse.toString())
+        val aiResponse = tagParser.finish(rawResponse).trim()
         if (aiResponse.isBlank()) {
-            Log.w(TAG, "LLM响应为空")
+            // 两种情况必须区分开：模型真的什么都没说，
+            // 还是它只吐了个表情标签 / 整段回答都在 <think> 里被剥掉了。
+            Log.w(
+                TAG,
+                "LLM响应为空 rawLen=${fullResponse.length} strippedLen=${rawResponse.length} " +
+                    "raw=${fullResponse.toString().take(300)}"
+            )
             return Pair(userMessage, null)
         }
         Log.d(TAG, "AI回复: $aiResponse")

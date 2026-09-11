@@ -48,6 +48,14 @@ private fun CallState.toLive2DState(): String = when (this) {
     CallState.ENDED -> "ended"
 }
 
+/**
+ * LLM 情绪表情的保持时长。
+ *
+ * 取 7 秒是折中：标签通常出现在流式回复的开头，TTS 要等整段生成完才开始播，
+ * 留短了「刚开始说话表情就没了」，留长了又会让一张生气的脸挂到下一轮对话。
+ */
+private const val EXPRESSION_HOLD_MS = 7_000L
+
 @Composable
 fun CallScreen(
     callState: CallState,
@@ -63,7 +71,9 @@ fun CallScreen(
     onSendText: (String) -> Unit,
     isMuted: Boolean = false,
     /** 是否启用 Live2D 形象（加载失败时自动回退到静态头像） */
-    live2dEnabled: Boolean = true
+    live2dEnabled: Boolean = true,
+    /** LLM 触发的情绪表情，null 表示无 */
+    expressionCue: ExpressionCue? = null
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
@@ -87,6 +97,16 @@ fun CallScreen(
     // 口型驱动：每帧把最新音量推给控制器（控制器内部已限流到 ~60fps）
     SideEffect {
         if (callState == CallState.SPEAKING) l2d.setMouth(audioLevel)
+    }
+
+    // 情绪表情联动：LLM 触发后保持一段时间，再回落到状态默认表情。
+    // 同时依赖 l2dStatus —— 模型晚于标签就绪时，这里会补一次下发。
+    LaunchedEffect(expressionCue?.seq, l2dStatus) {
+        val cue = expressionCue ?: return@LaunchedEffect
+        if (l2dStatus != Live2DStatus.READY) return@LaunchedEffect
+        l2d.setExpression(cue.modelName)
+        delay(EXPRESSION_HOLD_MS)
+        l2d.setExpression(null)
     }
 
     LaunchedEffect(messages.size, currentResponse) {

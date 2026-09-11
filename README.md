@@ -28,6 +28,7 @@
 - 通话界面可显示 Live2D 角色，替代静态头像
 - **口型同步**：TTS 播放音量实时驱动嘴型张合（快张慢合 + 轻微抖动）
 - **状态联动**：聆听/思考/说话/结束各有对应动作与表情
+- **情绪表情**：LLM 在回复开头插入 `[[e:生气]]` 之类的标签，形象实时换脸，数秒后自动回落
 - 空闲时轻微视线游移，角色观感更自然
 - 设置页可开关；模型加载失败自动回退静态头像
 - 离线可用：运行时与模型本地内置，不依赖网络 CDN
@@ -95,10 +96,11 @@ app/src/main/assets/live2d/  # Live2D 资源
 └── models/                  #   模型                [不入库，需本地获取]
 
 tools/
-├── setup_live2d_assets.sh   # 一键获取 lib/ 与示例模型
-├── live2d_postprocess.py    # 下载后处理（剥离 sourceMapping 等）
-├── live2d_selftest.cjs      # 桥接层自测（19 项断言）
-└── live2d_fallback_test.cjs # 降级路径测试（9 项断言）
+├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
+├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
+├── live2d_selftest.cjs        # 桥接层自测（31 项断言）
+├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
+└── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
 ```
 
 ## 快速开始
@@ -157,8 +159,38 @@ Compose (CallScreen)
 - 页面通过**虚拟域名 + `shouldInterceptRequest`** 供源，而非 `file://`。
   因为 WebView 下 `file://` 的 XHR 会被同源策略拦截，导致模型无法加载；
   该方案等价于 `WebViewAssetLoader`，但无需引入额外依赖。
-- 口型注入点使用 pixi-live2d-display 的 `beforeModelUpdate` 事件，
-  即模型 `update()` 前的最后一刻（该库自身 TODO 预留的 lip sync 位置）。
+- 口型注入点使用 pixi-live2d-display 的 `afterMotionUpdate` 事件。
+  只有写在这里的值才能被随后的 `saveParameters()` 捕获并真正上屏；
+  写在 `beforeModelUpdate` 会被 `loadParameters()` 覆盖 —— 读回值一路正常，画面却一动不动。
+
+### LLM 情绪表情
+
+形象的情绪不只跟着通话状态走，还可以由 LLM 自己决定：
+
+```
+系统提示词追加「表情标签」协议（仅 Live2D 开启时注入）
+  ↓  LLM 回复：[[e:生气]]喂，你这也太离谱了吧。
+流式解析 ExpressionTagParser
+  ├─→ UI 展示 / TTS 合成：剥掉标签的干净文本（标签不会被念出来）
+  └─→ 回调 Live2DExpression → ExpressionCue
+        ↓
+CallScreen 下发 Live2DController.setExpression()，7 秒后自动回落
+```
+
+几个必须这么做的原因：
+
+- **标签会被 chunk 切断**（`"[[e:生"` + `"气]]"`）。未闭合的标签整段扣住不显示，
+  否则玩家会看到半截标签一闪而过，或者被 TTS 念出来。
+- **提示词里只暴露短标签**。模型真实表情名是中文带编号且空格不统一
+  （`01黑脸` / `02 脸红爱心` / `03 生气` / `月卡`），让 LLM 原样复述极易写错一个字符。
+- **情绪是「覆盖层」**。thinking → speaking 的状态切换会重走 `applyState()`，
+  若情绪只 `model.expression()` 调一次就会被 `resetExpression()` 冲掉，
+  表现为「LLM 明明调了表情但脸没变」；因此 JS 侧记录 `_cue` 并在每次状态切换后重新应用。
+- 模型里另外 5 条（吹泡泡 / 外套关闭 / 抱胸手 / 捧心手 / 要饭手）是手部与服装的
+  状态切换而非瞬时情绪，混入情绪表达会互相覆盖，故不开放给 LLM。
+
+可调项：`Live2DExpression.kt` 的枚举（标签 ↔ 真实表情名 ↔ 情绪说明）、
+`CallScreen.kt` 的 `EXPRESSION_HOLD_MS`（保持时长）。
 
 ### 资源不入库
 
@@ -178,7 +210,8 @@ Compose (CallScreen)
    - 或从 Kotlin 传参：`Live2DView(modelPath = "models/<your-model>/xxx.model3.json")`
 3. 若模型口型参数不是 `ParamMouthOpenY`，调整 `CFG.lipSyncParams`
 4. 按实际观感调整 `CFG.states` 中各状态的表情名
-   （示例模型的 f01/f03/f05 为占位映射）
+5. 若换了模型的整套表情，记得同步 `Live2DExpression.kt` 的枚举，
+   然后跑 `node tools/check_expression_names.cjs` 校验名字是否对得上
 
 > 自备模型同样在 `.gitignore` 覆盖范围内，不会被误提交。
 
@@ -188,9 +221,13 @@ WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测�
 状态机与口型链路（mock PIXI/DOM 直接驱动 bridge.js）：
 
 ```bash
-node tools/live2d_selftest.cjs        # 状态机 / 口型注入 / 布局 / 容错
-node tools/live2d_fallback_test.cjs   # 资源缺失时的降级上报
+node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 容错
+node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
+node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
 ```
+
+> `check_expression_names.cjs` 的价值在于：模型表情名少写一个空格 pixi 只会静默忽略，
+> 现象是「表情没变」且没有任何报错，肉眼审查根本发现不了。
 
 ### 许可提醒
 

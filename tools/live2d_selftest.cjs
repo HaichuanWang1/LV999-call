@@ -40,7 +40,8 @@ const model = {
     originalWidth: 2048, originalHeight: 2048,
     coreModel,
     expressionManager: {
-      definitions: [{ Name: 'f00' }, { Name: 'f01' }],
+      // 名字刻意与真实模型一致：带编号、空格不统一 —— 正是容易写错的地方
+      definitions: [{ Name: '01黑脸' }, { Name: '03 生气' }, { Name: '06 0.0' }, { Name: '月卡' }],
       resetExpression() { rec.expressions.push('<reset>'); },
     },
     motionManager: { definitions: { Idle: [0, 1, 2], Tap: [0, 1] } },
@@ -181,23 +182,74 @@ function check(name, cond, extra = '') {
   check('异常输入被安全处理', !crashed);
   check('非法 setState 回落为 idle', win.L2D.state === 'idle', win.L2D.state);
 
-  console.log('\n[9] 状态切换：表情应用与复位');
+  console.log('\n[9] 状态切换：状态表情已与情绪表达解耦');
   rec.expressions.length = 0;
   rec.motions.length = 0;
   win.L2D.setState('thinking');
   tick(2);
-  check('thinking 会设置表情',
-        rec.expressions.some((e) => e !== '<reset>'),
-        JSON.stringify(rec.expressions));
+  // 早期 thinking 占位用了 '06 0.0'，而 LLM 打招呼最爱选的也是 0.0，
+  // 撞车后「触发成功但脸没变」会被误判成功能失效，故状态不再自带表情。
+  check('状态切换不再设置占位表情',
+        rec.expressions.every((e) => e === '<reset>'), JSON.stringify(rec.expressions));
   check('该模型无待机动作，不应播放 motion', rec.motions.length === 0,
         JSON.stringify(rec.motions));
+
+  console.log('\n[10] 情绪表情覆盖层（LLM 触发表情）');
+  rec.expressions.length = 0;
+  win.L2D.setState('thinking');
+  tick(2);
+  win.L2D.setExpression('03 生气');
+  tick(2);
+  check('setExpression 应用到模型', rec.expressions.indexOf('03 生气') >= 0,
+        JSON.stringify(rec.expressions));
+  check('L2D.expression 记录当前情绪', win.L2D.expression === '03 生气',
+        String(win.L2D.expression));
+
+  // 宽容匹配：模型名空格不统一，多/少一个空格不该导致表情静默失效
+  rec.expressions.length = 0;
+  win.L2D.setExpression('03生气');
+  tick(2);
+  check('缺空格的别名被纠正为模型真实名字',
+        rec.expressions.indexOf('03 生气') >= 0 && win.L2D.expression === '03 生气',
+        JSON.stringify(rec.expressions) + ' / ' + win.L2D.expression);
+
+  // 名字对不上时必须「保持原状」，不能把已经生效的表情清掉，也不能假装成功
+  rec.expressions.length = 0;
+  win.L2D.setExpression('不存在的表情');
+  tick(2);
+  check('未知表情不改变当前情绪', win.L2D.expression === '03 生气',
+        String(win.L2D.expression));
+  check('未知表情不触发任何下发', rec.expressions.indexOf('不存在的表情') < 0,
+        JSON.stringify(rec.expressions));
+
+  // 核心回归：thinking → speaking 的状态切换会重走 applyState，
+  // 若情绪只调一次 model.expression()，会被这里的 resetExpression 冲掉。
+  rec.expressions.length = 0;
+  win.L2D.setState('speaking');
+  tick(2);
+  check('状态切换后情绪表情被重新应用', rec.expressions.indexOf('03 生气') >= 0,
+        JSON.stringify(rec.expressions));
+  check('状态切换不得冲掉情绪表情', rec.expressions.indexOf('<reset>') < 0,
+        JSON.stringify(rec.expressions));
+
+  rec.expressions.length = 0;
+  win.L2D.setExpression(null);
+  tick(2);
+  check('复位后回落到状态默认表情（speaking 无表情 → reset）',
+        rec.expressions.indexOf('<reset>') >= 0, JSON.stringify(rec.expressions));
+  check('复位后 L2D.expression 为空', win.L2D.expression === null,
+        String(win.L2D.expression));
+
+  // 复位后不能有残留：状态切换不得复活已经清掉的情绪
   rec.expressions.length = 0;
   win.L2D.setState('idle');
   tick(2);
-  check('切回 idle 会复位表情', rec.expressions.indexOf('<reset>') >= 0,
-        JSON.stringify(rec.expressions));
+  win.L2D.setState('thinking');
+  tick(2);
+  check('复位后状态切换不会复活旧情绪',
+        rec.expressions.indexOf('03 生气') < 0, JSON.stringify(rec.expressions));
 
-  console.log('\n[10] dispose 释放');
+  console.log('\n[11] dispose 释放');
   win.L2D.dispose();
   check('dispose 后 ready 为 false', win.L2D.ready === false);
 
