@@ -19,7 +19,10 @@ MODEL_DIR="$DEST/models/haru"
 POST="$ROOT/tools/live2d_postprocess.py"
 
 PIXI_URL="https://cdn.jsdelivr.net/npm/pixi.js@6.5.10/dist/browser/pixi.min.js"
-CORE_URL="https://cdn.jsdelivr.net/npm/live2dcubismcore@1.0.2/live2dcubismcore.min.js"
+# Cubism Core 必须用官方 CDN 的最新版：npm 上的 live2dcubismcore@1.0.2
+# 内含 Cubism 4.2.2，无法加载 moc3 v5（Cubism 5 导出的模型）会导致
+# "csmReviveMocInPlace is failed. The Core unsupport later than moc3 ver:[4]"
+CORE_URL="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"
 PLD_URL="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"
 MODEL_BASE="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru"
 
@@ -55,7 +58,7 @@ fetch() { # $1=url  $2=dest file  $3=min bytes
 if [ "$DO_LIB" = 1 ]; then
   echo "==> runtime -> lib/"
   fetch "$PIXI_URL" "$LIB_DIR/pixi.min.js" 300000
-  fetch "$CORE_URL" "$LIB_DIR/live2dcubismcore.min.js" 100000
+  fetch "$CORE_URL" "$LIB_DIR/live2dcubismcore.min.js" 180000
   fetch "$PLD_URL"  "$LIB_DIR/cubism4.min.js" 50000
 fi
 

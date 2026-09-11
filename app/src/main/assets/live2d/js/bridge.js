@@ -16,19 +16,29 @@
 
   // ============================ 配置 ============================
   var CFG = {
-    modelUrl: 'models/haru/haru_greeter_t03.model3.json',
+    modelUrl: 'models/silverwolf/silverwolf.model3.json',
 
     // 口型参数（不同模型可能命名不同，会逐个尝试）
     lipSyncParams: ['ParamMouthOpenY', 'ParamMouthOpen'],
 
     // 布局
-    fillRatio: 1.05,   // 模型高度 / 视口高度（>1 表示略大于屏幕，视觉更饱满）
+    //
+    // autoFit: 用「实际内容包围盒」而不是画布尺寸来缩放。
+    //   模型画布常远大于角色本身（横版素材尤其明显），
+    //   按画布缩放会把角色裁得只剩局部。
+    // fitBy: 'width' 按内容宽度适配 / 'height' 按高度 / 'contain' 取较小者
+    autoFit: true,
+    fitBy: 'width',
+    trimLow: 0.03,     // 内容包围盒下分位（剔除远端离群 drawable）
+    trimHigh: 0.97,    // 上分位
+    fillRatio: 1.25,   // 内容尺寸 / 视口对应边（>1 表示放大裁切）
     offsetX: 0.0,      // 水平偏移，视口宽度的比例
-    offsetY: 0.08,     // 垂直偏移，视口高度的比例（正数 = 下移）
+    offsetY: -0.24,    // 垂直偏移，视口高度的比例（正数 = 下移）
+                       // 银狼为 Q 版角色，需上移让出底部消息区
 
     // 口型动态
-    mouthGain: 1.55,   // 音量 → 张口幅度 增益
-    mouthCurve: 0.75,  // 值域压缩曲线（<1 提升小音量表现）
+    mouthGain: 2.2,    // 音量 → 张口幅度 增益
+    mouthCurve: 0.6,   // 值域压缩曲线（<1 提升小音量表现）
     mouthAttack: 0.55, // 张口插值速度
     mouthRelease: 0.30,// 闭口插值速度
 
@@ -36,13 +46,18 @@
     maxResolution: 2,  // devicePixelRatio 上限（省电）
     idleFocus: true,   // 空闲时轻微视线游移
 
-    // 各通话状态 → 表现映射（表情名需按实际模型调整）
+    // 各通话状态 → 表现映射
+    //
+    // 银狼模型的动作组只有 Transform / AngryLoop / Sleep（变身、生气循环、睡觉），
+    // 没有通用待机动作 —— 待机感由 ParamBreath 呼吸 + EyeBlink 眨眼 + 物理驱动。
+    // 因此这里 motion 一律留空，避免播放不合时宜的特效动画。
+    // 表情可用值见该模型 model3.json 的 Expressions[].Name。
     states: {
-      idle:      { expression: null,  motion: ['Idle'], focus: 0.25 },
-      listening: { expression: 'f01', motion: ['Idle'], focus: 0.55 },
-      thinking:  { expression: 'f03', motion: ['Idle'], focus: 0.10 },
-      speaking:  { expression: null,  motion: ['Idle'], focus: 0.35 },
-      ended:     { expression: 'f05', motion: ['Idle'], focus: 0.0  }
+      idle:      { expression: null,    motion: null, focus: 0.25 },
+      listening: { expression: null,    motion: null, focus: 0.55 },
+      thinking:  { expression: '06 0.0', motion: null, focus: 0.10 },
+      speaking:  { expression: null,    motion: null, focus: 0.35 },
+      ended:     { expression: null,    motion: null, focus: 0.0  }
     }
   };
 
@@ -72,8 +87,12 @@
   var _mouthTarget = 0;     // Android 推来的原始音量 (0~1)
   var _mouthValue = 0;      // 平滑后的实际张口值 (0~1)
   var _lastUpdate = 0;      // 上一帧时间戳（用于 dt）
+  var _lastDt = 1 / 60;     // 本帧 dt（秒），两个钩子共用
   var _focusPhase = 0;      // 视线游移相位
   var _paused = false;
+  var _forcedParams = {};   // 调试用：每帧强制写入的参数
+  // 口型写入后的读回统计（验证参数是否真的在该帧生效）
+  var _applyStats = { min: null, max: null, n: 0, last: null };
 
   // ======================= Android 通信 ========================
   function notify(type, payload) {
@@ -128,7 +147,55 @@
     return v < lo ? lo : (v > hi ? hi : v);
   }
 
+  /**
+   * 取表达式管理器
+   *
+   * pixi-live2d-display 把它挂在 internalModel.motionManager.expressionManager
+   * 上（不是 internalModel.expressionManager），早期写成后者导致表情/复位全部失效。
+   */
+  function exprManager() {
+    if (!modelReady || !model) return null;
+    var im = model.internalModel;
+    if (!im) return null;
+    return (im.motionManager && im.motionManager.expressionManager) || im.expressionManager || null;
+  }
+
   // ======================= 模型布局适配 =======================
+  /**
+   * 合并所有 drawable 的包围盒，得到角色「实际内容」的范围
+   *
+   * getDrawableBounds 返回的是模型画布坐标系下的值（画布左上角为原点），
+   * 需要减去画布中心才是容器本地坐标。
+   */
+  function contentBounds() {
+    try {
+      var im = model.internalModel;
+      var core = im.coreModel;
+      var n = core.getDrawableCount ? core.getDrawableCount() : 0;
+      if (!n || typeof im.getDrawableBounds !== 'function') return null;
+
+      var L = [], R = [], T = [], B = [];
+      for (var i = 0; i < n; i++) {
+        var b;
+        try { b = im.getDrawableBounds(i); } catch (e) { continue; }
+        if (!b || !isFinite(b.x) || !isFinite(b.y) || !isFinite(b.width) || !isFinite(b.height)) continue;
+        L.push(b.x); T.push(b.y); R.push(b.x + b.width); B.push(b.y + b.height);
+      }
+      if (L.length < 4) return null;
+      var asc = function (a, b) { return a - b; };
+      L.sort(asc); R.sort(asc); T.sort(asc); B.sort(asc);
+      // 取 3%~97% 分位：特效/失控部件常被摆到画布外很远处，直接取并集会把
+      // 包围盒撑得远大于角色本身（实测 4810 高 vs 画布 2600）。
+      var q = function (arr, p) {
+        return arr[Math.min(arr.length - 1, Math.max(0, Math.floor(arr.length * p)))];
+      };
+      var x0 = q(L, CFG.trimLow), x1 = q(R, CFG.trimHigh);
+      var y0 = q(T, CFG.trimLow), y1 = q(B, CFG.trimHigh);
+      if (x1 <= x0 || y1 <= y0) return null;
+      return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    } catch (e) { return null; }
+  }
+
   function layout() {
     if (!model || !app) return;
 
@@ -136,19 +203,35 @@
     var sh = app.screen.height;
     if (!sw || !sh) return;
 
-    // originalWidth / originalHeight 是模型在 scale=1 时的原始尺寸
-    var im = model.internalModel || {};
-    var mw = im.originalWidth || model.width || 1;
-    var mh = im.originalHeight || model.height || 1;
+    // 量测必须在 scale=1 下进行，否则量到的是缩放后的尺寸
+    model.scale.set(1);
+
+    var canvasW = (model.internalModel && model.internalModel.originalWidth) || 1;
+    var canvasH = (model.internalModel && model.internalModel.originalHeight) || 1;
+
+    var cb = CFG.autoFit ? contentBounds() : null;
+    var mw = cb ? cb.width : canvasW;
+    var mh = cb ? cb.height : canvasH;
     if (!mw || !mh) return;
 
-    // 以高度为基准铺满，保证角色够大
-    var scale = (sh / mh) * CFG.fillRatio;
+    var scale;
+    if (CFG.fitBy === 'width') {
+      scale = (sw / mw) * CFG.fillRatio;
+    } else if (CFG.fitBy === 'contain') {
+      scale = Math.min(sw / mw, sh / mh) * CFG.fillRatio;
+    } else { // height
+      scale = (sh / mh) * CFG.fillRatio;
+    }
 
     model.anchor.set(0.5, 0.5);
     model.scale.set(scale);
-    model.x = sw * 0.5 + CFG.offsetX * sw;
-    model.y = sh * 0.5 + CFG.offsetY * sh;
+
+    // 把「内容中心」对齐到屏幕中心（补偿画布留白带来的偏移）
+    var contentCx = cb ? (cb.x + cb.width / 2) - canvasW / 2 : 0;
+    var contentCy = cb ? (cb.y + cb.height / 2) - canvasH / 2 : 0;
+
+    model.x = sw * 0.5 + CFG.offsetX * sw - contentCx * scale;
+    model.y = sh * 0.5 + CFG.offsetY * sh - contentCy * scale;
   }
 
   // ======================= 口型同步核心 =======================
@@ -191,6 +274,13 @@
           continue; // 该模型没有此参数
         }
         core.setParameterValueById(id, _mouthValue);
+        if (id === 'ParamMouthOpenY' && typeof core.getParameterValueById === 'function') {
+          var back = core.getParameterValueById('ParamMouthOpenY');
+          _applyStats.last = back;
+          _applyStats.n++;
+          if (_applyStats.min === null || back < _applyStats.min) _applyStats.min = back;
+          if (_applyStats.max === null || back > _applyStats.max) _applyStats.max = back;
+        }
       } catch (e) { /* 单个参数失败不影响其他 */ }
     }
   }
@@ -198,18 +288,46 @@
   /**
    * 每帧钩子：先更新口型曲线，再在模型 update 前写入参数
    */
-  function onBeforeModelUpdate() {
+  /**
+   * 每帧入口（挂 afterMotionUpdate）
+   *
+   * 必须在这里写口型而不是 beforeModelUpdate：框架在一帧里的顺序是
+   *   motion 更新 → saveParameters() → 表情/物理 → beforeModelUpdate
+   *   → coreModel.update()（算 drawable）→ loadParameters()（复位参数）
+   * 若只在 beforeModelUpdate 写，值会在 loadParameters() 被还原，
+   * 渲染时读到的仍是闭嘴值 —— 表现为「参数读回是对的，但嘴不动」。
+   * 在 afterMotionUpdate 写，值会被 saveParameters() 记住，
+   * loadParameters() 复位时恢复的就是我们的值。
+   */
+  function onAfterMotionUpdate() {
     var now = performance.now();
     var dt = _lastUpdate ? (now - _lastUpdate) / 1000 : 1 / 60;
     _lastUpdate = now;
     dt = clamp(dt, 0.001, 0.1); // 防止后台恢复时的巨大跳变
+    _lastDt = dt;
 
     updateMouth(dt);
     applyMouth();
+  }
+
+  function onBeforeModelUpdate() {
+    // 表情/物理可能覆盖口型参数，update 前再兜一次
+    applyMouth();
+
+    // 调试用强制参数（在口型之后写入，优先级最高）
+    for (var fid in _forcedParams) {
+      if (!Object.prototype.hasOwnProperty.call(_forcedParams, fid)) continue;
+      try {
+        var fcore = model.internalModel && model.internalModel.coreModel;
+        if (fcore && typeof fcore.setParameterValueById === 'function') {
+          fcore.setParameterValueById(fid, _forcedParams[fid]);
+        }
+      } catch (e) { /* ignore */ }
+    }
 
     // 空闲/聆听时轻微视线游移，让角色"活着"
     if (model && CFG.idleFocus && (currentState === 'idle' || currentState === 'listening')) {
-      _focusPhase += dt * 0.6;
+      _focusPhase += _lastDt * 0.6;
       var fx = Math.sin(_focusPhase) * 0.35 * CFG.states[currentState].focus;
       var fy = Math.cos(_focusPhase * 0.7) * 0.2 * CFG.states[currentState].focus;
       try { model.focus(fx, fy); } catch (e) { /* ignore */ }
@@ -224,11 +342,12 @@
 
     // 表情
     try {
+      var em = exprManager();
       if (s.expression) {
         model.expression(s.expression);
-      } else if (model.internalModel && model.internalModel.expressionManager) {
+      } else if (em) {
         // 无表情时恢复模型默认表情
-        model.internalModel.expressionManager.resetExpression();
+        em.resetExpression();
       }
     } catch (e) { /* 模型无此表情时忽略 */ }
 
@@ -289,13 +408,13 @@
       if (!modelReady || !model) return;
       try {
         if (name) model.expression(String(name));
-        else if (model.internalModel.expressionManager) model.internalModel.expressionManager.resetExpression();
+        else { var em = exprManager(); if (em) em.resetExpression(); }
       } catch (e) { /* ignore */ }
     },
 
-    /** 播放指定动作组 */
+    /** 播放指定动作组（group 为空则忽略） */
     playMotion: function (group, index) {
-      if (!modelReady || !model) return;
+      if (!modelReady || !model || !group) return;
       try {
         model.motion(String(group), index === undefined || index === null ? undefined : Number(index));
       } catch (e) { /* ignore */ }
@@ -329,6 +448,60 @@
       notify('info', collectInfo());
     },
 
+    /**
+     * 调试：每帧强制写入参数值（忽略状态与音量），用于验证某个参数
+     * 是否真的驱动了模型部件。传 null / 不传则清空。
+     * 例：L2D.debugForce('ParamMouthOpenY', 1)
+     */
+    debugForce: function (id, value) {
+      if (id === null || id === undefined || value === null || value === undefined) {
+        _forcedParams = {};
+      } else {
+        _forcedParams[String(id)] = Number(value);
+      }
+      return JSON.stringify(_forcedParams);
+    },
+
+    /**
+     * 调试：导出模型内部状态（表达式定义、口型参数范围与当前值等）
+     * 供开发期通过 CDP 排查，不影响正常运行。
+     */
+    debug: function () {
+      var out = {};
+      if (!modelReady || !model) return JSON.stringify({ ready: false });
+      try {
+        var im = model.internalModel;
+        var em = exprManager();
+        out.expressionManager = !!em;
+        out.expressionManagerPath = (im.motionManager && im.motionManager.expressionManager)
+          ? 'motionManager.expressionManager' : (im.expressionManager ? 'internalModel.expressionManager' : 'none');
+        out.expressionDefinitions = em && em.definitions
+          ? em.definitions.map(function (d) { return d && d.Name; })
+          : null;
+        out.expressionCount = em && em.definitions ? em.definitions.length : -1;
+        out.motionGroups = Object.keys(im.motionManager.definitions || {});
+        var core = im.coreModel;
+        out.lipSync = {};
+        CFG.lipSyncParams.forEach(function (id) {
+          try {
+            var idx = core.getParameterIndex(id);
+            if (idx >= 0) {
+              out.lipSync[id] = {
+                idx: idx,
+                min: core.getParameterMinimumValue(idx),
+                max: core.getParameterMaximumValue(idx),
+                value: core.getParameterValueById(id)
+              };
+            }
+          } catch (e) { /* ignore */ }
+        });
+        out.currentMouth = _mouthValue;
+        out.appliedMouth = _applyStats;
+        out.state = currentState;
+      } catch (e) { out.error = String(e); }
+      return JSON.stringify(out);
+    },
+
     /** 释放资源 */
     dispose: function () {
       try {
@@ -344,12 +517,19 @@
     var info = { modelUrl: CFG.modelUrl, motions: [], expressions: [], lipSync: [] };
     try {
       var im = model.internalModel;
+      info.size = im.originalWidth + 'x' + im.originalHeight;
+      var cb = contentBounds();
+      if (cb) {
+        info.content = Math.round(cb.width) + 'x' + Math.round(cb.height)
+                     + '@' + Math.round(cb.x) + ',' + Math.round(cb.y);
+      }
       var defs = im.motionManager.definitions || {};
       for (var g in defs) {
         if (Object.prototype.hasOwnProperty.call(defs, g)) info.motions.push(g + ':' + defs[g].length);
       }
-      if (im.expressionManager && im.expressionManager.definitions) {
-        im.expressionManager.definitions.forEach(function (d) { info.expressions.push(d.Name); });
+      var em = exprManager();
+      if (em && em.definitions) {
+        em.definitions.forEach(function (d) { info.expressions.push(d.Name); });
       }
       CFG.lipSyncParams.forEach(function (id) {
         if (typeof im.coreModel.getParameterIndex === 'function' && im.coreModel.getParameterIndex(id) >= 0) {
@@ -411,6 +591,7 @@
         layout();
 
         // 关键：口型注入点
+        model.internalModel.on('afterMotionUpdate', onAfterMotionUpdate);
         model.internalModel.on('beforeModelUpdate', onBeforeModelUpdate);
 
         currentState = 'idle';

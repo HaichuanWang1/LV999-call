@@ -21,6 +21,7 @@ const BRIDGE = fs.readFileSync(BRIDGE_PATH, 'utf8');
 // ---------------- 记录与 mock ----------------
 const rec = { params: {}, expressions: [], motions: [], focus: [], scale: [], events: [], anchor: [] };
 let beforeModelUpdate = null;
+let afterMotionUpdate = null;
 
 const coreModel = {
   setParameterValueById(id, v) { rec.params[id] = v; },
@@ -43,7 +44,10 @@ const model = {
       resetExpression() { rec.expressions.push('<reset>'); },
     },
     motionManager: { definitions: { Idle: [0, 1, 2], Tap: [0, 1] } },
-    on(evt, cb) { if (evt === 'beforeModelUpdate') beforeModelUpdate = cb; },
+    on(evt, cb) {
+      if (evt === 'afterMotionUpdate') afterMotionUpdate = cb;
+      if (evt === 'beforeModelUpdate') beforeModelUpdate = cb;
+    },
   },
 };
 
@@ -93,6 +97,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function tick(frames = 1, dtMs = 16) {
   for (let i = 0; i < frames; i++) {
     simNow += dtMs;              // 关键：推进模拟时钟，否则 dt≈0 插值不生效
+    if (afterMotionUpdate) afterMotionUpdate();
     if (beforeModelUpdate) beforeModelUpdate();
   }
 }
@@ -110,6 +115,7 @@ function check(name, cond, extra = '') {
   check('window.L2D 已暴露', !!win.L2D);
   check('L2D.version 存在', win.L2D && !!win.L2D.version, String(win.L2D && win.L2D.version));
   check('ready 事件已上报', rec.events.some(([t]) => t === 'ready'), JSON.stringify(rec.events));
+  check('afterMotionUpdate 已注册', typeof afterMotionUpdate === 'function');
   check('beforeModelUpdate 已注册', typeof beforeModelUpdate === 'function');
   check('模型已完成布局', rec.scale.length > 0 && rec.anchor.length > 0,
         `scale=${JSON.stringify(rec.scale)} anchor=${JSON.stringify(rec.anchor)}`);
@@ -175,15 +181,21 @@ function check(name, cond, extra = '') {
   check('异常输入被安全处理', !crashed);
   check('非法 setState 回落为 idle', win.L2D.state === 'idle', win.L2D.state);
 
-  console.log('\n[9] 状态切换触发动作/表情');
-  const before = rec.motions.length;
+  console.log('\n[9] 状态切换：表情应用与复位');
+  rec.expressions.length = 0;
+  rec.motions.length = 0;
   win.L2D.setState('thinking');
   tick(2);
-  check('切换状态会播放动作', rec.motions.length > before,
-        `motion 调用 ${before} → ${rec.motions.length}`);
-  check('动作使用 Idle 组 + IDLE 优先级',
-        rec.motions.slice(-1)[0][0] === 'Idle' && rec.motions.slice(-1)[0][2] === 1,
-        JSON.stringify(rec.motions.slice(-1)));
+  check('thinking 会设置表情',
+        rec.expressions.some((e) => e !== '<reset>'),
+        JSON.stringify(rec.expressions));
+  check('该模型无待机动作，不应播放 motion', rec.motions.length === 0,
+        JSON.stringify(rec.motions));
+  rec.expressions.length = 0;
+  win.L2D.setState('idle');
+  tick(2);
+  check('切回 idle 会复位表情', rec.expressions.indexOf('<reset>') >= 0,
+        JSON.stringify(rec.expressions));
 
   console.log('\n[10] dispose 释放');
   win.L2D.dispose();
