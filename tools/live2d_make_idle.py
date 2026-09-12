@@ -90,54 +90,42 @@ RESERVED_BY_IDLE_LAYER = {
 # ---------------------------------------------------------------------------
 MOTIONS = [
     {
-        "file": "idle_glance.motion3.json",
-        "duration": 4.5,
-        "comment": "快速瞥一眼旁边（短促，像听到什么动静）",
+        "file": "idle_shift.motion3.json",
+        "duration": 5.0,
+        "comment": "换重心（腰往一侧移一点）",
         "curves": [
-            ("ParamAngleX",   [(0.0, 0.0), (0.45, -9.0), (1.7, -9.0), (2.3, 0.0), (4.5, 0.0)]),
-            ("ParamAngleY",   [(0.0, 0.0), (0.45, -1.5), (1.7, -1.5), (2.3, 0.0), (4.5, 0.0)]),
-            ("ParamEyeBallX", [(0.0, 0.0), (0.22, -0.55), (1.7, -0.5), (2.3, 0.0), (4.5, 0.0)]),
-            ("ParamEyeBallY", [(0.0, 0.0), (0.22, 0.10), (1.7, 0.06), (2.3, 0.0), (4.5, 0.0)]),
-            ("ParamBodyAngleY", [(0.0, 0.0), (0.5, -2.2), (1.7, -2.0), (2.4, 0.0), (4.5, 0.0)]),
+            ("ParamBodyAngleY", [(0.0, 0.0), (1.3, -2.6), (2.4, -2.6), (3.6, 2.2), (4.4, 2.2), (5.0, 0.0)]),
+            ("ParamBodyAngleX", [(0.0, 0.0), (1.3, -1.2), (2.4, -1.2), (3.6, 1.0), (4.4, 1.0), (5.0, 0.0)]),
         ],
     },
     {
-        "file": "idle_lookaround.motion3.json",
-        "duration": 7.5,
-        "comment": "慢慢左右张望一圈",
+        "file": "idle_nod.motion3.json",
+        "duration": 6.0,
+        "comment": "极小的点头（只动 pitch，不看别处）",
         "curves": [
-            ("ParamAngleX",   [(0.0, 0.0), (1.2, -6.0), (2.4, -6.0), (4.2, 7.0), (5.4, 7.0), (6.6, 0.0), (7.5, 0.0)]),
-            ("ParamAngleY",   [(0.0, 0.0), (1.2, -2.0), (2.4, -2.0), (4.2, 2.0), (5.4, 2.0), (6.6, 0.0), (7.5, 0.0)]),
-            ("ParamEyeBallX", [(0.0, 0.0), (1.0, -0.45), (2.4, -0.45), (4.0, 0.5), (5.4, 0.5), (6.6, 0.0), (7.5, 0.0)]),
-            ("ParamEyeBallY", [(0.0, 0.0), (1.2, 0.12), (4.2, -0.10), (7.5, 0.0)]),
-            ("ParamBodyAngleY", [(0.0, 0.0), (1.3, -3.0), (2.4, -3.0), (4.3, 3.4), (5.4, 3.4), (6.7, 0.0), (7.5, 0.0)]),
+            ("ParamAngleY",     [(0.0, 0.0), (1.6, -1.5), (2.8, -1.5), (4.2, 1.2), (5.2, 1.2), (6.0, 0.0)]),
+            ("ParamBodyAngleX", [(0.0, 0.0), (1.8, -0.9), (3.0, -0.9), (4.4, 0.7), (5.4, 0.7), (6.0, 0.0)]),
         ],
     },
     {
         "file": "idle_stretch.motion3.json",
         "duration": 8.0,
-        "comment": "换重心松一下身子（先沉下去再挺起来）",
+        "comment": "舒展一下身子（先沉下去再挺起来）",
         "curves": [
-            ("ParamBodyAngleX", [(0.0, 0.0), (1.4, -1.6), (2.6, -1.6), (4.0, 2.2), (5.0, 2.2), (6.6, 0.0), (8.0, 0.0)]),
-            ("ParamAngleY",     [(0.0, 0.0), (1.4, -3.5), (2.6, -3.5), (4.0, 3.0), (5.0, 3.0), (6.6, 0.0), (8.0, 0.0)]),
-            ("ParamAngleX",     [(0.0, 0.0), (2.0, -2.0), (4.5, 2.5), (6.6, 0.0), (8.0, 0.0)]),
-            ("ParamEyeBallY",   [(0.0, 0.0), (1.4, -0.28), (4.0, 0.30), (6.6, 0.0), (8.0, 0.0)]),
-            ("ParamBodyAngleY", [(0.0, 0.0), (2.2, -1.6), (4.6, 1.8), (6.8, 0.0), (8.0, 0.0)]),
+            ("ParamBodyAngleX", [(0.0, 0.0), (1.4, -1.8), (2.6, -1.8), (4.0, 2.4), (5.0, 2.4), (6.6, 0.0), (8.0, 0.0)]),
+            ("ParamBodyAngleY", [(0.0, 0.0), (2.2, -1.8), (4.6, 2.0), (6.8, 0.0), (8.0, 0.0)]),
+            ("ParamAngleY",     [(0.0, 0.0), (1.4, -1.6), (2.6, -1.6), (4.0, 1.3), (5.0, 1.3), (6.6, 0.0), (8.0, 0.0)]),
         ],
     },
 ]
 
-# 这些参数由 bridge.js 的程序化待机层每帧写入（见 CFG.idle.channels）。
-# 动作文件再写一遍会被覆盖（那层写在 afterMotionUpdate，晚于动作更新），
-# 所以这里明确禁止重叠 —— 排查"动作播了但没反应"时这是第一嫌疑人。
-RESERVED_BY_IDLE_LAYER = {
-    "ParamBrowLY", "ParamBrowRY", "ParamBrowLForm", "ParamBrowRForm",
-    "ParamEyeLSmile", "ParamEyeRSmile", "ParamEyeLSquint", "ParamEyeRSquint",
-    "ParamMouthForm", "ParamBreath", "ParamAngleZ", "ParamBodyAngleZ",
-}
-
 # 口型与情绪表情的通道，动作文件绝不能碰
 FORBIDDEN = {"ParamMouthOpenY", "ParamMouthOpen"}
+
+# 视线相关：yaw（ParamAngleX）与眼球只允许来自 focus / 呼吸。
+# 之前 idle_glance 写了 ParamAngleX=-9°、ParamEyeBallY=+0.1，实测表现就是
+# "角色看向左上角、不像在看你" —— 待机动作抢视线是观感事故，所以设成硬规则。
+GAZE_OWNED_BY_FOCUS = {"ParamAngleX", "ParamEyeBallX", "ParamEyeBallY"}
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +221,8 @@ def validate(spec, ins, outs):
             problems.append(f"{pid} 是口型通道，动作文件不能写")
         if pid in RESERVED_BY_IDLE_LAYER:
             problems.append(f"{pid} 由程序化待机层每帧写入，写在这里会被覆盖")
+        if pid in GAZE_OWNED_BY_FOCUS:
+            problems.append(f"{pid} 是视线通道，待机动作不许抢（角色会不看用户）")
         if outs is not None and pid in outs:
             problems.append(f"{pid} 是物理输出，会被物理每帧覆盖（写了看不见）")
         for t, v in keys:
@@ -395,6 +385,12 @@ def main():
         write_json(path, build_motion(spec))
         print(f"  [写入] {path}")
     build_transform_copies(motion_dir, False)
+    for name in sorted(os.listdir(motion_dir)):
+        if not (name.startswith("idle_") and name.endswith(".motion3.json")):
+            continue
+        if name not in [m["file"] for m in MOTIONS]:
+            os.remove(os.path.join(motion_dir, name))
+            print(f"  [清理] 旧文件 {name}")
 
     write_json(model_json, data)
     print(f"  [写入] {model_json}")

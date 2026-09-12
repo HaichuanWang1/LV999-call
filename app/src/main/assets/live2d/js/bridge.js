@@ -125,6 +125,26 @@
       cuePoseScale: 0.3
     },
 
+    // ==================== 呼吸幅度（接管库内置值）====================
+    //
+    // 运行库内置 CubismBreath，用的是官方示例值：ParamAngleX 峰值 15 × 权重 0.5
+    // = 头部左右摇 ±7.5°、周期 6.53s。对"角色在看着你"这件事来说这个摆幅偏大
+    // （和待机动作叠加后实测观感就是"没在看你"），所以这里接管成更小的幅度：
+    // 头 yaw ±4°、pitch ±2.5°、roll ±3°、身体 ±2°，周期保持官方值。
+    // 想恢复官方幅度就把 angleX/angleY/angleZ 改回 15/8/10。
+    breath: {
+      enabled: true,
+      angleX: 8,          // ±4°
+      angleY: 5,          // ±2.5°
+      angleZ: 6,          // ±3°
+      bodyAngleX: 4,      // ±2°
+      breath: 0.5,
+      cycles: {           // 官方示例周期（秒）
+        angleX: 6.5345, angleY: 3.5345, angleZ: 5.5345,
+        bodyAngleX: 15.5345, breath: 3.2345
+      }
+    },
+
     // ==================== 变身过场（一次性动作）====================
     //
     // 模型自带的 Transform_1/2 是同一段演出的前后两半（_1 摘眼镜+变身开+特效
@@ -543,6 +563,33 @@
         } catch (e) { /* 单个参数失败不影响其他 */ }
       }
     }
+  }
+
+  /**
+   * 接管运行库内置呼吸的幅度
+   *
+   * CubismBreath 的参数是 (id, offset, peak, cycle, weight) 四元组，运行时可用
+   * setParameters() 整体换掉。换不到（拿不到 BreathParameterData）就沿用官方值。
+   */
+  function applyBreathConfig() {
+    if (!CFG.breath.enabled) return;
+    try {
+      var im = model.internalModel;
+      var B = PIXI.live2d && PIXI.live2d.BreathParameterData;
+      if (!im.breath || typeof im.breath.setParameters !== 'function' || typeof B !== 'function') {
+        console.warn('[L2D] 拿不到 BreathParameterData，沿用库内置呼吸幅度');
+        return;
+      }
+      var b = CFG.breath, c = b.cycles;
+      im.breath.setParameters([
+        new B('ParamAngleX', 0, b.angleX, c.angleX, 0.5),
+        new B('ParamAngleY', 0, b.angleY, c.angleY, 0.5),
+        new B('ParamAngleZ', 0, b.angleZ, c.angleZ, 0.5),
+        new B('ParamBodyAngleX', 0, b.bodyAngleX, c.bodyAngleX, 0.5),
+        new B('ParamBreath', 0, b.breath, c.breath, 0.5)
+      ]);
+      console.log('[L2D] 呼吸幅度已接管：头 yaw ±' + (b.angleX * 0.5) + '°');
+    } catch (e) { /* 拿不到就沿用库内置值 */ }
   }
 
   // ======================= 一次性动作序列 =======================
@@ -1022,6 +1069,9 @@
         // 关键：口型注入点
         model.internalModel.on('afterMotionUpdate', onAfterMotionUpdate);
         model.internalModel.on('beforeModelUpdate', onBeforeModelUpdate);
+
+        // 呼吸幅度：必须在模型就绪后覆盖（构造函数里已经塞了官方示例值）
+        applyBreathConfig();
 
         // 动作播完的回调（一次性序列靠它推进；待机动作也会触发，处理函数里认组名）
         var mmanager = model.internalModel.motionManager;

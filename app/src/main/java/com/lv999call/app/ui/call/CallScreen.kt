@@ -66,6 +66,16 @@ private const val EXPRESSION_MIN_HOLD_MS = 1_500L
 private const val EXPRESSION_MAX_HOLD_MS = 30_000L
 
 /**
+ * 进入说话态后，表情最多再保持多久（毫秒）
+ *
+ * 表情从标签到达（生成阶段）就挂上，原先一直挂到本轮说完。但 `04 晕 / 07 星星眼 /
+ * 06 0.0` 这类夸张脸挂满一整段十几秒的话会显得很傻 —— 真人也不会一边说话一边
+ * 维持定格表情。所以进入说话态后再保持这么久就回落到普通脸。
+ * 嫌表情太短就调大，嫌傻就调小。
+ */
+private const val EXPRESSION_SPEAKING_HOLD_MS = 3_500L
+
+/**
  * 挂断过场时长（毫秒）
  *
  * ENDED 时 NavGraph 会立刻跳转历史页、Live2DView 也会被暂停，不延迟的话
@@ -154,10 +164,23 @@ fun CallScreen(
         l2d.setExpression(cue.modelName)
 
         val shownFrom = SystemClock.uptimeMillis()
-        // 等回到聆听态 = 本轮（生成 + 朗读）结束
+        // 分两段保持：
+        //   1. 生成 / 等待期 —— 一直挂着（这是"它在酝酿回复"的表情）
+        //   2. 进入说话态之后 —— 最多再挂 EXPRESSION_SPEAKING_HOLD_MS
+        // 为什么第二段要收：像"04 晕 / 07 星星眼 / 10 吹泡泡"这种夸张脸，从生成
+        // 一路挂到一整段话说完（十几秒）会显得很傻；真人也不会一边说话一边维持
+        // 定格表情。注意第二段是从**开始说话**才计时 —— 当初"固定 N 秒"的坑就是
+        // 把计时起点放在标签到达（生成阶段），结果开口前就到期、表情白挂。
         withTimeoutOrNull(EXPRESSION_MAX_HOLD_MS) {
             snapshotFlow { latestCallState }.first {
-                it == CallState.LISTENING || it == CallState.ENDED
+                it == CallState.SPEAKING || it == CallState.LISTENING || it == CallState.ENDED
+            }
+        }
+        if (latestCallState == CallState.SPEAKING) {
+            withTimeoutOrNull(EXPRESSION_SPEAKING_HOLD_MS) {
+                snapshotFlow { latestCallState }.first {
+                    it == CallState.LISTENING || it == CallState.ENDED
+                }
             }
         }
         val shownMs = SystemClock.uptimeMillis() - shownFrom

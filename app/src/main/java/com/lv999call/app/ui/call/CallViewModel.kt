@@ -111,10 +111,29 @@ class CallViewModel(
      * （静默音频、页面不可见等情况不该由 ViewModel 猜）。
      */
     private fun cueExpression(expression: Live2DExpression) {
+        // 首轮（开场问候）强制"普通脸"：
+        // 实测 LLM 打招呼时几乎必然挑 `06 0.0`（圆眼圈嘴），而提示词里的招呼示例
+        // 恰好就是 0.0 —— 等于我把它教成了每通电话开场都摆这个傻脸。
+        // 开场白不需要额外表情演出，直接忽略标签、保持模型默认表情。
+        // 标签在解析层已经被剥掉，所以忽略它也绝不会被念出来。
+        if (isOpeningTurn()) {
+            android.util.Log.d("CallVM", "首轮表情被忽略（强制普通脸）: ${expression.key}")
+            return
+        }
         expressionSeq += 1
         _expressionCue.value = ExpressionCue(expression.modelName, expressionSeq)
         android.util.Log.d("CallVM", "LLM 表情: ${expression.key} → ${expression.modelName}")
     }
+
+    /**
+     * 是否是本通电话的首轮
+     *
+     * 判据：消息列表里还没有任何助手消息。首轮生成期间列表仍然是空的 —— 助手消息
+     * 要等 processAudio 返回后才写入（见各调用点），所以这个判据可靠；
+     * 而 continueSession 是从历史会话续聊，列表非空，不会被误判成首轮。
+     */
+    private fun isOpeningTurn(): Boolean =
+        _messages.value.none { it.role == "assistant" }
 
     fun startCall(mode: DialogMode) {
         viewModelScope.launch {

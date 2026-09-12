@@ -37,6 +37,11 @@ const CORE = path.join(ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'lib',
 // 由 bridge.js 的程序化待机层每帧写入的通道：动作文件再写一遍会被覆盖
 // （那层写在 afterMotionUpdate，晚于动作更新）。与 tools/live2d_make_idle.py
 // 里的 RESERVED_BY_IDLE_LAYER 必须保持一致。
+// 视线只允许来自 focus / 呼吸。待机动作写 yaw 或眼球，角色就会"看向别处"
+// （实测：idle_glance 写了 ParamAngleX=-9°/ParamEyeBallY=+0.1，看起来就是
+//  "盯着左上角、不像在看你"，所以这里是硬性禁止）
+const GAZE_PARAMS = ['ParamAngleX', 'ParamEyeBallX', 'ParamEyeBallY'];
+
 const OWNED_BY_IDLE_LAYER = [
   'ParamBrowLY', 'ParamBrowRY', 'ParamBrowLForm', 'ParamBrowRForm',
   'ParamEyeLSmile', 'ParamEyeRSmile', 'ParamEyeLSquint', 'ParamEyeRSquint',
@@ -310,6 +315,8 @@ function inspectMotion(file, params, physics) {
         check(`${label} 未写物理输出参数`, outCurves.length === 0, outCurves.join(','));
         const owned = Object.keys(info.roles).filter((id) => OWNED_BY_IDLE_LAYER.indexOf(id) >= 0);
         check(`${label} 未与程序化待机层抢通道`, owned.length === 0, owned.join(','));
+        const gaze = Object.keys(info.roles).filter((id) => GAZE_PARAMS.indexOf(id) >= 0);
+        check(`${label} 未抢视线通道（yaw / 眼球）`, gaze.length === 0, gaze.join(','));
       } else if (copy) {
         // 这些是"只改 Loop"的副本，唯一要求就是别再变回循环
         check(`${label} 是一次性动作（Loop: false）`, !loop, String(info.meta.Loop));
