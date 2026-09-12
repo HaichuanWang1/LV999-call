@@ -32,6 +32,9 @@ const KNOWN_PARAMS = [
   'ParamBrowLY', 'ParamBrowRY', 'ParamBrowLForm', 'ParamBrowRForm',
   'ParamEyeLSmile', 'ParamEyeRSmile', 'ParamEyeLSquint', 'ParamEyeRSquint',
   'ParamMouthForm', 'ParamBreath', 'ParamAngleZ', 'ParamBodyAngleZ',
+  // transform sequence + its neutral-value reset
+  'key9', 'key11', 'key15', 'Param172', 'Param173', 'Param204', 'Param212',
+  'Param210', 'Param211', 'Param213', 'Param214', 'Param218',
 ];
 
 const coreModel = {
@@ -424,6 +427,32 @@ function check(name, cond, extra = '') {
   check('动作组缺失时返回 false 并警告', started === false && warned,
         `started=${started} warned=${warned}`);
   mm.definitions = { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}] };
+
+  // ---- 自动恢复兜底：正常播完 / 中途被打断，都必须回到"没变过身"的参数上 ----
+  // 正常路径靠 _2 自己还原 + 动作权重淡出，但序列可能被切后台之类打断，
+  // 那时角色会停在"变到一半"（眼镜摘了、变身开着），所以要有参数级兜底。
+  rec.motions.length = 0;
+  clearParams();
+  win.L2D.playTransform('full');
+  fireFinish('TransformOnce');
+  fireFinish('TransformOnce');
+  tick(1);
+  check('序列播完后把变身参数写回中性值',
+        rec.params.key9 === 1 && rec.params.key11 === 0 && rec.params.Param172 === 0,
+        JSON.stringify({ key9: rec.params.key9, key11: rec.params.key11, Param172: rec.params.Param172 }));
+
+  // 卡住（motionFinish 再也没按我们的组名到达）：看门狗收尾 + 复位
+  clearParams();
+  win.L2D.playTransform('full');
+  tick(500);      // 8s 远超 2x3.2s 的预算
+  check('序列卡住时看门狗会收尾',
+        win.L2D.debug().indexOf('"sequence":null') >= 0);
+  check('看门狗收尾后同样复位变身参数',
+        rec.params.key9 === 1 && rec.params.key11 === 0,
+        JSON.stringify({ key9: rec.params.key9, key11: rec.params.key11 }));
+  const woke = win.L2D.getIdle();
+  check('序列卡住也不会让待机层永久让位',
+        Object.keys(woke).some((k) => Math.abs(woke[k]) > 0.05), JSON.stringify(woke));
 
   console.log('\n[13] dispose 释放');
   win.L2D.dispose();

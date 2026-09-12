@@ -89,6 +89,8 @@ fun CallScreen(
     isMuted: Boolean = false,
     /** 是否启用 Live2D 形象（加载失败时自动回退到静态头像） */
     live2dEnabled: Boolean = true,
+    /** 是否播放接通/挂断的"变身"过场（纯演出，关掉不影响待机动作、表情与口型） */
+    transformEnabled: Boolean = true,
     /** LLM 触发的情绪表情，null 表示无 */
     expressionCue: ExpressionCue? = null
 ) {
@@ -118,14 +120,15 @@ fun CallScreen(
     LaunchedEffect(l2dStatus) {
         if (l2dStatus == Live2DStatus.READY && !entrancePlayed) {
             entrancePlayed = true
-            l2d.playTransform("full")
+            if (transformEnabled) l2d.playTransform("full")
         }
     }
 
-    // 挂断过场：播"还原"（约 2.3s）。跳转前的等待在 NavGraph，用的是同一个常量。
+    // 挂断过场：播"还原"（约 2.3s）。跳转前的等待在 NavGraph，用的是同一个常量，
+    // 且那边同样只在 transformEnabled 时才等。
     var hangupAnimating by remember { mutableStateOf(false) }
     LaunchedEffect(callState) {
-        if (callState == CallState.ENDED) {
+        if (callState == CallState.ENDED && transformEnabled) {
             hangupAnimating = true
             l2d.playTransform("out")
             delay(HANGUP_TRANSFORM_MS)

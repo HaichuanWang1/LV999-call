@@ -43,7 +43,11 @@ data class ApiConfig(
     val waitTtsBeforeRecord: Boolean = true,
 
     // 通话界面使用 Live2D 动态形象（关闭后回退到静态头像）
-    val live2dEnabled: Boolean = true
+    val live2dEnabled: Boolean = true,
+
+    // 接通/挂断时播放"变身"过场（模型自带的划卡变身，约 2.3s+2.3s）
+    // 纯演出，关掉不影响待机动作与表情/口型
+    val live2dTransformEnabled: Boolean = true
 ) {
     /** 根据对话模式获取对应的参考音频 */
     fun getRefAudioForMode(mode: DialogMode): String {

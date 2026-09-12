@@ -69,6 +69,7 @@ fun SettingsScreen(
     var showApiKey by remember { mutableStateOf(false) }
     var waitTts by remember(config) { mutableStateOf(config.waitTtsBeforeRecord) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
+    var live2dTransformEnabled by remember(config) { mutableStateOf(config.live2dTransformEnabled) }
     val scrollState = rememberScrollState()
 
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -387,6 +388,20 @@ fun SettingsScreen(
                     }
                 }
 
+                // 子开关：只在启用 Live2D 时才有意义
+                if (live2dEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(28.dp))
+                        Switch(checked = live2dTransformEnabled, onCheckedChange = { live2dTransformEnabled = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("接通/挂断变身过场", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                            Text("播模型自带的划卡变身（接通约 4.7s、挂断约 2.3s，挂断会多等这一小段再返回）；关掉不影响待机动作、表情与口型", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Button(
@@ -398,7 +413,8 @@ fun SettingsScreen(
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
                             waitTtsBeforeRecord = waitTts,
-                            live2dEnabled = live2dEnabled
+                            live2dEnabled = live2dEnabled,
+                            live2dTransformEnabled = live2dTransformEnabled
                         ))
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

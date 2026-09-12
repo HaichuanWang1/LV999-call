@@ -137,8 +137,11 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
-                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
-                        delay(HANGUP_TRANSFORM_MS)
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
+                        // 过场被关掉时不延迟，保持原来的即时跳转手感
+                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                            delay(HANGUP_TRANSFORM_MS)
+                        }
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -151,6 +154,7 @@ fun NavGraph() {
                 audioLevel = audioLevel,
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
+                transformEnabled = config.live2dTransformEnabled,
                 avatarUri = config.characterAvatarUri,
                 backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
                 onHangUp = { viewModel.hangUp() },
@@ -250,8 +254,11 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
-                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
-                        delay(HANGUP_TRANSFORM_MS)
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
+                        // 过场被关掉时不延迟，保持原来的即时跳转手感
+                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                            delay(HANGUP_TRANSFORM_MS)
+                        }
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -264,6 +271,7 @@ fun NavGraph() {
                 audioLevel = audioLevel,
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
+                transformEnabled = config.live2dTransformEnabled,
                 avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
                 avatarResId = com.lv999call.app.R.drawable.default_avatar,
                 backgroundUri = presetBgUri?.ifEmpty { null },
@@ -298,8 +306,11 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val currentSessionId = viewModel.getSessionId()
                     if (currentSessionId != null) {
-                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
-                        delay(HANGUP_TRANSFORM_MS)
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
+                        // 过场被关掉时不延迟，保持原来的即时跳转手感
+                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                            delay(HANGUP_TRANSFORM_MS)
+                        }
                         navController.navigate(Routes.history(currentSessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -307,7 +318,8 @@ fun NavGraph() {
 
             CallScreen(
                 callState = callState, messages = messages, currentResponse = currentResponse,
-                audioLevel = audioLevel, live2dEnabled = config.live2dEnabled, avatarUri = config.characterAvatarUri,
+                audioLevel = audioLevel, live2dEnabled = config.live2dEnabled,
+                transformEnabled = config.live2dTransformEnabled, avatarUri = config.characterAvatarUri,
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted

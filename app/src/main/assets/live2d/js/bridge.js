@@ -139,7 +139,28 @@
 
       // 播放期间压掉程序化待机层：变身动作自己会画眉毛/眼睛，
       // 而待机层写在 afterMotionUpdate（更晚），不压就会把它盖掉
-      muteIdle: true
+      muteIdle: true,
+
+      // 序列结束（或被打断）后，把"变身相关"参数一次性写回中性值
+      //
+      // 正常路径其实不需要兜底：_2 自己会把眼镜戴回去、变身关掉，而且动作权重
+      // 淡出也会把参数带回基准值。但序列可能被中途打断（切后台、WebView 暂停、
+      // 模型重载、秒挂断），那时角色会停在"变到一半"的样子上 ——
+      // 参数级兜底比"指望动画一定播完"可靠。下面的值就是 moc3 里的默认值。
+      reset: {
+        key9: 1,        // 09 正常眼镜（默认值本来就是 1）
+        key11: 0,       // 11 变身
+        key15: 0,       // 14 划卡手
+        Param172: 0,    // 划卡特效
+        Param173: 0,    // 划卡 R x
+        Param204: 0,    // 划卡 R y
+        Param212: 0,    // 划卡 R z
+        Param210: 0,    // 划卡 L x
+        Param211: 0,    // 划卡 L y
+        Param213: 0,    // 划卡 L z
+        Param214: 0,    // 迈腿
+        Param218: 0     // 人物变暗
+      }
     }
   };
 
@@ -184,7 +205,8 @@
   var _idleFlickAt = 1.5;         // 下一次"耳抖"的时间点（秒），启动后 1.5~3.5s 来第一下
   var _idleFlickEnd = -1;         // 当前耳抖的结束时间点，-1 表示没有正在进行的
   var _idleValid = null;          // {参数id: 是否存在} 缓存，避免每帧都查一遍
-  var _sequence = null;           // 正在播的一次性动作序列：{queue:[索引...], pos:0}
+  var _sequence = null;           // 正在播的一次性动作序列：{queue:[…], pos:0, deadline:秒}
+  var _transformResetPending = false;  // 需要把变身参数写回中性值（只写一帧）
 
   // ======================= Android 通信 ========================
   function notify(type, payload) {
@@ -411,7 +433,7 @@
    * 换模型时同一份 bridge.js 要能跑，而写不存在的参数在部分 WebView 版本上会抛异常，
    * 所以先探测再写；每帧探测十来个参数没必要，缓存住。
    */
-  function idleParamOK(core, id) {
+  function paramOK(core, id) {
     if (_idleValid === null) _idleValid = {};
     if (!Object.prototype.hasOwnProperty.call(_idleValid, id)) {
       var ok = true;
@@ -433,6 +455,10 @@
    */
   function updateIdle(dt) {
     _idleTime += dt;
+
+    // 看门狗：序列被别的动作打断时 motionFinish 可能不会按我们的组名到达，
+    // 卡住会让待机层一直处于"让位"状态，所以超时强行收尾
+    if (_sequence && _idleTime > _sequence.deadline) finishTransform();
 
     var i, name;
     if (!_idleEnabled || !CFG.idle.enabled) {
@@ -512,7 +538,7 @@
       for (i = 0; i < ids.length; i++) {
         id = ids[i];
         try {
-          if (!idleParamOK(core, id)) continue;
+          if (!paramOK(core, id)) continue;
           core.setParameterValueById(id, v);
         } catch (e) { /* 单个参数失败不影响其他 */ }
       }
@@ -545,21 +571,52 @@
     var queue = phase === 'in' ? [CFG.transform.inIndex]
               : phase === 'out' ? [CFG.transform.outIndex]
               : [CFG.transform.inIndex, CFG.transform.outIndex];
-    _sequence = { queue: queue, pos: 0 };
+    // deadline 是给"序列被别的动作打断、motionFinish 不按我们的组名到达"兜底的
+    _sequence = { queue: queue, pos: 0, deadline: _idleTime + queue.length * 3.2 };
+    _transformResetPending = false;
     stepTransform();
     return true;
   }
 
-  /** 播序列里的下一条（队列空了就结束） */
+  /** 播序列里的下一条（队列空了就收尾） */
   function stepTransform() {
     if (!_sequence) return;
-    if (_sequence.pos >= _sequence.queue.length) { _sequence = null; return; }
+    if (_sequence.pos >= _sequence.queue.length) { finishTransform(); return; }
     var index = _sequence.queue[_sequence.pos++];
     try {
       // NORMAL 优先级高于待机(IDLE)，所以序列播放期间待机动作抢不走它
       model.motion(CFG.transform.group, index, PIXI.live2d.MotionPriority.NORMAL);
     } catch (e) {
-      _sequence = null;
+      finishTransform();
+    }
+  }
+
+  /** 序列收尾：解除待机层让位，并标记"下一帧把变身参数写回中性值" */
+  function finishTransform() {
+    _sequence = null;
+    _transformResetPending = true;
+  }
+
+  /**
+   * 把变身相关参数写回中性值（写一帧就够，见 CFG.transform.reset）
+   *
+   * 写在 afterMotionUpdate 会被随后的 saveParameters() 记进基准值，
+   * 所以写一次就持续生效；之后有表情/动作写同名参数时自然覆盖它。
+   */
+  function applyTransformReset() {
+    if (!_transformResetPending) return;
+    _transformResetPending = false;
+    if (!modelReady || !model) return;
+    var core = model.internalModel && model.internalModel.coreModel;
+    if (!core || typeof core.setParameterValueById !== 'function') return;
+
+    var reset = CFG.transform.reset, id;
+    for (id in reset) {
+      if (!Object.prototype.hasOwnProperty.call(reset, id)) continue;
+      try {
+        if (!paramOK(core, id)) continue;
+        core.setParameterValueById(id, reset[id]);
+      } catch (e) { /* 单个参数失败不影响其他 */ }
     }
   }
 
@@ -606,6 +663,7 @@
     // 不碰 ParamMouthOpenY（那是口型的通道）
     updateIdle(dt);
     applyIdle();
+    applyTransformReset();
   }
 
   function onBeforeModelUpdate() {
@@ -866,6 +924,7 @@
           flickEnd: _idleFlickEnd
         };
         out.sequence = _sequence ? { pos: _sequence.pos, queue: _sequence.queue } : null;
+        out.transformResetPending = _transformResetPending;
       } catch (e) { out.error = String(e); }
       return JSON.stringify(out);
     },

@@ -47,6 +47,7 @@ class ConfigRepository(private val context: Context) {
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
         val WAIT_TTS_BEFORE_RECORD = stringPreferencesKey("wait_tts_before_record")
         val LIVE2D_ENABLED = stringPreferencesKey("live2d_enabled")
+        val LIVE2D_TRANSFORM_ENABLED = stringPreferencesKey("live2d_transform_enabled")
     }
 
     val configFlow: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -75,7 +76,8 @@ class ConfigRepository(private val context: Context) {
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             customPrompt = prefs[CUSTOM_PROMPT] ?: "",
             waitTtsBeforeRecord = prefs[WAIT_TTS_BEFORE_RECORD]?.toBooleanStrictOrNull() ?: true,
-            live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true
+            live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
+            live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true
         )
     }
 
@@ -106,6 +108,7 @@ class ConfigRepository(private val context: Context) {
             prefs[CUSTOM_PROMPT] = config.customPrompt
             prefs[WAIT_TTS_BEFORE_RECORD] = config.waitTtsBeforeRecord.toString()
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()
+            prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
         }
     }
 
