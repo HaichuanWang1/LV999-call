@@ -29,11 +29,17 @@
     python tools/live2d_strip_watermark.py --model-dir app/src/main/assets/live2d/models/silverwolf
     python tools/live2d_strip_watermark.py --model-dir ... --dry-run    # 只报告不写回
     python tools/live2d_strip_watermark.py --model-dir ... --no-backup
+    python tools/live2d_strip_watermark.py --model-dir ... --backup-dir build/live2d-watermark-backup
+
+⚠️ 备份默认落在系统临时目录，**绝不能落在 assets 里** ——
+`app/src/main/assets/` 下的任何文件（包括 `*.orig`）都会被 Gradle 原样打进 APK，
+等于把带水印的原图一起发出去（本脚本踩过这个坑，所以下面有硬性拦截）。
 """
 import argparse
 import os
 import shutil
 import sys
+import tempfile
 
 # (相对 model-dir 的纹理路径, x0, y0, x1, y1, 说明)
 WATERMARKS = [
@@ -49,8 +55,20 @@ WATERMARKS = [
     ),
 ]
 
+DEFAULT_BACKUP_ROOT = os.path.join(tempfile.gettempdir(), "live2d_watermark_backup")
 
-def strip_one(path: str, box, backup: bool, dry_run: bool) -> int:
+
+def guard_not_in_assets(path: str) -> None:
+    """备份路径若落在 assets 目录内，会被 Gradle 打进 APK —— 直接拒绝。"""
+    parts = os.path.normpath(os.path.abspath(path)).lower().split(os.sep)
+    if "assets" in parts:
+        raise SystemExit(
+            f"拒绝把备份写进 assets 目录（会随 APK 发出去）: {path}\n"
+            f"改用 --backup-dir 指到 assets 之外，例如 --backup-dir build/live2d-watermark-backup"
+        )
+
+
+def strip_one(path: str, box, backup_dir, dry_run: bool) -> int:
     from PIL import Image
 
     im = Image.open(path).convert("RGBA")
@@ -65,10 +83,13 @@ def strip_one(path: str, box, backup: bool, dry_run: bool) -> int:
     if dry_run:
         return (x1 - x0) * (y1 - y0)
 
-    if backup:
-        bak = path + ".orig"
+    if backup_dir:
+        bak = os.path.join(backup_dir, os.path.basename(path) + ".orig")
+        guard_not_in_assets(bak)
+        os.makedirs(os.path.dirname(bak), exist_ok=True)
         if not os.path.exists(bak):
             shutil.copy2(path, bak)
+            print(f"       备份 -> {bak}")
 
     im.paste(clear, (x0, y0))
     im.save(path)
@@ -80,6 +101,11 @@ def main() -> int:
     ap.add_argument("--model-dir", required=True, help="模型目录（含 .moc3 与纹理目录）")
     ap.add_argument("--dry-run", action="store_true", help="只检查不写回")
     ap.add_argument("--no-backup", action="store_true", help="不生成 .orig 备份")
+    ap.add_argument(
+        "--backup-dir",
+        default=None,
+        help=f"备份目录（默认 {DEFAULT_BACKUP_ROOT}/<模型名>；禁止放在 assets 内）",
+    )
     args = ap.parse_args()
 
     if not os.path.isdir(args.model_dir):
@@ -92,7 +118,19 @@ def main() -> int:
         print("需要 Pillow: pip install pillow")
         return 1
 
+    model_name = os.path.basename(os.path.normpath(args.model_dir))
+    if args.no_backup:
+        backup_root = None
+    elif args.backup_dir:
+        backup_root = os.path.join(args.backup_dir, model_name)
+    else:
+        backup_root = os.path.join(DEFAULT_BACKUP_ROOT, model_name)
+    if backup_root:
+        guard_not_in_assets(backup_root)
+
     print(f"模型目录: {args.model_dir}")
+    if backup_root:
+        print(f"备份目录: {backup_root}")
     total = 0
     for rel, x0, y0, x1, y1, note in WATERMARKS:
         path = os.path.join(args.model_dir, rel)
@@ -100,7 +138,8 @@ def main() -> int:
             print(f"  [skip] 找不到 {rel}")
             continue
         box = (x0, y0, x1, y1)
-        cleared = strip_one(path, box, backup=not args.no_backup, dry_run=args.dry_run)
+        dest = os.path.join(backup_root, os.path.dirname(rel)) if backup_root else None
+        cleared = strip_one(path, box, backup_dir=dest, dry_run=args.dry_run)
         total += cleared
         flag = "待清理" if args.dry_run else ("已清理" if cleared else "已经是空的")
         print(f"  [ok] {rel} {box} {flag}  {note}")
@@ -108,7 +147,9 @@ def main() -> int:
     if args.dry_run:
         print(f"dry-run：将清理 {total} 像素")
     else:
-        print(f"完成，共清理 {total} 像素（原图备份为 *.png.orig）")
+        print(f"完成，共清理 {total} 像素")
+        if backup_root:
+            print(f"原图备份在 {backup_root}（assets 之外，不会进 APK）")
     return 0
 
 
