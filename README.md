@@ -101,6 +101,7 @@ app/src/main/assets/live2d/  # Live2D 资源
 tools/
 ├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
 ├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
+├── live2d_strip_watermark.py  # 剔除图集里的署名水印（坐标由 moc3 解析得到）
 ├── live2d_selftest.cjs        # 桥接层自测（30 项断言）
 ├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
 ├── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
@@ -243,6 +244,24 @@ CallScreen 下发 Live2DController.setExpression()，保持到本轮说完再回
    然后跑 `node tools/check_expression_names.cjs` 校验名字是否对得上
 
 > 自备模型同样在 `.gitignore` 覆盖范围内，不会被误提交。
+
+### 剔除模型自带的水印
+
+网上下载的模型常带署名水印（画序压在全部角色图层之上的贴片，永远可见）。
+本项目当前用的银狼模型就带两块，已剔除，脚本留在仓库里可复现：
+
+```bash
+python tools/live2d_strip_watermark.py --model-dir app/src/main/assets/live2d/models/silverwolf --dry-run
+python tools/live2d_strip_watermark.py --model-dir app/src/main/assets/live2d/models/silverwolf
+```
+
+- **坐标不是估的**：用 Cubism Core 解析 `.moc3` 得到「部位名 → drawable → 顶点 UV bbox → 像素矩形」。
+  当前两块分别是 `槿絮水印.png`(texture_00 `x17-1016,y17-1463`，画序 373/375)
+  与 `夜墨ww黑色.png`(texture_01 `x2192-3170,y1936-2852`，画序 374/375)。
+- **安全性**：已逐个 drawable 核对，两个矩形区域内只被水印自己的 UV 引用，
+  没有任何角色部件采样到；实测擦除后「矩形外被改动像素 = 0」。
+- **换模型要重新解析**，坐标不能照抄。
+- 脚本默认把原图备份成 `*.png.orig`，可回滚。
 
 ### 自测
 
