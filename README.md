@@ -102,7 +102,9 @@ tools/
 ├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
 ├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
 ├── live2d_strip_watermark.py  # 剔除图集里的署名水印（坐标由 moc3 解析得到）
-├── live2d_selftest.cjs        # 桥接层自测（30 项断言）
+├── live2d_make_idle.py        # 生成待机动作（Idle 组），改模型文件的可重复来源
+├── live2d_motion_check.cjs    # 动作文件校验（真 Cubism Core + moc3 值域/物理表交叉核对）
+├── live2d_selftest.cjs        # 桥接层自测（45 项断言）
 ├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
 ├── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
 ├── audio_pipe_test.sh         # AudioPipe 自测（12 项断言，JVM 直跑真实 .class）
@@ -224,6 +226,44 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
 - 有情绪表情时状态姿态自动压到 30%，避免「生气脸配聆听微笑」
 - 真机调参：`L2D.setIdleEnabled(false)` 可整体关掉待机层做 A/B 对比，
   `L2D.debug()` 会连同当前待机值一起返回
+
+### 偶发待机动作（Idle 组）
+
+程序化层负责"一直在线"的微表情，**大一点的自发姿态**（转头张望、换重心）
+用动作曲线更自然，所以另外生成 3 条注册进 `Idle` 组：
+
+| 文件 | 时长 | 内容 |
+|---|---|---|
+| `idle_glance` | 4.5s | 快速瞥一眼旁边（像听到动静） |
+| `idle_lookaround` | 7.5s | 慢慢左右张望一圈 |
+| `idle_stretch` | 8.0s | 换重心松一下身子 |
+
+- **故意非循环**（`Loop: false`）。运行库的机制是「一条播完立刻随机抽下一条」，
+  循环动作会让它永远停在同一条上；非循环 + 末尾留一段静止，才有"偶尔动一下"的节奏。
+- **通道与程序化层不重叠**，否则会被覆盖（那层写在 `afterMotionUpdate`，晚于动作更新）：
+
+  | 谁 | 管哪些参数 |
+  |---|---|
+  | 程序化层（bridge.js） | 眉毛 / 眼形 / 嘴形 / 呼吸 / `ParamAngleZ` 头侧倾 / `ParamBodyAngleZ` 身体摆 |
+  | 动作文件（本组） | `ParamAngle{X,Y}` 头 yaw·pitch / `ParamBodyAngle{X,Y}` 腰 / `ParamEyeBall{X,Y}` 眼球 |
+
+- 模型目录不入库，所以**脚本才是改动的唯一事实来源**：
+  `python tools/live2d_make_idle.py`（幂等，可反复执行；`--dry-run` 预览、`--remove` 撤销）。
+  备份写到 `app/build/live2d-idle-backup/` —— 绝不能放回 `assets/`，
+  否则会被打进 APK 一起分发（水印那次已经踩过一次）。
+- 校验：`node tools/live2d_motion_check.cjs`。用**真 Cubism Core**
+  （asm.js 自包含，不需要 `.wasm`）离线加载 moc3，核对参数是否存在、值域是否越界
+  （按 60fps 采样，避免把贝塞尔控制点误判成越界）、段计数是否自洽，
+  并与 `physics3.json` 交叉核对"没写到物理输出参数上"。
+
+顺带查出**作者原文件**的三个问题（工具只告警，不改动别人的文件）：
+
+1. `m_transform_2` 的划卡特效 `Param172` 写成 10→20，而 moc3 上限是 **10** ——
+   那半段特效一直贴在最大值上，看起来"没在动"（`m_transform_1` 的 0→10 才在范围内）。
+2. `m_angry_loop` 里 `Param143/144/148` 写到 2（上限 1）、`Param145` 写到 20（上限 10）、
+   `Param55` 写到 10（上限 5），末尾一段同样被 clamp。
+3. `Transform` 与 `AngryLoop` 都有曲线写着**物理输出**参数
+   （`ParamAngleX2`、`ParamBodyAngleX3` 等），那些曲线会被物理覆盖。
 
 ### LLM 情绪表情 ⚠️ 存疑：待真机复验
 

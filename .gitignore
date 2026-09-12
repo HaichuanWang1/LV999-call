@@ -52,3 +52,7 @@ release.jks
 
 # 自备/私有模型（防止误提交）
 # 放到上述 models/ 目录即可，已被整目录忽略
+
+# Python 工具的运行产物（tools/ 下有 .py 脚本）
+__pycache__/
+*.pyc
