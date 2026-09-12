@@ -265,6 +265,22 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
 3. `Transform` 与 `AngryLoop` 都有曲线写着**物理输出**参数
    （`ParamAngleX2`、`ParamBodyAngleX3` 等），那些曲线会被物理覆盖。
 
+### 变身过场（TransformOnce）
+
+模型自带的 `Transform_1/2` 是同一段演出的前后两半，但都是 `Loop: true`，
+直接播会一直循环。生成器抄了两份**只改 `Meta.Loop`** 的副本
+（`transform_in` / `transform_out`，生成时断言"除 Loop 外逐字段相同"），
+注册成 `TransformOnce` 组，并接成一次性序列：
+
+- **接通**：播 `full`（进入 → 还原，约 4.7s），正好盖住"等首句"的空白，
+  由 `CallScreen` 在模型就绪后触发一次（`entrancePlayed` 保证每通电话只播一次）
+- 序列靠运行库的 `motionFinish` 事件推进。注意 **`Idle` 组的动作播完也会触发它**，
+  所以回调里必须确认 `state.currentGroup` 是 `TransformOnce`，否则序列会被待机动作提前推进
+- 播放期间程序化待机层**整体归零让位**（变身动作自己也画眉毛/眼睛，
+  而待机层写在 `afterMotionUpdate`，不让位就会把它盖掉）
+- 仍然保留作者那份"越界"的原数据：`transform_out` 的 `Param172` 写着 10~20
+  而 moc3 上限是 10，所以后半段的划卡特效会一直贴在最大值上（校验工具会告警）
+
 ### LLM 情绪表情 ⚠️ 存疑：待真机复验
 
 > **当前状态：机制已跑通，观感未确认，不要当成已完成功能。**

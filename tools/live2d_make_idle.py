@@ -47,7 +47,40 @@ DEFAULT_BACKUP_DIR = os.path.join(ROOT, "app", "build", "live2d-idle-backup")
 GROUP_NAME = "Idle"
 
 # ---------------------------------------------------------------------------
-# 动作定义
+# 变身过场
+#
+# 作者原文件 m_transform_1/2 是同一段演出的前后两半（_1 = 摘下眼镜+变身开+
+# 划卡特效 0→10，_2 = 戴回眼镜+变身关+特效 10→20），但**都是 Loop: true**，
+# 直接播会一直循环 —— 所以生成两份"只改 Loop"的一次性副本，注册成 TransformOnce 组。
+#
+# 刻意不动其它任何数据（包括作者写越界的 Param172 10→20）：原文件是作者的资产，
+# 抄一份改行为可以，改数据不行。生成时会断言"除 Loop 外逐字节相同"。
+# ---------------------------------------------------------------------------
+TRANSFORM_GROUP = "TransformOnce"
+TRANSFORM_COPIES = [
+    {
+        "src": "m_transform_1.motion3.json",
+        "dst": "transform_in.motion3.json",
+        "comment": "变身·进入（摘眼镜、变身开、划卡特效 0→10）",
+    },
+    {
+        "src": "m_transform_2.motion3.json",
+        "dst": "transform_out.motion3.json",
+        "comment": "变身·还原（戴回眼镜、变身关、划卡特效 10→20，作者原值越界会被 clamp）",
+    },
+]
+
+# 这些参数由 bridge.js 的程序化待机层每帧写入（见 CFG.idle.channels）。
+# 动作文件再写一遍会被覆盖（那层写在 afterMotionUpdate，晚于动作更新），
+# 所以这里明确禁止重叠 —— 排查"动作播了但没反应"时这是第一嫌疑人。
+RESERVED_BY_IDLE_LAYER = {
+    "ParamBrowLY", "ParamBrowRY", "ParamBrowLForm", "ParamBrowRForm",
+    "ParamEyeLSmile", "ParamEyeRSmile", "ParamEyeLSquint", "ParamEyeRSquint",
+    "ParamMouthForm", "ParamBreath", "ParamAngleZ", "ParamBodyAngleZ",
+}
+
+# ---------------------------------------------------------------------------
+# 待机动作定义
 #
 # 每个动作 = 一串曲线；每条曲线 = [(时间, 值), ...]（秒）。
 # 关键点之间用三次贝塞尔做缓入缓出（控制点取 1/3、2/3 处），比直线自然。
@@ -246,12 +279,47 @@ def backup(path, backup_dir):
         print(f"  [备份] {path} -> {dst}")
 
 
+def build_transform_copies(motion_dir, dry_run, quiet=False):
+    """生成"只改 Loop"的一次性副本
+
+    返回 (动作组条目, 问题列表)。刻意不动作者的任何数据 ——
+    包括写得越界的 Param172（那是原文件的问题，抄一份改行为可以，改数据不行），
+    所以这里断言"除 Meta.Loop 外逐字段相同"。
+    """
+    entries, problems = [], []
+    for spec in TRANSFORM_COPIES:
+        src_path = os.path.join(motion_dir, spec["src"])
+        if not os.path.exists(src_path):
+            problems.append(f"找不到源文件 {src_path}")
+            continue
+        with open(src_path, encoding="utf-8") as fh:
+            src = json.load(fh)
+        if src.get("Meta", {}).get("Loop") is not True:
+            problems.append(f"{spec['src']} 的 Meta.Loop 不是 true（可能已经是副本）")
+        dst = json.loads(json.dumps(src))
+        dst["Meta"]["Loop"] = False
+        # 反向还原一次，确认只动了 Loop 这一个字段
+        check = json.loads(json.dumps(dst))
+        check["Meta"]["Loop"] = True
+        if check != src:
+            problems.append(f"{spec['dst']}: 除 Loop 外还有其它改动，拒绝写入")
+            continue
+        if not dry_run:
+            write_json(os.path.join(motion_dir, spec["dst"]), dst)
+        entries.append({"File": f"motions/{spec['dst']}"})
+        if not quiet:
+            print(f"  {spec['dst']}  <-  {spec['src']}  (Loop: true -> false)  {spec['comment']}")
+    if problems:
+        return None, problems
+    return entries, []
+
+
 def main():
-    ap = argparse.ArgumentParser(description="生成银狼模型的待机动作（Idle 组）")
+    ap = argparse.ArgumentParser(description="生成待机动作（Idle 组）与变身过场副本")
     ap.add_argument("--model", default=DEFAULT_MODEL_DIR, help="模型目录")
     ap.add_argument("--backup-dir", default=DEFAULT_BACKUP_DIR)
     ap.add_argument("--dry-run", action="store_true", help="只打印，不写文件")
-    ap.add_argument("--remove", action="store_true", help="撤掉 Idle 组与生成的动作文件")
+    ap.add_argument("--remove", action="store_true", help="撤掉生成的组与动作文件")
     args = ap.parse_args()
 
     model_dir = os.path.abspath(args.model)
@@ -268,13 +336,14 @@ def main():
     if args.remove:
         with open(model_json, encoding="utf-8") as fh:
             data = json.load(fh)
-        existed = data.get("FileReferences", {}).get("Motions", {}).pop(GROUP_NAME, None)
-        print(f"  移除动作组 {GROUP_NAME}: {'有' if existed else '本来就没有'}")
+        motions = data.get("FileReferences", {}).get("Motions", {})
+        for name in (GROUP_NAME, TRANSFORM_GROUP):
+            print(f"  移除动作组 {name}: {'有' if motions.pop(name, None) else '本来就没有'}")
         if not args.dry_run:
             backup(model_json, guard_backup_dir(args.backup_dir))
             write_json(model_json, data)
-            for spec in MOTIONS:
-                p = os.path.join(motion_dir, spec["file"])
+            for spec in MOTIONS + TRANSFORM_COPIES:
+                p = os.path.join(motion_dir, spec["file"] if "file" in spec else spec["dst"])
                 if os.path.exists(p):
                     os.remove(p)
                     print(f"  删除 {p}")
@@ -291,19 +360,31 @@ def main():
                 print(f"    [问题] {p}")
             sys.exit("有校验问题，未写入任何文件")
 
+    print(f"\n== 生成变身过场（{TRANSFORM_GROUP} 组）==")
+    # 先静默跑一遍做校验，确认没问题再动任何文件
+    entries, problems = build_transform_copies(motion_dir, True, quiet=True)
+    if problems:
+        for p in problems:
+            print(f"    [问题] {p}")
+        sys.exit("有校验问题，未写入任何文件")
+
     with open(model_json, encoding="utf-8") as fh:
         data = json.load(fh)
     refs = data.setdefault("FileReferences", {})
     motions = refs.setdefault("Motions", {})
     motions[GROUP_NAME] = [{"File": f"motions/{s['file']}"} for s in MOTIONS]
-    # 组顺序：把 Idle 放最前，便于人工核对（库按名字查找，顺序无功能影响）
-    refs["Motions"] = {GROUP_NAME: motions.pop(GROUP_NAME), **motions}
+    motions[TRANSFORM_GROUP] = entries
+    # 组顺序：我们生成的放最前，便于人工核对（库按名字查找，顺序无功能影响）
+    refs["Motions"] = {GROUP_NAME: motions.pop(GROUP_NAME),
+                       TRANSFORM_GROUP: motions.pop(TRANSFORM_GROUP), **motions}
 
     if args.dry_run:
         print("\n[dry-run] 将写入：")
         for spec in MOTIONS:
             print(f"  {os.path.join(motion_dir, spec['file'])}")
-        print(f"  注册 {GROUP_NAME} 组 -> {model_json}")
+        for spec in TRANSFORM_COPIES:
+            print(f"  {os.path.join(motion_dir, spec['dst'])}")
+        print(f"  注册 {GROUP_NAME} / {TRANSFORM_GROUP} 组 -> {model_json}")
         print(f"  备份目录 {guard_backup_dir(args.backup_dir)}")
         return 0
 
@@ -313,10 +394,12 @@ def main():
         path = os.path.join(motion_dir, spec["file"])
         write_json(path, build_motion(spec))
         print(f"  [写入] {path}")
+    build_transform_copies(motion_dir, False)
 
     write_json(model_json, data)
     print(f"  [写入] {model_json}")
-    print(f"\n完成：{len(MOTIONS)} 条待机动作已注册到 {GROUP_NAME} 组。")
+    print(f"\n完成：{len(MOTIONS)} 条待机动作 -> {GROUP_NAME} 组，"
+          f"{len(TRANSFORM_COPIES)} 条变身副本 -> {TRANSFORM_GROUP} 组。")
     print("校验：node tools/live2d_motion_check.cjs")
     return 0
 

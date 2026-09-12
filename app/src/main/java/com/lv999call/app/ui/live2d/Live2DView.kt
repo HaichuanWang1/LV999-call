@@ -138,6 +138,21 @@ class Live2DController internal constructor() {
     }
 
     /**
+     * 播放变身过场
+     *
+     * 动作来自模型自带的 Transform_1/2（作者原文件是 Loop 的，副本才是一次性），
+     * 由 tools/live2d_make_idle.py 生成并注册成 TransformOnce 组。
+     *
+     * @param phase "full"（进入→还原，约 4.7s）/ "in" / "out"（只还原，约 2.3s）
+     *
+     * 动作组不存在时 JS 侧只记一条警告并返回 false，不会抛异常。
+     */
+    fun playTransform(phase: String = "full") {
+        if (status != Live2DStatus.READY) return
+        eval("window.L2D && window.L2D.playTransform('${phase.jsEscape()}')")
+    }
+
+    /**
      * 情绪表情（传模型 Expressions[].Name 的真实值，如 `"03生气"`；null 复位）。
      *
      * 与 [setState] 的关系：JS 侧把它记为「情绪覆盖层」，状态切换时仍然优先生效

@@ -22,6 +22,7 @@ const BRIDGE = fs.readFileSync(BRIDGE_PATH, 'utf8');
 const rec = { params: {}, expressions: [], motions: [], focus: [], scale: [], events: [], anchor: [] };
 let beforeModelUpdate = null;
 let afterMotionUpdate = null;
+let onMotionFinish = null;
 
 // 真实模型里存在的参数（够覆盖口型 + 待机通道即可）
 // 故意不列出 ParamMouthOpen："CFG.lipSyncParams 里有、但模型没有该参数时应被跳过"，
@@ -54,7 +55,12 @@ const model = {
       definitions: [{ Name: '01黑脸' }, { Name: '03 生气' }, { Name: '06 0.0' }, { Name: '月卡' }],
       resetExpression() { rec.expressions.push('<reset>'); },
     },
-    motionManager: { definitions: { Idle: [0, 1, 2], Tap: [0, 1] } },
+    motionManager: {
+      definitions: { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}] },
+      // 序列推进依赖 motionFinish 事件与 state.currentGroup（事件在 complete() 之前触发）
+      state: { currentGroup: undefined, currentIndex: undefined },
+      on(evt, cb) { if (evt === 'motionFinish') onMotionFinish = cb; },
+    },
     on(evt, cb) {
       if (evt === 'afterMotionUpdate') afterMotionUpdate = cb;
       if (evt === 'beforeModelUpdate') beforeModelUpdate = cb;
@@ -359,7 +365,67 @@ function check(name, cond, extra = '') {
     console.log('  (跳过物理交叉校验：本地没有模型文件)');
   }
 
-  console.log('\n[12] dispose 释放');
+  console.log('\n[12] 变身过场（一次性动作序列）');
+
+  const mm = model.internalModel.motionManager;
+  // 模拟"某条动作播完"：事件回调触发时 state.currentGroup 仍是刚播完的那一组
+  const fireFinish = (group) => {
+    mm.state.currentGroup = group;
+    if (onMotionFinish) onMotionFinish();
+    mm.state.currentGroup = undefined;
+  };
+
+  rec.motions.length = 0;
+  check('playTransform("full") 启动序列', win.L2D.playTransform('full') === true);
+  check('先播"进入"（索引 0，NORMAL 优先级）',
+        rec.motions.length === 1 && rec.motions[0][1] === 0 &&
+        rec.motions[0][0] === 'TransformOnce' &&
+        rec.motions[0][2] === global.PIXI.live2d.MotionPriority.NORMAL,
+        JSON.stringify(rec.motions));
+
+  // 关键回归：Idle 组现在有动作，待机动作播完也会触发 motionFinish，
+  // 不做组名判断的话序列会被提前推进
+  fireFinish('Idle');
+  check('待机动作播完不会推进变身序列', rec.motions.length === 1, JSON.stringify(rec.motions));
+
+  fireFinish('TransformOnce');
+  check('"进入"播完自动接"还原"（索引 1）',
+        rec.motions.length === 2 && rec.motions[1][1] === 1, JSON.stringify(rec.motions));
+
+  fireFinish('TransformOnce');
+  check('序列播完就结束（debug 里 sequence 为 null）',
+        rec.motions.length === 2 && win.L2D.debug().indexOf('"sequence":null') >= 0,
+        JSON.stringify(rec.motions));
+
+  // 过场期间压掉待机层：变身动作也写眉毛，不压会被后写的待机层盖掉
+  rec.motions.length = 0;
+  win.L2D.playTransform('out');
+  tick(120);
+  const mute = win.L2D.getIdle();
+  check('过场期间待机层让位（值归零）',
+        Object.keys(mute).every((k) => Math.abs(mute[k]) < 0.02), JSON.stringify(mute));
+  check('"out" 只播"还原"（索引 1）',
+        rec.motions.length === 1 && rec.motions[0][1] === 1, JSON.stringify(rec.motions));
+
+  fireFinish('TransformOnce');
+  tick(180);
+  const back = win.L2D.getIdle();
+  // 不写死具体数值（姿态随当前状态变），只要求"明显离开了 0"
+  const moved = Object.keys(back).some((k) => Math.abs(back[k] - (mute[k] || 0)) > 0.05);
+  check('过场结束后待机层恢复', moved, JSON.stringify(back));
+
+  // 动作组缺失时必须"返回 false + 警告"，不能静默失败
+  mm.definitions = { Idle: [0, 1, 2] };
+  let warned = false;
+  const origWarn = console.warn;
+  console.warn = () => { warned = true; };
+  const started = win.L2D.playTransform('full');
+  console.warn = origWarn;
+  check('动作组缺失时返回 false 并警告', started === false && warned,
+        `started=${started} warned=${warned}`);
+  mm.definitions = { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}] };
+
+  console.log('\n[13] dispose 释放');
   win.L2D.dispose();
   check('dispose 后 ready 为 false', win.L2D.ready === false);
 

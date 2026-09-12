@@ -123,6 +123,23 @@
       // 有情绪表情（LLM 触发）时，把状态姿态压到这个比例
       // 否则会出现「明明在生气，眉毛却在笑」的错位
       cuePoseScale: 0.3
+    },
+
+    // ==================== 变身过场（一次性动作）====================
+    //
+    // 模型自带的 Transform_1/2 是同一段演出的前后两半（_1 摘眼镜+变身开+特效
+    // 0→10，_2 戴回眼镜+变身关+特效 10→20），但**都是 Loop: true**，直接播会
+    // 一直循环。tools/live2d_make_idle.py 生成两份"只改 Loop"的副本并注册成
+    // TransformOnce 组（0 = 进入 / 1 = 还原）。
+    transform: {
+      enabled: true,
+      group: 'TransformOnce',
+      inIndex: 0,
+      outIndex: 1,
+
+      // 播放期间压掉程序化待机层：变身动作自己会画眉毛/眼睛，
+      // 而待机层写在 afterMotionUpdate（更晚），不压就会把它盖掉
+      muteIdle: true
     }
   };
 
@@ -167,6 +184,7 @@
   var _idleFlickAt = 1.5;         // 下一次"耳抖"的时间点（秒），启动后 1.5~3.5s 来第一下
   var _idleFlickEnd = -1;         // 当前耳抖的结束时间点，-1 表示没有正在进行的
   var _idleValid = null;          // {参数id: 是否存在} 缓存，避免每帧都查一遍
+  var _sequence = null;           // 正在播的一次性动作序列：{queue:[索引...], pos:0}
 
   // ======================= Android 通信 ========================
   function notify(type, payload) {
@@ -430,6 +448,10 @@
     var base = cfg.poses.idle;
     // 有情绪表情（LLM 触发）时压制状态姿态，否则会出现「生气脸配聆听微笑」
     var scale = _cue ? cfg.cuePoseScale : 1;
+    // 变身过场期间整体让位：那套动作自己会画眉毛/眼睛，而本层写得更晚会盖掉它。
+    // 注意要连 idle 姿态的基线（呼吸 0.10、身体摆 1.0）一起压掉，只压"状态偏移"
+    // 会留下基线值，等于没完全让位。
+    var gate = (_sequence && CFG.transform.muteIdle) ? 0 : 1;
     var target = {};
 
     // 1. 状态姿态：只取相对 idle 的偏移，新增状态时不必重复写全套
@@ -465,7 +487,8 @@
     var k = 1 - Math.pow(1 - cfg.poseRate, dt * 60);
     for (i in _idleValue) {
       if (!Object.prototype.hasOwnProperty.call(_idleValue, i)) continue;
-      _idleValue[i] += ((target[i] || 0) - _idleValue[i]) * k;
+      var want = (target[i] || 0) * gate;   // gate=0 时整体归零（变身过场让位）
+      _idleValue[i] += (want - _idleValue[i]) * k;
     }
   }
 
@@ -494,6 +517,65 @@
         } catch (e) { /* 单个参数失败不影响其他 */ }
       }
     }
+  }
+
+  // ======================= 一次性动作序列 =======================
+  /**
+   * 播放变身过场
+   *
+   * 作者原动作是 Loop 的，只有副本（transform_in/out）才是一次性：
+   *   'in'  只播"进入"（摘眼镜、变身开）
+   *   'out' 只播"还原"（戴回眼镜、变身关）
+   *   其它  播完整序列（进入 → 还原）
+   *
+   * @returns 是否真的开始播（动作组缺失时返回 false）
+   */
+  function startTransform(phase) {
+    if (!modelReady || !model || !CFG.transform.enabled) return false;
+
+    var mm = model.internalModel && model.internalModel.motionManager;
+    var list = mm && mm.definitions && mm.definitions[CFG.transform.group];
+    if (!list || !list.length) {
+      // 静默失败会变成"调了没反应"，必须留下痕迹：多半是没跑生成脚本
+      console.warn('[L2D] 没有动作组 ' + CFG.transform.group +
+                   '（跑一下 tools/live2d_make_idle.py）');
+      return false;
+    }
+
+    var queue = phase === 'in' ? [CFG.transform.inIndex]
+              : phase === 'out' ? [CFG.transform.outIndex]
+              : [CFG.transform.inIndex, CFG.transform.outIndex];
+    _sequence = { queue: queue, pos: 0 };
+    stepTransform();
+    return true;
+  }
+
+  /** 播序列里的下一条（队列空了就结束） */
+  function stepTransform() {
+    if (!_sequence) return;
+    if (_sequence.pos >= _sequence.queue.length) { _sequence = null; return; }
+    var index = _sequence.queue[_sequence.pos++];
+    try {
+      // NORMAL 优先级高于待机(IDLE)，所以序列播放期间待机动作抢不走它
+      model.motion(CFG.transform.group, index, PIXI.live2d.MotionPriority.NORMAL);
+    } catch (e) {
+      _sequence = null;
+    }
+  }
+
+  /**
+   * 动作播完的回调
+   *
+   * 待机动作也会触发 motionFinish（Idle 组现在有 3 条），所以必须确认
+   * 播完的正是我们排的那一组，否则序列会被待机动作提前推进。
+   */
+  function onMotionFinish() {
+    if (!_sequence || !model) return;
+    var mm = model.internalModel && model.internalModel.motionManager;
+    var state = mm && mm.state;
+    // 事件在 state.complete() 之前触发，此刻 currentGroup 仍是刚播完的那一组
+    if (state && state.currentGroup !== CFG.transform.group) return;
+    stepTransform();
   }
 
   /**
@@ -688,6 +770,16 @@
       } catch (e) { /* ignore */ }
     },
 
+    /**
+     * 播放变身过场：'in'（进入）| 'out'（还原）| 'full'（进入→还原）
+     *
+     * 接通时用 'full'（约 4.7s，正好盖住等待首句的时间），
+     * 挂断时用 'out'（约 2.3s）—— 挂断后界面会立刻跳走，给太长看不到。
+     */
+    playTransform: function (phase) {
+      return startTransform(phase === undefined || phase === null ? 'full' : String(phase));
+    },
+
     /** 调整布局：{fillRatio, offsetX, offsetY} */
     setLayout: function (opts) {
       try {
@@ -773,6 +865,7 @@
           values: _idleValue,
           flickEnd: _idleFlickEnd
         };
+        out.sequence = _sequence ? { pos: _sequence.pos, queue: _sequence.queue } : null;
       } catch (e) { out.error = String(e); }
       return JSON.stringify(out);
     },
@@ -870,6 +963,12 @@
         // 关键：口型注入点
         model.internalModel.on('afterMotionUpdate', onAfterMotionUpdate);
         model.internalModel.on('beforeModelUpdate', onBeforeModelUpdate);
+
+        // 动作播完的回调（一次性序列靠它推进；待机动作也会触发，处理函数里认组名）
+        var mmanager = model.internalModel.motionManager;
+        if (mmanager && typeof mmanager.on === 'function') {
+          mmanager.on('motionFinish', onMotionFinish);
+        }
 
         currentState = 'idle';
         applyState('idle');

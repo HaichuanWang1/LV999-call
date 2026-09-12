@@ -103,6 +103,17 @@ fun CallScreen(
         l2d.setMouthEnabled(callState == CallState.SPEAKING)
     }
 
+    // 接通过场：模型就绪后播一次变身（进入→还原，约 4.7s），
+    // 正好盖住"等首句"的那段空白。只播一次 —— 上面的 LaunchedEffect
+    // 每次状态切换都会重跑，触发放在那里会变成每轮对话都变身。
+    var entrancePlayed by remember { mutableStateOf(false) }
+    LaunchedEffect(l2dStatus) {
+        if (l2dStatus == Live2DStatus.READY && !entrancePlayed) {
+            entrancePlayed = true
+            l2d.playTransform("full")
+        }
+    }
+
     // 口型驱动：每帧把最新音量推给控制器（控制器内部已限流到 ~60fps）
     SideEffect {
         if (callState == CallState.SPEAKING) l2d.setMouth(audioLevel)

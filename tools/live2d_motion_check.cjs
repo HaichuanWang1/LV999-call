@@ -254,6 +254,11 @@ function inspectMotion(file, params, physics) {
         (groups.AngryLoop || []).length === 1 &&
         (groups.Sleep || []).length === 1,
         JSON.stringify(names.map((n) => `${n}:${groups[n].length}`)));
+  if (groups.TransformOnce) {
+    check('变身过场组 TransformOnce 有 2 条（进入 + 还原）',
+          groups.TransformOnce.length === 2,
+          JSON.stringify(groups.TransformOnce.map((d) => d.File)));
+  }
 
   const hasIdle = !!groups.Idle && groups.Idle.length > 0;
   console.log(hasIdle
@@ -284,6 +289,7 @@ function inspectMotion(file, params, physics) {
       const outCurves = Object.keys(info.roles).filter((id) => info.roles[id] === 'output');
       const loop = info.meta.Loop === true;
       const ours = /^idle_/.test(path.basename(def.File));
+      const copy = /^transform_(in|out)/.test(path.basename(def.File));
 
       // 值域越界：我们自己的文件必须干净；作者原文件只提示（不是我们改的，
       // 但值得知道 —— 例如 m_transform_2 的 Param172 写着 10~20 而 moc3 上限是 10，
@@ -304,6 +310,9 @@ function inspectMotion(file, params, physics) {
         check(`${label} 未写物理输出参数`, outCurves.length === 0, outCurves.join(','));
         const owned = Object.keys(info.roles).filter((id) => OWNED_BY_IDLE_LAYER.indexOf(id) >= 0);
         check(`${label} 未与程序化待机层抢通道`, owned.length === 0, owned.join(','));
+      } else if (copy) {
+        // 这些是"只改 Loop"的副本，唯一要求就是别再变回循环
+        check(`${label} 是一次性动作（Loop: false）`, !loop, String(info.meta.Loop));
       } else if (outCurves.length) {
         warn(`${label} 有 ${outCurves.length} 条曲线写着物理输出参数（作者原文件，仅提示）：${outCurves.slice(0, 4).join(',')}`);
       }
