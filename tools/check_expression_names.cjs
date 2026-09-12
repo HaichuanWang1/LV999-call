@@ -31,11 +31,12 @@ const check = (name, cond, extra = '') => {
 
 const kt = fs.readFileSync(KT, 'utf8');
 
-// 枚举项：NAME("短标签", "模型真实名", "情绪说明"),
-const ENTRY = /^\s*([A-Z][A-Z0-9_]*)\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)/gm;
+// 枚举项：NAME("短标签", "模型真实名", "说明")，
+// 姿势类多一个参数：NAME("…", "…", "…", Kind.POSE)
+const ENTRY = /^\s*([A-Z][A-Z0-9_]*)\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*(?:,\s*(?:Live2DExpression\.)?Kind\.([A-Z_]+))?\s*\)/gm;
 const entries = [];
 for (const m of kt.matchAll(ENTRY)) {
-  entries.push({ name: m[1], key: m[2], modelName: m[3], hint: m[4] });
+  entries.push({ name: m[1], key: m[2], modelName: m[3], hint: m[4], kind: m[5] || 'EMOTION' });
 }
 
 const regexSrc = (kt.match(/TAG_REGEX\s*=\s*Regex\("""([\s\S]*?)"""\)/) || [])[1];
@@ -47,15 +48,22 @@ check('短标签唯一', new Set(entries.map((e) => e.key)).size === entries.len
 check('模型名唯一', new Set(entries.map((e) => e.modelName)).size === entries.length,
       entries.map((e) => e.modelName).join(','));
 check('每项都有情绪说明', entries.every((e) => e.hint.length > 0));
+check('条目只有 EMOTION / POSE 两种', entries.every((e) => e.kind === 'EMOTION' || e.kind === 'POSE'),
+      entries.filter((e) => e.kind !== 'EMOTION' && e.kind !== 'POSE').map((e) => e.name).join(','));
+const poses = entries.filter((e) => e.kind === 'POSE');
+check('至少有一条姿势类动作', poses.length >= 1, poses.map((e) => e.key).join(','));
 
 console.log('\n[2] 标签能被正则解析（Kotlin 与 JS 共用同一份正则源）');
 check('取到 TAG_REGEX', !!regexSrc, String(regexSrc));
 const TAG_ONE = new RegExp('^' + regexSrc + '$');
 for (const e of entries) {
-  const tag = `[[e:${e.key}]]`;
+  // 姿势走 [[m:…]]，情绪走 [[e:…]]；正则两个字母都收
+  const letter = e.kind === 'POSE' ? 'm' : 'e';
+  const tag = `[[${letter}:${e.key}]]`;
   const m = tag.match(TAG_ONE);   // 必须整串匹配：标签前后不能有残留字符
-  check(`[[e:${e.key}]]` + (m ? ' 解析为 ' + m[1] : ' 解析失败'),
-        !!m && m[1] === e.key, `匹配到 ${JSON.stringify(m && m[1])}`);
+  check(tag + (m ? ' 解析为通道 ' + m[1] + ' / ' + m[2] : ' 解析失败'),
+        !!m && m[2] === e.key && m[1].toLowerCase() === letter,
+        `匹配到 ${JSON.stringify(m && [m[1], m[2]])}`);
 }
 check('短标签不含方括号（否则会把相邻标签并成一个）',
       entries.every((e) => !/[\[\]]/.test(e.key)),
@@ -82,7 +90,8 @@ if (!fs.existsSync(MODEL)) {
 
   const used = new Set(entries.map((e) => norm(e.modelName)));
   const unused = modelNames.filter((n) => !used.has(norm(n)));
-  console.log('  提示 未开放给 LLM 的表情（手部/服装状态类）：' + (unused.join('、') || '无'));
+  console.log('  提示 未开放给 LLM 的表情（' + unused.join('、') + '）');
+  console.log(`  已开放：情绪 ${entries.length - poses.length} 条 / 姿势 ${poses.length} 条`);
 }
 
 console.log('\n' + '='.repeat(46));

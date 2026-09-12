@@ -3,7 +3,7 @@ package com.lv999call.app.domain.usecase
 import com.lv999call.app.domain.model.Live2DExpression
 
 /**
- * 从 LLM 流式输出中解析并剥离表情标签（[Live2DExpression.TAG_REGEX]）。
+ * 从 LLM 流式输出中解析并剥离表情 / 动作标签（[Live2DExpression.TAG_REGEX]）。
  *
  * 要解决两个现实问题：
  *
@@ -30,7 +30,7 @@ class ExpressionTagParser(
         val matches = Live2DExpression.TAG_REGEX.findAll(raw).toList()
 
         for (i in emitted until matches.size) {
-            Live2DExpression.byKey(matches[i].groupValues[1])?.let(onExpression)
+            Live2DExpression.byKey(matches[i].groupValues[2])?.let(onExpression)
         }
         emitted = matches.size
 
@@ -70,7 +70,7 @@ class ExpressionTagParser(
     }
 
     private companion object {
-        /** 形如 `[[` / `[[e` / `[[e:` / `[[e:生` 的未闭合前缀 */
-        val DANGLING_TAG = Regex("""\[\[\s*[eE]?\s*[:：]?\s*[^\[\]]{0,16}""")
+        /** 形如 `[[` / `[[e` / `[[m:` / `[[e:生` 的未闭合前缀 */
+        val DANGLING_TAG = Regex("""\[\[\s*[eEmM]?\s*[:：]?\s*[^\[\]]{0,16}""")
     }
 }

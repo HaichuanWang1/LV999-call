@@ -4,6 +4,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
+import com.lv999call.app.ui.call.HANGUP_TRANSFORM_MS
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import androidx.navigation.compose.NavHost
@@ -135,6 +137,8 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
+                        delay(HANGUP_TRANSFORM_MS)
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -246,6 +250,8 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
+                        delay(HANGUP_TRANSFORM_MS)
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -292,6 +298,8 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val currentSessionId = viewModel.getSessionId()
                     if (currentSessionId != null) {
+                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS
+                        delay(HANGUP_TRANSFORM_MS)
                         navController.navigate(Routes.history(currentSessionId)) { popUpTo(Routes.HOME) }
                     }
                 }

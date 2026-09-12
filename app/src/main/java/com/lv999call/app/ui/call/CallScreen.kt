@@ -65,6 +65,14 @@ private fun CallState.toLive2DState(): String = when (this) {
 private const val EXPRESSION_MIN_HOLD_MS = 1_500L
 private const val EXPRESSION_MAX_HOLD_MS = 30_000L
 
+/**
+ * 挂断过场时长（毫秒）
+ *
+ * ENDED 时 NavGraph 会立刻跳转历史页、Live2DView 也会被暂停，不延迟的话
+ * "还原变身"根本看不到。这个值必须和 NavGraph 跳转前的等待一致，故抽成常量。
+ */
+const val HANGUP_TRANSFORM_MS = 2_300L
+
 @Composable
 fun CallScreen(
     callState: CallState,
@@ -111,6 +119,17 @@ fun CallScreen(
         if (l2dStatus == Live2DStatus.READY && !entrancePlayed) {
             entrancePlayed = true
             l2d.playTransform("full")
+        }
+    }
+
+    // 挂断过场：播"还原"（约 2.3s）。跳转前的等待在 NavGraph，用的是同一个常量。
+    var hangupAnimating by remember { mutableStateOf(false) }
+    LaunchedEffect(callState) {
+        if (callState == CallState.ENDED) {
+            hangupAnimating = true
+            l2d.playTransform("out")
+            delay(HANGUP_TRANSFORM_MS)
+            hangupAnimating = false
         }
     }
 
@@ -193,7 +212,9 @@ fun CallScreen(
             Live2DView(
                 controller = l2d,
                 modifier = Modifier.fillMaxSize(),
-                paused = callState == CallState.ENDED,
+                // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
+                // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
+                paused = callState == CallState.ENDED && !hangupAnimating,
                 onStatusChange = { l2dStatus = it }
             )
         }
