@@ -62,6 +62,67 @@
       thinking:  { expression: null, motion: null, focus: 0.10 },
       speaking:  { expression: null, motion: null, focus: 0.35 },
       ended:     { expression: null, motion: null, focus: 0.0  }
+    },
+
+    // ==================== 程序化待机（不依赖动作文件）====================
+    //
+    // 模型自带的 3 组动作（Transform / AngryLoop / Sleep）全是「变身 / 生气 / 睡觉」
+    // 的特效循环，没有待机动作；而运行库的自动待机只认名字叫 Idle 的动作组，
+    // 找不到就一条都不播 —— 于是角色除了呼吸、眨眼、视线之外全程静止。
+    //
+    // 这里用「每帧写参数」补一层待机微动作，而不是加动作文件，因为要的是
+    // 跟通话状态联动（聆听时挑眉屏息、思考时歪头眯眼），
+    // 而运行库的机制是「没动作时随机播一条 Idle」——它不知道通话状态。
+    //
+    // ⚠️ 只能写「物理输入 / 空闲」参数：moc3 的 358 个参数里有 185 个是物理输出，
+    //    物理每帧都会把它们覆盖掉，动作/参数写上去等于没写。
+    //    下面这组通道还有个附带好处 —— 眉毛/嘴形/眼睛形状经物理链会带动兽耳
+    //    （ParamBrowLForm→Param3→ParamnekoL*），所以「做个微表情」和
+    //    「抖一下耳朵」是同一件事，不需要单独动耳朵参数（耳朵本身是物理输出，动不了）。
+    idle: {
+      enabled: true,
+
+      // 各通道对应的模型参数（模型里不存在的会被自动跳过）
+      channels: {
+        brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
+        browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈）
+        smile:     ['ParamEyeLSmile', 'ParamEyeRSmile'],     // 笑眼
+        squint:    ['ParamEyeLSquint', 'ParamEyeRSquint'],   // 眯眼
+        mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
+        breath:    ['ParamBreath'],                           // 呼吸深度（运行库的呼吸会在上面再叠加）
+        tilt:      ['ParamAngleZ'],                           // 头部侧倾（单位：度）
+        sway:      ['ParamBodyAngleZ']                        // 身体左右摆（单位：度）
+      },
+
+      // 各状态的目标姿态
+      // 幅度刻意压得很小：这些参数会和 LLM 表情、物理、运行库的呼吸叠在一起，
+      // 给大了就会打架（比如「生气脸」配上一个大幅度「聆听微笑」）。
+      poses: {
+        idle:      { brow:  0.00, browForm: 0.00, smile: 0.00, squint: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 1.00 },
+        listening: { brow:  0.22, browForm: 0.05, smile: 0.28, squint: 0.00, mouthForm: -0.10, breath: 0.02, tilt:  2.0, sway: 0.45 },
+        thinking:  { brow: -0.15, browForm: 0.32, smile: 0.00, squint: 0.30, mouthForm:  0.16, breath: 0.00, tilt: -3.0, sway: 0.20 },
+        speaking:  { brow:  0.10, browForm: 0.02, smile: 0.14, squint: 0.00, mouthForm:  0.04, breath: 0.30, tilt:  0.8, sway: 0.70 },
+        ended:     { brow: -0.10, browForm: 0.12, smile: 0.00, squint: 0.08, mouthForm: -0.04, breath: 0.00, tilt: -1.6, sway: 0.15 }
+      },
+
+      // 姿态过渡速度（越小越慢；约等于 1/poseRate 帧到达 63%）
+      poseRate: 0.06,
+
+      // 常驻微漂移：周期刻意避开运行库呼吸用的 3.23 / 3.53 / 5.53 / 6.53 / 15.53s，
+      // 否则两者会共振，看起来像机器人在抖
+      drift: {
+        brow:      { amp: 0.06, period: 7.3 },
+        mouthForm: { amp: 0.05, period: 11.7 },
+        smile:     { amp: 0.05, period: 9.1 },
+        squint:    { amp: 0.03, period: 8.3 }
+      },
+
+      // 偶发「抖一下耳朵」：给眉毛/嘴形一个短脉冲，经物理链传到兽耳
+      flick: { minGap: 4.0, maxGap: 9.0, duration: 0.28, amp: 0.30 },
+
+      // 有情绪表情（LLM 触发）时，把状态姿态压到这个比例
+      // 否则会出现「明明在生气，眉毛却在笑」的错位
+      cuePoseScale: 0.3
     }
   };
 
@@ -98,6 +159,14 @@
   var _forcedParams = {};   // 调试用：每帧强制写入的参数
   // 口型写入后的读回统计（验证参数是否真的在该帧生效）
   var _applyStats = { min: null, max: null, n: 0, last: null };
+
+  // ---- 程序化待机状态 ----
+  var _idleValue = { brow: 0, browForm: 0, smile: 0, squint: 0, mouthForm: 0, breath: 0, tilt: 0, sway: 0 };
+  var _idleTime = 0;              // 待机相位（秒）
+  var _idleEnabled = true;        // 运行期开关（真机调参时可临时关掉对比）
+  var _idleFlickAt = 1.5;         // 下一次"耳抖"的时间点（秒），启动后 1.5~3.5s 来第一下
+  var _idleFlickEnd = -1;         // 当前耳抖的结束时间点，-1 表示没有正在进行的
+  var _idleValid = null;          // {参数id: 是否存在} 缓存，避免每帧都查一遍
 
   // ======================= Android 通信 ========================
   function notify(type, payload) {
@@ -317,6 +386,116 @@
     }
   }
 
+  // ======================= 程序化待机 =======================
+  /**
+   * 参数是否存在于当前模型（结果缓存）
+   *
+   * 换模型时同一份 bridge.js 要能跑，而写不存在的参数在部分 WebView 版本上会抛异常，
+   * 所以先探测再写；每帧探测十来个参数没必要，缓存住。
+   */
+  function idleParamOK(core, id) {
+    if (_idleValid === null) _idleValid = {};
+    if (!Object.prototype.hasOwnProperty.call(_idleValid, id)) {
+      var ok = true;
+      try {
+        if (typeof core.getParameterIndex === 'function') ok = core.getParameterIndex(id) >= 0;
+      } catch (e) { ok = false; }
+      _idleValid[id] = ok;
+    }
+    return _idleValid[id];
+  }
+
+  /**
+   * 待机层：算目标姿态 → 平滑
+   *
+   * 三种成分叠加：
+   *   1. 状态姿态 —— 秒级过渡，让聆听/思考/说话有可辨识的差别
+   *   2. 常驻微漂移 —— 让脸"活着"，振幅只有 0.03~0.06
+   *   3. 偶发耳抖 —— 每 4~9s 一次短脉冲（走眉毛→兽耳那条物理链）
+   */
+  function updateIdle(dt) {
+    _idleTime += dt;
+
+    var i, name;
+    if (!_idleEnabled || !CFG.idle.enabled) {
+      // 关掉时也要把值收回 0，否则会永远停在上一个姿态上
+      for (i in _idleValue) {
+        if (Object.prototype.hasOwnProperty.call(_idleValue, i)) _idleValue[i] = 0;
+      }
+      return;
+    }
+
+    var cfg = CFG.idle;
+    var pose = cfg.poses[currentState] || cfg.poses.idle;
+    var base = cfg.poses.idle;
+    // 有情绪表情（LLM 触发）时压制状态姿态，否则会出现「生气脸配聆听微笑」
+    var scale = _cue ? cfg.cuePoseScale : 1;
+    var target = {};
+
+    // 1. 状态姿态：只取相对 idle 的偏移，新增状态时不必重复写全套
+    for (i in pose) {
+      if (!Object.prototype.hasOwnProperty.call(pose, i)) continue;
+      target[i] = (base[i] || 0) + ((pose[i] || 0) - (base[i] || 0)) * scale;
+    }
+
+    // 2. 常驻微漂移
+    var dr = cfg.drift;
+    for (name in dr) {
+      if (!Object.prototype.hasOwnProperty.call(dr, name)) continue;
+      target[name] = (target[name] || 0) +
+        Math.sin(_idleTime * 2 * Math.PI / dr[name].period) * dr[name].amp * scale;
+    }
+
+    // 3. 偶发耳抖：半正弦包络
+    var f = cfg.flick;
+    if (_idleFlickEnd > 0 && _idleTime >= _idleFlickEnd) _idleFlickEnd = -1;
+    if (_idleFlickEnd < 0 && _idleTime >= _idleFlickAt) {
+      _idleFlickEnd = _idleTime + f.duration;
+      _idleFlickAt = _idleTime + f.minGap + Math.random() * Math.max(0, f.maxGap - f.minGap);
+    }
+    if (_idleFlickEnd > 0) {
+      var p = clamp(1 - (_idleFlickEnd - _idleTime) / f.duration, 0, 1);
+      var env = Math.sin(p * Math.PI) * f.amp;
+      target.browForm = (target.browForm || 0) + env;
+      target.mouthForm = (target.mouthForm || 0) + env * 0.6;
+      target.smile = (target.smile || 0) + env * 0.5;
+    }
+
+    // 帧率无关的指数插值（和口型同一套算法）
+    var k = 1 - Math.pow(1 - cfg.poseRate, dt * 60);
+    for (i in _idleValue) {
+      if (!Object.prototype.hasOwnProperty.call(_idleValue, i)) continue;
+      _idleValue[i] += ((target[i] || 0) - _idleValue[i]) * k;
+    }
+  }
+
+  /**
+   * 把待机值写进模型参数
+   *
+   * 和口型一样挂在 afterMotionUpdate：晚到 beforeModelUpdate 写会被
+   * loadParameters() 复位，早到 update 之前写又会被 saveParameters() 之后的表情/物理覆盖。
+   * 待机用的都是物理输入参数（物理只读不写它们），所以不需要在 update 前再兜一次。
+   */
+  function applyIdle() {
+    if (!modelReady || !model) return;
+    var core = model.internalModel && model.internalModel.coreModel;
+    if (!core || typeof core.setParameterValueById !== 'function') return;
+
+    var ch = CFG.idle.channels, name, ids, i, id;
+    for (name in ch) {
+      if (!Object.prototype.hasOwnProperty.call(ch, name)) continue;
+      ids = ch[name];
+      var v = _idleValue[name] || 0;
+      for (i = 0; i < ids.length; i++) {
+        id = ids[i];
+        try {
+          if (!idleParamOK(core, id)) continue;
+          core.setParameterValueById(id, v);
+        } catch (e) { /* 单个参数失败不影响其他 */ }
+      }
+    }
+  }
+
   /**
    * 每帧钩子：先更新口型曲线，再在模型 update 前写入参数
    */
@@ -340,6 +519,11 @@
 
     updateMouth(dt);
     applyMouth();
+
+    // 待机微动作。与口型互不干扰：只写眉毛/眼形/嘴形/角度这些物理输入参数，
+    // 不碰 ParamMouthOpenY（那是口型的通道）
+    updateIdle(dt);
+    applyIdle();
   }
 
   function onBeforeModelUpdate() {
@@ -450,6 +634,22 @@
     setMouthEnabled: function (enabled) {
       mouthEnabled = !!enabled;
       if (!mouthEnabled) _mouthTarget = 0;
+    },
+
+    /**
+     * 是否启用程序化待机
+     *
+     * 真机调参用：关掉就能直接对比"完全静止"的样子，
+     * 判断幅度是不是给大了。
+     */
+    setIdleEnabled: function (enabled) {
+      _idleEnabled = !!enabled;
+      return _idleEnabled;
+    },
+
+    /** 当前待机姿态值（调试/自测用，返回副本） */
+    getIdle: function () {
+      return JSON.parse(JSON.stringify(_idleValue));
     },
 
     /**
@@ -567,6 +767,12 @@
         out.appliedMouth = _applyStats;
         out.state = currentState;
         out.expression = _cue;
+        out.idle = {
+          enabled: _idleEnabled && CFG.idle.enabled,
+          time: _idleTime,
+          values: _idleValue,
+          flickEnd: _idleFlickEnd
+        };
       } catch (e) { out.error = String(e); }
       return JSON.stringify(out);
     },
@@ -584,6 +790,8 @@
 
   function collectInfo() {
     var info = { modelUrl: CFG.modelUrl, motions: [], expressions: [], lipSync: [] };
+    // 待机层由 bridge.js 自己提供，不依赖模型文件；宿主侧可据此决定是否还需别的兜底
+    info.idle = true;
     try {
       var im = model.internalModel;
       info.size = im.originalWidth + 'x' + im.originalHeight;

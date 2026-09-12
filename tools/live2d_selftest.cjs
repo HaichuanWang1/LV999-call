@@ -23,9 +23,19 @@ const rec = { params: {}, expressions: [], motions: [], focus: [], scale: [], ev
 let beforeModelUpdate = null;
 let afterMotionUpdate = null;
 
+// 真实模型里存在的参数（够覆盖口型 + 待机通道即可）
+// 故意不列出 ParamMouthOpen："CFG.lipSyncParams 里有、但模型没有该参数时应被跳过"，
+// 这正是容易漏掉的分支（写不存在的参数在旧 WebView 上会抛异常）。
+const KNOWN_PARAMS = [
+  'ParamMouthOpenY',
+  'ParamBrowLY', 'ParamBrowRY', 'ParamBrowLForm', 'ParamBrowRForm',
+  'ParamEyeLSmile', 'ParamEyeRSmile', 'ParamEyeLSquint', 'ParamEyeRSquint',
+  'ParamMouthForm', 'ParamBreath', 'ParamAngleZ', 'ParamBodyAngleZ',
+];
+
 const coreModel = {
   setParameterValueById(id, v) { rec.params[id] = v; },
-  getParameterIndex(id) { return id === 'ParamMouthOpenY' ? 3 : -1; },
+  getParameterIndex(id) { return KNOWN_PARAMS.indexOf(id); },
 };
 
 const model = {
@@ -249,7 +259,107 @@ function check(name, cond, extra = '') {
   check('复位后状态切换不会复活旧情绪',
         rec.expressions.indexOf('03 生气') < 0, JSON.stringify(rec.expressions));
 
-  console.log('\n[11] dispose 释放');
+  console.log('\n[11] 程序化待机（不写动作文件，靠每帧参数）');
+
+  // 从 bridge.js 里解析出待机通道清单，用来断言"只写声明过的参数"。
+  // 这些参数必须是「物理输入 / 空闲」通道：物理输出每帧都会被物理覆盖，
+  // 写上去等于没写（下面还有一条和真实物理表交叉校验的断言）。
+  const channelsBlock = BRIDGE.match(/channels:\s*\{([\s\S]*?)\}/);
+  const IDLE_PARAMS = channelsBlock
+    ? [...channelsBlock[1].matchAll(/'([A-Za-z0-9_]+)'/g)].map((m) => m[1])
+    : [];
+  check('能从 bridge.js 解析出待机通道清单', IDLE_PARAMS.length >= 6, IDLE_PARAMS.join(','));
+
+  const clearParams = () => { for (const k in rec.params) delete rec.params[k]; };
+  // 取一段时间内的均值：偶发"耳抖"只持续 0.28s，均值法能把它抹掉，
+  // 否则断言会在"恰好抖到"的时候偶发失败
+  const sampleIdle = (frames) => {
+    const acc = {}; let n = 0;
+    for (let i = 0; i < frames; i++) {
+      tick(1);
+      const v = win.L2D.getIdle();
+      for (const k in v) acc[k] = (acc[k] || 0) + v[k];
+      n++;
+    }
+    const avg = {};
+    for (const k in acc) avg[k] = acc[k] / n;
+    return avg;
+  };
+
+  clearParams();
+  win.L2D.setState('idle');
+  tick(180);
+  check('待机层确实写入了参数', 'ParamBrowLY' in rec.params, JSON.stringify(Object.keys(rec.params)));
+  check('待机走 ParamMouthForm，不碰口型开闭',
+        'ParamMouthForm' in rec.params && Object.keys(rec.params).indexOf('ParamMouthOpen') < 0,
+        JSON.stringify(Object.keys(rec.params)));
+
+  const allowed = new Set(IDLE_PARAMS.concat(['ParamMouthOpenY']));
+  const stray = Object.keys(rec.params).filter((id) => !allowed.has(id));
+  check('待机写入的参数都在声明通道内', stray.length === 0, stray.join(','));
+
+  const idleAvg = sampleIdle(360);
+  win.L2D.setState('listening'); tick(180);
+  const listenAvg = sampleIdle(360);
+  win.L2D.setState('thinking'); tick(180);
+  const thinkAvg = sampleIdle(360);
+  win.L2D.setState('speaking'); tick(180);
+  const speakAvg = sampleIdle(360);
+  win.L2D.setState('ended'); tick(180);
+  const endedAvg = sampleIdle(360);
+
+  check('聆听比思考更"笑眼"', listenAvg.smile > thinkAvg.smile + 0.15,
+        `聆听=${listenAvg.smile.toFixed(3)} 思考=${thinkAvg.smile.toFixed(3)}`);
+  check('思考比聆听眉毛更皱', thinkAvg.browForm > listenAvg.browForm + 0.15,
+        `思考=${thinkAvg.browForm.toFixed(3)} 聆听=${listenAvg.browForm.toFixed(3)}`);
+  check('思考会眯眼', thinkAvg.squint > 0.2, thinkAvg.squint.toFixed(3));
+  check('聆听/思考的头倾方向相反', listenAvg.tilt > 0.5 && thinkAvg.tilt < -0.5,
+        `聆听=${listenAvg.tilt.toFixed(2)} 思考=${thinkAvg.tilt.toFixed(2)}`);
+  check('说话时呼吸更深', speakAvg.breath > idleAvg.breath + 0.1,
+        `说话=${speakAvg.breath.toFixed(3)} 待机=${idleAvg.breath.toFixed(3)}`);
+  check('结束状态眉眼下垂', endedAvg.brow < -0.02, endedAvg.brow.toFixed(3));
+
+  // 姿态必须是渐变：从 idle 切到 thinking，第一帧不能直接跳到目标值
+  win.L2D.setState('idle'); tick(180);
+  const tiltBefore = win.L2D.getIdle().tilt;
+  win.L2D.setState('thinking'); tick(1);
+  const tiltAfter = win.L2D.getIdle().tilt;
+  check('姿态切换是渐变而非瞬跳',
+        Math.abs(tiltAfter - tiltBefore) > 0.005 && Math.abs(tiltAfter + 3.0) > 0.5,
+        `${tiltBefore.toFixed(3)} → ${tiltAfter.toFixed(3)}`);
+
+  // 有 LLM 情绪表情时压制状态姿态，否则会出现"生气脸配聆听微笑"的错位
+  win.L2D.setExpression('03 生气');
+  win.L2D.setState('listening'); tick(180);
+  const cueAvg = sampleIdle(240);
+  win.L2D.setExpression(null);
+  check('有情绪表情时状态姿态被压制', cueAvg.smile < listenAvg.smile - 0.1,
+        `有情绪=${cueAvg.smile.toFixed(3)} 无情绪=${listenAvg.smile.toFixed(3)}`);
+
+  check('setIdleEnabled 返回新状态', win.L2D.setIdleEnabled(false) === false);
+  tick(180);
+  const idleOff = win.L2D.getIdle();
+  check('关闭待机层后姿态归零',
+        Object.keys(idleOff).every((k) => Math.abs(idleOff[k]) < 0.01), JSON.stringify(idleOff));
+  win.L2D.setIdleEnabled(true);
+
+  // 与真实模型的物理表交叉校验（模型未随仓库分发，缺失时跳过，同 check_expression_names）
+  const PHYS = path.join(__dirname, '..', 'app', 'src', 'main', 'assets',
+                         'live2d', 'models', 'silverwolf', 'silverwolf.physics3.json');
+  if (fs.existsSync(PHYS) && IDLE_PARAMS.length) {
+    const outs = new Set();
+    const phys = JSON.parse(fs.readFileSync(PHYS, 'utf8'));
+    for (const st of phys.PhysicsSettings) {
+      for (const o of st.Output) outs.add(o.Destination.Id);
+    }
+    const overwritten = IDLE_PARAMS.filter((id) => outs.has(id));
+    check('待机通道都不是物理输出（否则会被物理每帧覆盖）',
+          overwritten.length === 0, overwritten.join(','));
+  } else {
+    console.log('  (跳过物理交叉校验：本地没有模型文件)');
+  }
+
+  console.log('\n[12] dispose 释放');
   win.L2D.dispose();
   check('dispose 后 ready 为 false', win.L2D.ready === false);
 
