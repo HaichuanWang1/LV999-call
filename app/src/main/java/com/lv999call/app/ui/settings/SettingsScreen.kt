@@ -29,6 +29,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lv999call.app.audio.VoskModelManager
 import com.lv999call.app.domain.model.ApiConfig
+import com.lv999call.app.ui.common.Live2DAuthorCredit
 import kotlinx.coroutines.launch
 
 @Composable
@@ -424,6 +425,22 @@ fun SettingsScreen(
                     Column {
                         Text("启用 Live2D 形象", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                         Text("通话界面显示动态角色；关闭或加载失败时回退为静态头像", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
+                    }
+                }
+
+                // 模型作者署名（与通话页舞台左下角是同一个入口）。
+                // 放在开关正下方而不是藏进"关于"：用户在这个页面决定要不要用这个形象，
+                // 出处就该在同一屏里给到。
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(modifier = Modifier.width(28.dp))
+                    Column {
+                        Live2DAuthorCredit()
+                        Text(
+                            text = "点击前往作者 B 站主页",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSurfaceVariant.copy(alpha = 0.45f)
+                        )
                     }
                 }
 

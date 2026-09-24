@@ -48,6 +48,7 @@ import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.ui.live2d.Live2DStatus
 import com.lv999call.app.ui.live2d.Live2DView
 import com.lv999call.app.ui.live2d.rememberLive2DController
+import com.lv999call.app.ui.common.Live2DAuthorCredit
 import com.lv999call.app.ui.common.bubbleEntrance
 import com.lv999call.app.ui.common.rememberBubbleEntranceTracker
 import com.lv999call.app.ui.theme.UltraFlowTheme
@@ -393,6 +394,17 @@ fun CallScreen(
                     } else {
                         StaticAvatar(callState, avatarUri, avatarResId)
                     }
+
+                    // 模型作者署名：钉在舞台区左下角，点击跳转作者 B 站主页。
+                    //
+                    // 必须写在 Live2DView **之后**（即叠在它上层）：WebView 是真实
+                    // View，会被绘制在所有 Compose 内容之上，反过来放就会被完全盖住。
+                    // 舞台区是独立分区、不与下方对话区重叠，所以不会压到气泡。
+                    Live2DAuthorCredit(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(start = 12.dp, bottom = 8.dp)
+                    )
                 }
 
                 // 分区线：两个区域之间唯一的视觉分隔，比给各自画边框更轻
