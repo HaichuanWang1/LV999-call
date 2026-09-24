@@ -25,16 +25,23 @@ class SessionRepository(
     suspend fun getSession(sessionId: String): Session? {
         val sessionEntity = sessionDao.getSessionById(sessionId) ?: return null
         val messages = messageDao.getMessagesBySessionOnce(sessionId)
-        return sessionEntity.toDomain(messages.map { it.toDomain() })
+        // 读取期修复老版本的累积式重复（详见 MessageHistoryRepair）
+        return sessionEntity.toDomain(MessageHistoryRepair.repair(messages.map { it.toDomain() }))
     }
 
     suspend fun createSession(session: Session) {
         sessionDao.insertSession(session.toEntity())
     }
 
+    /**
+     * 用 [messages] 覆盖某会话的全部消息。
+     *
+     * 必须是「替换」语义而不是「追加」：调用方传进来的永远是当前完整消息列表，
+     * 追加会导致每轮翻倍（历史页气泡重复的根因，见 [MessageDao.replaceMessages]）。
+     */
     suspend fun saveMessages(sessionId: String, messages: List<ChatMessage>) {
         val entities = messages.map { it.toEntity(sessionId) }
-        messageDao.insertMessages(entities)
+        messageDao.replaceMessages(sessionId, entities)
     }
 
     suspend fun saveMessage(sessionId: String, message: ChatMessage) {
@@ -47,7 +54,7 @@ class SessionRepository(
 
     suspend fun getHistoryMessages(sessionId: String, maxMessages: Int = 50): List<ChatMessage> {
         val messages = messageDao.getMessagesBySessionOnce(sessionId)
-        return messages.takeLast(maxMessages).map { it.toDomain() }
+        return MessageHistoryRepair.repair(messages.map { it.toDomain() }).takeLast(maxMessages)
     }
 
     // --- 映射函数 ---
