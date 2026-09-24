@@ -54,6 +54,9 @@ fun SettingsScreen(
     var llmModel by remember(config) { mutableStateOf(config.llmModel) }
     var maxContextTokens by remember(config) { mutableStateOf(config.maxContextTokens.toFloat()) }
     var apiMaxContext by remember(config) { mutableStateOf(config.maxContextTokens.coerceAtLeast(200000)) }
+    var temperature by remember(config) { mutableStateOf(config.llmTemperature) }
+    var topP by remember(config) { mutableStateOf(config.llmTopP) }
+    var maxOutputTokens by remember(config) { mutableStateOf(config.llmMaxOutputTokens.toFloat()) }
 
     var asrProvider by remember(config) { mutableStateOf(config.asrProvider) }
     var asrBaseUrl by remember(config) { mutableStateOf(config.asrBaseUrl) }
@@ -167,6 +170,41 @@ fun SettingsScreen(
                     text = "模型上限: ${apiMaxContext / 1000}K（获取模型后自动更新）",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+
+                // ===== 采样参数 =====
+                // 只保留 OpenAI 兼容接口普遍支持的三个（温度 / top_p / 最大输出），
+                // 各家私有开关不进这里，避免在不支持的模型上直接 400。
+                Spacer(modifier = Modifier.height(16.dp))
+                ParamSlider(
+                    label = "温度 Temperature",
+                    hint = "越低越稳定保守，越高越发散有创意。角色扮演建议 0.6~0.9",
+                    valueText = "%.2f".format(temperature),
+                    value = temperature,
+                    onValueChange = { temperature = it },
+                    valueRange = 0f..2f,
+                    steps = 19,
+                    onReset = { temperature = 0.7f }
+                )
+                ParamSlider(
+                    label = "核采样 Top P",
+                    hint = "候选词的累计概率上限。一般保持 1.0，只调温度即可",
+                    valueText = "%.2f".format(topP),
+                    value = topP,
+                    onValueChange = { topP = it },
+                    valueRange = 0.1f..1f,
+                    steps = 17,
+                    onReset = { topP = 1.0f }
+                )
+                ParamSlider(
+                    label = "最大输出长度",
+                    hint = "单次回复的 token 上限。语音对话太长会拖慢开口，建议 256~1024",
+                    valueText = "${maxOutputTokens.toInt()}",
+                    value = maxOutputTokens,
+                    onValueChange = { maxOutputTokens = it },
+                    valueRange = 128f..4096f,
+                    steps = 30,
+                    onReset = { maxOutputTokens = 2048f }
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -409,6 +447,9 @@ fun SettingsScreen(
                         onSave(config.copy(
                             llmBaseUrl = llmBaseUrl, llmApiKey = llmApiKey, llmModel = llmModel,
                             maxContextTokens = maxContextTokens.toInt(),
+                            llmTemperature = temperature,
+                            llmTopP = topP,
+                            llmMaxOutputTokens = maxOutputTokens.toInt(),
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
@@ -475,6 +516,57 @@ fun SettingsScreen(
 private fun SectionHeader(title: String) {
     Text(text = title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.tertiary,
         fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 12.dp, top = 8.dp))
+}
+
+/**
+ * 带说明、当前值与「恢复默认」的滑杆。
+ *
+ * 采样参数大多没有绝对正确答案，用户需要知道自己在调什么，
+ * 以及随时能退回来 —— 所以每根滑杆都配了单行说明和重置入口。
+ */
+@Composable
+private fun ParamSlider(
+    label: String,
+    hint: String,
+    valueText: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onReset: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(modifier = Modifier.padding(bottom = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.primary,
+                fontWeight = FontWeight.Bold
+            )
+            TextButton(onClick = onReset, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Text("默认", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            }
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            steps = steps,
+            colors = SliderDefaults.colors(thumbColor = colors.primary, activeTrackColor = colors.primary)
+        )
+        Text(
+            text = hint,
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+    }
 }
 
 @Composable

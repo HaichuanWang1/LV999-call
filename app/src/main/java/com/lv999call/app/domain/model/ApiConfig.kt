@@ -8,6 +8,30 @@ data class ApiConfig(
     val llmModel: String = "mimo-v2.5",
     val maxContextTokens: Int = 200000,  // 上下文窗口上限（token）
 
+    // ---------- LLM 采样参数 ----------
+    // 只放「几乎所有 OpenAI 兼容接口都认」的三个，避免给模型塞不支持的字段导致 400。
+    // 各家私有的开关（如 MiMo 的 thinking、Qwen 的 enable_thinking）一律不进设置页，
+    // 需要时在代码里按 provider 分支处理。
+
+    /** 采样温度：越低越稳定，越高越发散（0.0 ~ 2.0） */
+    val llmTemperature: Float = 0.7f,
+
+    /** 核采样（top_p）：与温度二选一调即可（0.0 ~ 1.0） */
+    val llmTopP: Float = 1.0f,
+
+    /** 单次回复的最大输出 token 数 */
+    val llmMaxOutputTokens: Int = 2048,
+
+    /**
+     * 是否允许模型进入「思考模式」（默认关闭）。
+     *
+     * 刻意**不做进设置页**：这是各家私有协议（MiMo 的 `thinking`、Qwen 的
+     * `enable_thinking`…），放出来只会让用户在不支持的模型上踩 400。
+     * 这里的开关只影响请求体，**无论如何推理内容都不会显示、也不会被朗读**
+     * （显示与 TTS 侧有独立的剥离逻辑，见 ProcessAudioUseCase）。
+     */
+    val llmThinkingEnabled: Boolean = false,
+
     // ASR配置
     val asrProvider: String = "custom",  // "custom" | "vosk"
     val asrBaseUrl: String = "",

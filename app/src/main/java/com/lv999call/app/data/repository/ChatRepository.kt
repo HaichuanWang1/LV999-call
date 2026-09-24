@@ -142,7 +142,19 @@ class ChatRepository(
         val request = LlmModels.ChatRequest(
             model = config.llmModel,
             messages = messages,
-            stream = true
+            stream = true,
+            temperature = config.llmTemperature,
+            topP = config.llmTopP,
+            maxTokens = config.llmMaxOutputTokens,
+            // 思考开关只在确认支持的服务商上发送：未知字段会让严格校验的接口直接 400。
+            // 关闭时不发、开启时发 {type:"enabled"}；字段为 null 时 Gson 不序列化。
+            thinking = if (config.llmThinkingEnabled && LlmModels.supportsThinkingSwitch(config.llmBaseUrl)) {
+                LlmModels.ThinkingConfig(type = "enabled")
+            } else if (!config.llmThinkingEnabled && LlmModels.supportsThinkingSwitch(config.llmBaseUrl)) {
+                LlmModels.ThinkingConfig(type = "disabled")
+            } else {
+                null
+            }
         )
 
         val url = LlmApiService.buildFullUrl(config.llmBaseUrl)

@@ -25,18 +25,6 @@ class ProcessAudioUseCase(
     companion object {
         private const val TAG = "ProcessAudioUseCase"
         private const val RESPONSE_TOKEN_RESERVE = 2048
-
-        /** LLM 的推理过程标签：既不显示也不朗读 */
-        private val REASONING_TAGS = listOf(
-            Regex("<think>[\\s\\S]*?</think>"),
-            Regex("<thinking>[\\s\\S]*?</thinking>")
-        )
-
-        private fun stripReasoningTags(text: String): String {
-            var out = text
-            for (r in REASONING_TAGS) out = r.replace(out, "")
-            return out
-        }
     }
 
     private fun estimateTokens(text: String): Int {
@@ -69,6 +57,14 @@ class ProcessAudioUseCase(
         overrideRefAudioMime: String? = null,
         ttsPrompt: String = "",
         onStateChange: (CallState) -> Unit,
+        /**
+         * 用户这句话一确定就回调（ASR 出结果 / 文字输入）。
+         *
+         * 让「用户气泡」在**这一刻**就上屏，而不是等整轮（LLM+TTS）跑完才和
+         * 助手回复一起出现 —— 后者会先看到对方的回答、再看到自己说了什么，
+         * 顺序颠倒，观感很怪。
+         */
+        onUserMessage: (ChatMessage) -> Unit = {},
         onPartialResponse: (String) -> Unit,
         /** LLM 通过 [[e:标签]] 触发表情时回调（Live2D 关闭时不会被触发） */
         onExpression: (Live2DExpression) -> Unit = {}
@@ -90,6 +86,8 @@ class ProcessAudioUseCase(
 
         val userMessage = ChatMessage(role = "user", content = userText)
         Log.d(TAG, "用户说: $userText")
+        // 用户气泡立刻上屏（AI 侧此时还挂着「思考中」占位）
+        onUserMessage(userMessage)
 
         // Step 2: LLM流式生成（文字实时更新UI）
         onStateChange(CallState.THINKING)
@@ -103,29 +101,41 @@ class ProcessAudioUseCase(
         }
         // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来
         val tagParser = ExpressionTagParser(onExpression)
+        // 边收边剥离推理块：思考内容既不显示也不朗读（详见 ReasoningStripper）
+        val reasoningStripper = ReasoningStripper()
+        /** 是否已经出现过可见正文 —— 它决定 UI 是「思考中转圈」还是「流式打字」 */
+        var sawVisible = false
 
         try {
             chatRepository.streamChatCompletion(
                 config, effectivePrompt, contextMessages + userMessage
             ).collect { chunk ->
                 fullResponse.append(chunk)
-                // 实时去除thinking标签再显示
-                val display = tagParser.consume(stripReasoningTags(fullResponse.toString())).trim()
-                onPartialResponse(display)
+                val visible = tagParser.consume(reasoningStripper.feed(chunk)).trim()
+                if (visible.isNotEmpty()) {
+                    sawVisible = true
+                    onPartialResponse(visible)
+                } else if (sawVisible) {
+                    // 极罕见：标签/推理块让已显示文本回退为空。转发空串让 UI 清空气泡，
+                    // 而不是把上一块旧文本留在屏幕上。
+                    onPartialResponse("")
+                }
+                // 尚未见到正文时不回调：UI 保持「思考中」占位动画。
+                // 这段等待正是 plan1 要求的「语音识别结束 → 正式回应出现」之间的转圈动画。
             }
         } catch (e: Exception) {
             Log.e(TAG, "LLM调用失败: ${e.message}")
         }
 
-        // 去除LLM推理标签(<think>...</think>等)与表情标签
-        val rawResponse = stripReasoningTags(fullResponse.toString())
-        val aiResponse = tagParser.finish(rawResponse).trim()
+        // 定稿：推理块的未闭合残渣会被丢弃，表情标签剥掉
+        val strippedResponse = reasoningStripper.finish()
+        val aiResponse = tagParser.finish(strippedResponse).trim()
         if (aiResponse.isBlank()) {
             // 两种情况必须区分开：模型真的什么都没说，
             // 还是它只吐了个表情标签 / 整段回答都在 <think> 里被剥掉了。
             Log.w(
                 TAG,
-                "LLM响应为空 rawLen=${fullResponse.length} strippedLen=${rawResponse.length} " +
+                "LLM响应为空 rawLen=${fullResponse.length} strippedLen=${strippedResponse.length} " +
                     "raw=${fullResponse.toString().take(300)}"
             )
             return Pair(userMessage, null)

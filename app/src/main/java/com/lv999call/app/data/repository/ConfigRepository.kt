@@ -22,6 +22,13 @@ class ConfigRepository(private val context: Context) {
         val LLM_MODEL = stringPreferencesKey("llm_model")
         val MAX_CONTEXT_TOKENS = stringPreferencesKey("max_context_tokens")
 
+        // LLM 采样参数（温度 / top_p / 最大输出）
+        val LLM_TEMPERATURE = floatPreferencesKey("llm_temperature")
+        val LLM_TOP_P = floatPreferencesKey("llm_top_p")
+        val LLM_MAX_OUTPUT_TOKENS = stringPreferencesKey("llm_max_output_tokens")
+        // 思考模式开关：不进设置页，但要持久化，避免每次 saveConfig 把它重置回默认
+        val LLM_THINKING_ENABLED = stringPreferencesKey("llm_thinking_enabled")
+
         val ASR_PROVIDER = stringPreferencesKey("asr_provider")
         val ASR_BASE_URL = stringPreferencesKey("asr_base_url")
         val ASR_API_KEY = stringPreferencesKey("asr_api_key")
@@ -56,6 +63,10 @@ class ConfigRepository(private val context: Context) {
             llmApiKey = prefs[LLM_API_KEY] ?: "",
             llmModel = prefs[LLM_MODEL] ?: "mimo-v2.5",
             maxContextTokens = prefs[MAX_CONTEXT_TOKENS]?.toIntOrNull() ?: 200000,
+            llmTemperature = prefs[LLM_TEMPERATURE] ?: 0.7f,
+            llmTopP = prefs[LLM_TOP_P] ?: 1.0f,
+            llmMaxOutputTokens = prefs[LLM_MAX_OUTPUT_TOKENS]?.toIntOrNull() ?: 2048,
+            llmThinkingEnabled = prefs[LLM_THINKING_ENABLED]?.toBooleanStrictOrNull() ?: false,
             asrProvider = prefs[ASR_PROVIDER] ?: "custom",
             asrBaseUrl = prefs[ASR_BASE_URL] ?: "",
             asrApiKey = prefs[ASR_API_KEY] ?: "",
@@ -87,6 +98,10 @@ class ConfigRepository(private val context: Context) {
             prefs[LLM_API_KEY] = config.llmApiKey
             prefs[LLM_MODEL] = config.llmModel
             prefs[MAX_CONTEXT_TOKENS] = config.maxContextTokens.toString()
+            prefs[LLM_TEMPERATURE] = config.llmTemperature
+            prefs[LLM_TOP_P] = config.llmTopP
+            prefs[LLM_MAX_OUTPUT_TOKENS] = config.llmMaxOutputTokens.toString()
+            prefs[LLM_THINKING_ENABLED] = config.llmThinkingEnabled.toString()
             prefs[ASR_PROVIDER] = config.asrProvider
             prefs[ASR_BASE_URL] = config.asrBaseUrl
             prefs[ASR_API_KEY] = config.asrApiKey
