@@ -55,5 +55,13 @@ val CallEndRed = Color(0xFFFF1744)
 val ListeningBlue = Color(0xFF448AFF)
 val SpeakingGreen = Color(0xFF69F0AE)
 val ThinkingYellow = Color(0xFFFFD740)
-val UserBubble = Color(0xFF3D3D6B)
-val AiBubble = Color(0xFF1E1E38)
+
+// ===== 聊天气泡：中性灰 + 半透明 =====
+//
+// 通话页把 Live2D 与对话框一起装进「板块」后，气泡是叠在角色画面上的：
+// 不透明色块会显得像贴上去的补丁，并且挡住角色。半透明中性灰能同时做到
+// 「读得清」和「让角色透出来」，也不会像品牌紫色那样抢视觉重心。
+// 透明度靠 alpha 通道表达（Compose 的 Color 自带），叠在任意背景上都成立。
+val UserBubble = Color(0x52FFFFFF)      // 32% 白，用户侧稍实一点
+val AiBubble = Color(0x2EFFFFFF)        // 18% 白，助手侧更淡
+val BubbleBorder = Color(0x33FFFFFF)    // 描边：给半透明块一个清晰边界

@@ -885,7 +885,12 @@
       return startTransform(phase === undefined || phase === null ? 'full' : String(phase));
     },
 
-    /** 调整布局：{fillRatio, offsetX, offsetY} */
+    /**
+     * 调整布局：{fillRatio, offsetX, offsetY, fitBy}
+     *
+     * fitBy 由宿主传入：通话页把模型装进「舞台板块」后，视口不再是全屏，
+     * 继续按宽度适配会让角色上下被裁掉，需要宿主按板块宽高比改成 height/contain。
+     */
     setLayout: function (opts) {
       try {
         var o = typeof opts === 'string' ? JSON.parse(opts) : opts;
@@ -893,6 +898,9 @@
           if (typeof o.fillRatio === 'number') CFG.fillRatio = o.fillRatio;
           if (typeof o.offsetX === 'number') CFG.offsetX = o.offsetX;
           if (typeof o.offsetY === 'number') CFG.offsetY = o.offsetY;
+          if (o.fitBy === 'width' || o.fitBy === 'height' || o.fitBy === 'contain') {
+            CFG.fitBy = o.fitBy;
+          }
           layout();
         }
       } catch (e) { /* ignore */ }

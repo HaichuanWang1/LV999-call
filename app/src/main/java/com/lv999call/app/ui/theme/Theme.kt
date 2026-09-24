@@ -17,7 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-/** 自定义扩展颜色 — 用于通话状态指示和消息气泡 */
+/** 自定义扩展颜色 — 用于通话状态指示、消息气泡与通话页板块 */
 @Immutable
 data class ExtendedColors(
     val callEnd: Color,
@@ -25,7 +25,23 @@ data class ExtendedColors(
     val speaking: Color,
     val thinking: Color,
     val userBubble: Color,
-    val aiBubble: Color
+    val aiBubble: Color,
+
+    /** 气泡 / 板块的弱边界描边（半透明，只做视觉分界不抢视线） */
+    val bubbleBorder: Color = BubbleBorder,
+
+    /**
+     * 通话页「舞台」板块（装 Live2D 模型）的描边与底色。
+     *
+     * 要求是**弱边界**：能让人看出这里有个容器，但不要像卡片那样框死。
+     * 所以描边透明度很低（约 10%），底色只做极轻的区分。
+     */
+    val stageBorder: Color = Color(0x1FFFFFFF),
+    val stageSurface: Color = Color(0x14FFFFFF),
+
+    /** 通话页「对话」板块的描边与底色（比舞台略实一点，保证文字可读） */
+    val panelBorder: Color = Color(0x24FFFFFF),
+    val panelSurface: Color = Color(0x1A000000)
 )
 
 val LocalExtendedColors = staticCompositionLocalOf {
@@ -121,8 +137,14 @@ private val extendedLight = ExtendedColors(
     listening = Color(0xFF2962FF),
     speaking = Color(0xFF00C853),
     thinking = Color(0xFFFFAB00),
-    userBubble = Color(0xFFE8E0F0),
-    aiBubble = Color(0xFFF5F5F5)
+    // 浅色主题下的半透明灰：用黑色做底，叠在白背景上自然变灰
+    userBubble = Color(0x1F000000),
+    aiBubble = Color(0x14000000),
+    bubbleBorder = Color(0x1A000000),
+    stageBorder = Color(0x14000000),
+    stageSurface = Color(0x0A000000),
+    panelBorder = Color(0x1F000000),
+    panelSurface = Color(0x0D000000)
 )
 
 @Composable

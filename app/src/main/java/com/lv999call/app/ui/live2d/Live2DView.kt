@@ -121,9 +121,21 @@ class Live2DController internal constructor() {
         eval("window.L2D && window.L2D.setMouthEnabled($enabled)")
     }
 
-    /** 调整模型布局：模型高度占视口的比例、水平/垂直偏移 */
-    fun setLayout(fillRatio: Float, offsetX: Float = 0f, offsetY: Float = 0f) {
-        eval("window.L2D && window.L2D.setLayout({fillRatio:$fillRatio,offsetX:$offsetX,offsetY:$offsetY})")
+    /**
+     * 调整模型布局：适配比例、水平/垂直偏移、按哪一边适配。
+     *
+     * [fitBy] 取 "width" / "height" / "contain"（null 表示不改）：
+     * 全屏铺底时按宽度适配是对的，但模型被装进「舞台板块」后视口变矮，
+     * 继续按宽度会把角色的头/脚裁掉，这时要改成 contain。
+     */
+    fun setLayout(
+        fillRatio: Float,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
+        fitBy: String? = null
+    ) {
+        val fit = fitBy?.let { ",'fitBy':'${it.jsEscape()}'" } ?: ""
+        eval("window.L2D && window.L2D.setLayout({fillRatio:$fillRatio,offsetX:$offsetX,offsetY:$offsetY$fit})")
     }
 
     /** 暂停渲染以省电（页面不可见 / 通话结束时调用） */

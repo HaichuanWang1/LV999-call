@@ -126,6 +126,7 @@ fun NavGraph() {
             val callState by viewModel.callState.collectAsState()
             val messages by viewModel.messages.collectAsState()
             val currentResponse by viewModel.currentResponse.collectAsState()
+            val isThinkingResponse by viewModel.isThinkingResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
@@ -151,6 +152,7 @@ fun NavGraph() {
                 callState = callState,
                 messages = messages,
                 currentResponse = currentResponse,
+                isThinkingResponse = isThinkingResponse,
                 audioLevel = audioLevel,
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
@@ -235,6 +237,7 @@ fun NavGraph() {
             val callState by viewModel.callState.collectAsState()
             val messages by viewModel.messages.collectAsState()
             val currentResponse by viewModel.currentResponse.collectAsState()
+            val isThinkingResponse by viewModel.isThinkingResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
@@ -268,6 +271,7 @@ fun NavGraph() {
                 callState = callState,
                 messages = messages,
                 currentResponse = currentResponse,
+                isThinkingResponse = isThinkingResponse,
                 audioLevel = audioLevel,
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
@@ -295,6 +299,7 @@ fun NavGraph() {
             val callState by viewModel.callState.collectAsState()
             val messages by viewModel.messages.collectAsState()
             val currentResponse by viewModel.currentResponse.collectAsState()
+            val isThinkingResponse by viewModel.isThinkingResponse.collectAsState()
             val isMuted by viewModel.isMuted.collectAsState()
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
@@ -318,6 +323,7 @@ fun NavGraph() {
 
             CallScreen(
                 callState = callState, messages = messages, currentResponse = currentResponse,
+                isThinkingResponse = isThinkingResponse,
                 audioLevel = audioLevel, live2dEnabled = config.live2dEnabled,
                 transformEnabled = config.live2dTransformEnabled, avatarUri = config.characterAvatarUri,
                 expressionCue = expressionCue,

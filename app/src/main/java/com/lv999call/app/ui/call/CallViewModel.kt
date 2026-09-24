@@ -44,6 +44,18 @@ class CallViewModel(
     private val _currentResponse = MutableStateFlow("")
     val currentResponse: StateFlow<String> = _currentResponse.asStateFlow()
 
+    /**
+     * 是否处于「思考中占位」阶段 —— 特指 **语音识别结束 → LLM 首个可见字到达** 这段。
+     *
+     * 为什么单独开一个状态而不是让 UI 看 `currentResponse.isEmpty()`：
+     * 那段等待里气泡是空的，UI 只能靠「有没有文字」猜，于是会出现
+     * 「先弹出一个空气泡、过一会儿字才填进去」的突兀感。有了这个信号，
+     * UI 可以先挂一个「气泡内转圈」的占位，等第一块正文到达时原地切换成流式文本，
+     * 完成 plan1 要求的「加载动画 → 正式输出」的无缝衔接。
+     */
+    private val _isThinkingResponse = MutableStateFlow(false)
+    val isThinkingResponse: StateFlow<Boolean> = _isThinkingResponse.asStateFlow()
+
     private val _isMuted = MutableStateFlow(false)
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
@@ -126,7 +138,57 @@ class CallViewModel(
     }
 
     /**
-     * 是否是本通电话的首轮
+     * 统一的流式回调装配。
+     *
+     * 三件事必须一起做，否则会出现「思考中转圈」与「流式文本」同时挂在屏幕上的重叠：
+     * 1. [CallState.THINKING] 期间还**没有**可见文本 → 打开占位动画；
+     * 2. 第一块可见文本到达 → 关掉占位，同一帧内接上流式文本（同一个气泡，无跳变）；
+     * 3. 进入 SPEAKING（或本轮结束）→ 无论有没有文本都关掉占位，
+     *    避免模型只输出标签/空回复时转圈永远停不下来。
+     */
+    private fun onState(state: CallState) {
+        _callState.value = state
+        if (state != CallState.THINKING) _isThinkingResponse.value = false
+    }
+
+    private fun onPartial(partial: String) {
+        if (partial.isNotEmpty()) _isThinkingResponse.value = false
+        _currentResponse.value = partial
+    }
+
+    /**
+     * 本轮开始前清场：占位打开、流式文本清空、状态切到思考。
+     *
+     * 占位在**收到语音 / 点击发送的瞬间**就打开，而不是等 ASR 回来 —— ASR 本身也要时间，
+     * 那段时间同样应该有个「在忙」的反馈。
+     */
+    private fun beginResponseTurn() {
+        _currentResponse.value = ""
+        _isThinkingResponse.value = true
+        _callState.value = CallState.THINKING
+    }
+
+    private fun endResponseTurn() {
+        _isThinkingResponse.value = false
+        _currentResponse.value = ""
+    }
+
+    /**
+     * 用户气泡提早上屏。
+     *
+     * 由 [ProcessAudioUseCase.onUserMessage] 在 ASR 出结果的瞬间回调，
+     * 而不是等整轮结束再和助手回复一起追加 —— 否则屏幕上会先出现对方的回答，
+     * 再出现自己刚说的话，顺序是反的。
+     *
+     * 幂等：`processAudio` 结束时返回的 userMessage 会再次走到这里，
+     * 靠时间戳判断是否已经加过，避免同一条消息出现两个气泡。
+     */
+    private fun appendUserMessage(message: ChatMessage) {
+        if (_messages.value.any { it.timestamp == message.timestamp && it.role == message.role }) return
+        _messages.value = _messages.value + message
+    }
+
+    /** 是否处于本通电话的首轮
      *
      * 判据：消息列表里还没有任何助手消息。首轮生成期间列表仍然是空的 —— 助手消息
      * 要等 processAudio 返回后才写入（见各调用点），所以这个判据可靠；
@@ -155,7 +217,7 @@ class CallViewModel(
 
             // 自动发送"你好"发起对话
             currentTtsPrompt = currentConfig.ttsPrompt
-            _callState.value = CallState.THINKING
+            beginResponseTurn()
             val greetingPcm = ByteArray(0) // 空音频，跳过ASR
             try {
                 val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
@@ -166,15 +228,16 @@ class CallViewModel(
                     isAutoGreeting = true,
                     autoGreetingText = "你好",
                     ttsPrompt = currentTtsPrompt,
-                    onStateChange = { state -> _callState.value = state },
-                    onPartialResponse = { partial -> _currentResponse.value = partial },
+                    onStateChange = { state -> onState(state) },
+                    onUserMessage = ::appendUserMessage,
+                    onPartialResponse = { partial -> onPartial(partial) },
                     onExpression = ::cueExpression
                 )
 
                 val newMessages = mutableListOf(userMsg)
                 if (assistantMsg != null) newMessages.add(assistantMsg)
                 _messages.value = newMessages
-                _currentResponse.value = ""
+                endResponseTurn()
 
                 currentSession?.let { session ->
                     manageSessionUseCase.saveCallMessages(session.id, _messages.value)
@@ -236,7 +299,7 @@ class CallViewModel(
                 }
 
                 // 发送打招呼
-                _callState.value = CallState.THINKING
+                beginResponseTurn()
                 try {
                     val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
                         pcmData = ByteArray(0),
@@ -248,14 +311,15 @@ class CallViewModel(
                         overrideRefAudioBase64 = preset.refAudioBase64,
                         overrideRefAudioMime = preset.refAudioMime,
                         ttsPrompt = currentTtsPrompt,
-                        onStateChange = { state -> _callState.value = state },
-                        onPartialResponse = { partial -> _currentResponse.value = partial },
+                        onStateChange = { state -> onState(state) },
+                        onUserMessage = ::appendUserMessage,
+                        onPartialResponse = { partial -> onPartial(partial) },
                         onExpression = ::cueExpression
                     )
                     val newMessages = mutableListOf(userMsg)
                     if (assistantMsg != null) newMessages.add(assistantMsg)
                     _messages.value = newMessages
-                    _currentResponse.value = ""
+                    endResponseTurn()
                     currentSession?.let { session ->
                         manageSessionUseCase.saveCallMessages(session.id, _messages.value)
                     }
@@ -276,6 +340,10 @@ class CallViewModel(
 
     private fun startListening() {
         if (_callState.value == CallState.ENDED) return
+        // 回到聆听 = 本轮彻底结束：占位动画与流式文本一起收干净。
+        // 放在这个唯一入口上，是为了不依赖每个调用点都记得清理
+        // （VAD 静音、超时、异常、静音键恢复……都从这里回聆听）。
+        endResponseTurn()
 
         // 启动监听超时（30秒无响应自动重启，防止VAD卡死）
         listeningTimeoutJob?.cancel()
@@ -292,6 +360,9 @@ class CallViewModel(
                 listeningTimeoutJob?.cancel()
                 if (!isProcessing) {
                     isProcessing = true
+                    // 用户说完的瞬间就挂上「思考中」占位：ASR 也要时间，
+                    // 这段空白同样需要一个「在忙」的反馈（plan1 一-1 的起点）。
+                    beginResponseTurn()
                     processUserAudio(pcmData)
                 }
             },
@@ -317,26 +388,32 @@ class CallViewModel(
                         overrideRefAudioBase64 = presetRefAudioBase64,
                         overrideRefAudioMime = presetRefAudioMime,
                         ttsPrompt = currentTtsPrompt,
-                        onStateChange = { state -> _callState.value = state },
-                        onPartialResponse = { partial -> _currentResponse.value = partial },
+                        onStateChange = { state -> onState(state) },
+                        onUserMessage = ::appendUserMessage,
+                        onPartialResponse = { partial -> onPartial(partial) },
                         onExpression = ::cueExpression
                     )
                 }
                 if (result != null) {
                     val (userMessage, assistantMessage) = result
-                    val newMessages = mutableListOf(userMessage)
+                    // userMessage 在 ASR 出来时就已上屏（见 appendUserMessage），
+                    // 这里只补助手回复；用时间戳去重，防止重复气泡。
+                    val newMessages = mutableListOf<ChatMessage>()
+                    if (_messages.value.none { it.timestamp == userMessage.timestamp && it.role == userMessage.role }) {
+                        newMessages.add(userMessage)
+                    }
                     if (assistantMessage != null) newMessages.add(assistantMessage)
-                    _messages.value = _messages.value + newMessages
-                    _currentResponse.value = ""
+                    if (newMessages.isNotEmpty()) _messages.value = _messages.value + newMessages
+                    endResponseTurn()
                     currentSession?.let { session ->
                         manageSessionUseCase.saveCallMessages(session.id, _messages.value)
                     }
                 } else {
                     android.util.Log.w("CallVM", "处理音频超时")
-                    _currentResponse.value = ""
+                    endResponseTurn()
                 }
             } catch (e: Exception) {
-                _currentResponse.value = ""
+                endResponseTurn()
             } finally {
                 isProcessing = false
                 if (_callState.value != CallState.ENDED && !_isMuted.value) {
@@ -354,6 +431,7 @@ class CallViewModel(
         if (text.isBlank() || _callState.value == CallState.ENDED || isProcessing) return
         isProcessing = true
         audioRecorder.stopRecording() // 停止录音，避免与文字输入冲突
+        beginResponseTurn()
         viewModelScope.launch {
             try {
                 val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
@@ -366,15 +444,19 @@ class CallViewModel(
                     overrideRefAudioBase64 = presetRefAudioBase64,
                     overrideRefAudioMime = presetRefAudioMime,
                     ttsPrompt = currentTtsPrompt,
-                    onStateChange = { state -> _callState.value = state },
-                    onPartialResponse = { partial -> _currentResponse.value = partial },
+                    onStateChange = { state -> onState(state) },
+                    onUserMessage = ::appendUserMessage,
+                    onPartialResponse = { partial -> onPartial(partial) },
                     onExpression = ::cueExpression
                 )
-                val newMessages = mutableListOf(userMsg)
+                // 用户消息已在上面的回调里提早上屏，这里只补助手回复
+                val newMessages = mutableListOf<ChatMessage>()
                 if (assistantMsg != null) newMessages.add(assistantMsg)
-                _messages.value = _messages.value + newMessages
-                _currentResponse.value = ""
+                if (newMessages.isNotEmpty()) _messages.value = _messages.value + newMessages
+                endResponseTurn()
                 currentSession?.let { session -> manageSessionUseCase.saveCallMessages(session.id, _messages.value) }
+            } catch (e: Exception) {
+                endResponseTurn()
             } finally {
                 isProcessing = false
                 if (_callState.value != CallState.ENDED && !_isMuted.value) {
@@ -389,6 +471,7 @@ class CallViewModel(
 
     fun hangUp() {
         _callState.value = CallState.ENDED
+        endResponseTurn()
         listeningTimeoutJob?.cancel()
         audioRecorder.stopRecording()
         audioPlayer.stopCurrentPlayback()

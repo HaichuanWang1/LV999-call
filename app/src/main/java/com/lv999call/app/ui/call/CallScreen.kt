@@ -1,15 +1,23 @@
 package com.lv999call.app.ui.call
 
 import android.os.SystemClock
-import androidx.compose.animation.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
@@ -24,10 +32,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -37,6 +48,8 @@ import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.ui.live2d.Live2DStatus
 import com.lv999call.app.ui.live2d.Live2DView
 import com.lv999call.app.ui.live2d.rememberLive2DController
+import com.lv999call.app.ui.common.bubbleEntrance
+import com.lv999call.app.ui.common.rememberBubbleEntranceTracker
 import com.lv999call.app.ui.theme.UltraFlowTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -83,6 +96,26 @@ private const val EXPRESSION_SPEAKING_HOLD_MS = 3_500L
  */
 const val HANGUP_TRANSFORM_MS = 2_300L
 
+// ===================== 板块外观 =====================
+
+/**
+ * 「舞台板块」（装 Live2D 模型）的圆角。
+ *
+ * 刻意做得比对话板块大一点：模型是主角，边界要更"软"。
+ */
+private val STAGE_SHAPE = RoundedCornerShape(28.dp)
+
+/** 「对话板块」（装聊天气泡 + 输入栏）的圆角 */
+private val PANEL_SHAPE = RoundedCornerShape(24.dp)
+
+/**
+ * 舞台板块里模型相对板块的填充比例。
+ *
+ * 小于 1 是刻意的：留一圈安全边距，角色的头发/脚不会贴着圆角边线，
+ * 也就不会出现"模型被板块切掉一块"的观感（plan1 四-2：不要超出边界）。
+ */
+private const val STAGE_FILL_RATIO = 0.94f
+
 @Composable
 fun CallScreen(
     callState: CallState,
@@ -102,19 +135,32 @@ fun CallScreen(
     /** 是否播放接通/挂断的"变身"过场（纯演出，关掉不影响待机动作、表情与口型） */
     transformEnabled: Boolean = true,
     /** LLM 触发的情绪表情，null 表示无 */
-    expressionCue: ExpressionCue? = null
+    expressionCue: ExpressionCue? = null,
+    /**
+     * 是否处于「思考中占位」阶段：语音识别结束 → 首个可见字到达之间。
+     *
+     * 由 CallViewModel 显式给出，而不是让 UI 看 `currentResponse.isEmpty()` 去猜 ——
+     * 否则首字到达前那段空白里 UI 不知道要不要先摆一个转圈气泡。
+     */
+    isThinkingResponse: Boolean = false
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
     val ext = UltraFlowTheme.extendedColors
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
+    // 记住哪些气泡已经播过入场动画（列表回收重建时不重播）
+    val entranceTracker = rememberBubbleEntranceTracker()
 
     // ===================== Live2D 形象 =====================
     val l2d = rememberLive2DController()
     var l2dStatus by remember { mutableStateOf(Live2DStatus.LOADING) }
     // 只有启用且未出错时才用 Live2D 渲染，否则回退到静态头像
     val live2dActive = live2dEnabled && l2dStatus != Live2DStatus.ERROR
+
+    // 舞台板块的实际尺寸：模型要按「板块」而不是「屏幕」重新适配，
+    // 否则从全屏铺底改成板块内嵌后，按宽度缩放会把角色的头脚裁掉。
+    var stageSize by remember { mutableStateOf(IntSize.Zero) }
 
     // 状态联动：等模型就绪后再下发，避免指令丢失
     LaunchedEffect(callState, l2dStatus) {
@@ -144,6 +190,32 @@ fun CallScreen(
             delay(HANGUP_TRANSFORM_MS)
             hangupAnimating = false
         }
+    }
+
+    // 模型适配舞台板块。
+    //
+    // 全屏铺底时 bridge.js 用 fitBy='width'，那是为「模型下半身被对话框盖住」
+    // 的旧布局调的；现在模型独占舞台板块，视口又矮又窄，继续按宽度会上下裁切。
+    // 所以这里按板块宽高比动态选边：板块比内容更"宽扁"就按高度适配，
+    // 否则按宽度，效果等价于 contain —— 角色完整落在板块内，不越界。
+    LaunchedEffect(stageSize, l2dStatus, l2d.modelInfo) {
+        if (l2dStatus != Live2DStatus.READY || stageSize.width == 0 || stageSize.height == 0) {
+            return@LaunchedEffect
+        }
+        val contentAspect = parseContentAspect(l2d.modelInfo?.optString("content"))
+        val stageAspect = stageSize.width.toFloat() / stageSize.height.toFloat()
+        val fitBy = when {
+            contentAspect == null -> "contain"
+            contentAspect > stageAspect -> "width"
+            else -> "height"
+        }
+        l2d.setLayout(
+            fillRatio = STAGE_FILL_RATIO,
+            offsetX = 0f,
+            // 模型（Q 版角色）内容中心略偏上更自然，给下方气泡留出呼吸空间
+            offsetY = 0.02f,
+            fitBy = fitBy
+        )
     }
 
     // 口型驱动：每帧把最新音量推给控制器（控制器内部已限流到 ~60fps）
@@ -190,12 +262,22 @@ fun CallScreen(
         l2d.setExpression(null)
     }
 
-    LaunchedEffect(messages.size, currentResponse) {
-        if (messages.isNotEmpty() || currentResponse.isNotEmpty()) {
-            delay(100)
-            listState.animateScrollToItem(
-                (messages.size + if (currentResponse.isNotEmpty()) 1 else 0).coerceAtLeast(0)
-            )
+    // ---------------- 气泡列表（正式消息 + 1 个"当前气泡"） ----------------
+    //
+    // 正在生成的那一条**不是**独立的 item 类型，而是列表最后一条的两种形态：
+    // 转圈占位 → 流式文本。两者用同一个 item 承载，所以切换时气泡不会
+    // 消失再重建成两个（plan1 一-5「加载动画与正式输出的衔接」）。
+    val showPlaceholder = isThinkingResponse && currentResponse.isEmpty() &&
+        callState != CallState.ENDED
+    val showStreaming = currentResponse.isNotEmpty()
+    val hasLiveBubble = showPlaceholder || showStreaming
+
+    LaunchedEffect(messages.size, currentResponse, hasLiveBubble) {
+        val total = messages.size + if (hasLiveBubble) 1 else 0
+        if (total > 0) {
+            delay(80)
+            // 自动滚到底：列表最后一项就是"当前气泡"（如果有）
+            listState.animateScrollToItem(total - 1)
         }
     }
 
@@ -233,122 +315,391 @@ fun CallScreen(
             )
         )
 
-        // ---------- Live2D 模型层 ----------
-        if (live2dActive) {
-            Live2DView(
-                controller = l2d,
-                modifier = Modifier.fillMaxSize(),
-                // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
-                // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
-                paused = callState == CallState.ENDED && !hangupAnimating,
-                onStatusChange = { l2dStatus = it }
-            )
-        }
-
-        // ---------- 内容层 ----------
+        // ---------- 内容层：状态条 / 舞台板块 / 对话板块 / 输入 / 控制 ----------
         Column(
-            modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 12.dp)
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Live2D 可用时，模型本身就是角色形象，不再显示静态头像
-            if (!live2dActive) {
-                StaticAvatar(callState, avatarUri, avatarResId)
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
+            Spacer(modifier = Modifier.height(8.dp))
             CallStatusIndicator(callState)
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            if (live2dActive) {
-                // 上半部留白，把角色让出来
-                Spacer(modifier = Modifier.weight(1f))
-            }
-
-            // 消息列表
-            LazyColumn(
+            // ===== 舞台板块（装 Live2D 模型）=====
+            //
+            // 注意：这里**不能**对装着 WebView 的容器做 clip。AndroidView 是真实
+            // View，Compose 的圆角裁剪对它的硬件层处理不一致，实测会导致模型整块
+            // 不上屏（见 index.html 里那段 canvas 合成层注释）。
+            // 所以"不超出边界"靠的是布局本身：舞台区独占一块，模型用 contain 适配，
+            // 四周留出安全边距 —— 而不是靠把越界部分裁掉。
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(if (live2dActive) 1.7f else 1f)
-                    .padding(horizontal = 16.dp),
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                    .weight(1f)
+                    .onSizeChanged { stageSize = it }
+                    .background(ext.stageSurface, STAGE_SHAPE)
+                    .border(BorderStroke(1.dp, ext.stageBorder), STAGE_SHAPE)
             ) {
-                items(messages) { MessageBubble(message = it, avatarResId = avatarResId) }
-                if (currentResponse.isNotEmpty()) {
-                    item {
-                        MessageBubble(
-                            message = ChatMessage(role = "assistant", content = currentResponse),
-                            isStreaming = true,
-                            avatarResId = avatarResId
+                if (live2dActive) {
+                    Live2DView(
+                        controller = l2d,
+                        modifier = Modifier.fillMaxSize(),
+                        // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
+                        // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
+                        paused = callState == CallState.ENDED && !hangupAnimating,
+                        onStatusChange = { l2dStatus = it }
+                    )
+                } else {
+                    StaticAvatar(callState, avatarUri, avatarResId)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ===== 对话板块（聊天气泡 + 输入栏）=====
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1.15f)
+                    .clip(PANEL_SHAPE)
+                    .background(ext.panelSurface)
+                    .border(BorderStroke(1.dp, ext.panelBorder), PANEL_SHAPE)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(horizontal = 12.dp),
+                        state = listState,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        items(
+                            items = messages,
+                            // 稳定 key：LazyColumn 靠它把「同一条消息」认成同一个槽位，
+                            // 否则滚动回收后重组会错位，入场动画也会串到别的气泡上
+                            key = { "${it.role}-${it.timestamp}" }
+                        ) { message ->
+                            val key = "${message.role}-${message.timestamp}"
+                            MessageBubble(
+                                message = message,
+                                avatarResId = avatarResId,
+                                animateIn = entranceTracker.shouldAnimate(key),
+                                onEntrancePlayed = { entranceTracker.markPlayed(key) }
+                            )
+                        }
+                        if (hasLiveBubble) {
+                            val liveKey = "live-${messages.size}"
+                            item(key = "live-response") {
+                                LiveResponseBubble(
+                                    text = currentResponse,
+                                    thinking = showPlaceholder,
+                                    avatarResId = avatarResId,
+                                    animateIn = entranceTracker.shouldAnimate(liveKey),
+                                    onEntrancePlayed = { entranceTracker.markPlayed(liveKey) }
+                                )
+                            }
+                        }
+                    }
+
+                    // 文字输入栏（放在对话板块内，视觉上属于"这个对话框"）
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = {
+                                Text("输入消息…", color = colors.onSurfaceVariant.copy(alpha = 0.5f))
+                            },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = colors.primary,
+                                unfocusedBorderColor = colors.outline.copy(alpha = 0.4f),
+                                focusedTextColor = colors.onSurface,
+                                unfocusedTextColor = colors.onSurface,
+                                cursorColor = colors.tertiary
+                            ),
+                            shape = shapes.large,
+                            enabled = callState != CallState.ENDED
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(
+                            onClick = {
+                                if (inputText.isNotBlank()) {
+                                    onSendText(inputText.trim())
+                                    inputText = ""
+                                }
+                            },
+                            enabled = inputText.isNotBlank() && callState != CallState.ENDED,
+                            modifier = Modifier.size(44.dp).clip(CircleShape).background(
+                                if (inputText.isNotBlank()) colors.primary else colors.surfaceVariant
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.Send, "发送",
+                                tint = if (inputText.isNotBlank()) colors.onPrimary else colors.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
 
-            // 文字输入栏
+            // ===== 底部控制栏 =====
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("输入消息...", color = colors.onSurfaceVariant.copy(alpha = 0.5f)) },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline.copy(alpha = 0.5f),
-                        focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
-                    ),
-                    shape = shapes.large,
-                    enabled = callState != CallState.ENDED
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
-                            onSendText(inputText.trim())
-                            inputText = ""
-                        }
-                    },
-                    enabled = inputText.isNotBlank() && callState != CallState.ENDED,
-                    modifier = Modifier.size(48.dp).clip(CircleShape).background(
-                        if (inputText.isNotBlank()) colors.primary else colors.surfaceVariant
-                    )
-                ) {
-                    Icon(
-                        Icons.Default.Send, "发送",
-                        tint = if (inputText.isNotBlank()) colors.onPrimary else colors.onSurfaceVariant,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
-
-            // 底部控制栏
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
-                horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(
                     onClick = onToggleMute,
-                    modifier = Modifier.size(56.dp).clip(CircleShape).background(colors.surfaceVariant)
+                    modifier = Modifier.size(52.dp).clip(CircleShape).background(ext.panelBorder)
                 ) {
-                    Icon(if (isMuted) Icons.Default.MicOff else Icons.Default.Mic, if (isMuted) "取消静音" else "静音",
-                        tint = if (isMuted) colors.error else colors.onSurface, modifier = Modifier.size(28.dp))
+                    Icon(
+                        if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                        if (isMuted) "取消静音" else "静音",
+                        tint = if (isMuted) colors.error else colors.onSurface,
+                        modifier = Modifier.size(26.dp)
+                    )
                 }
-                Spacer(modifier = Modifier.width(32.dp))
+                Spacer(modifier = Modifier.width(28.dp))
                 IconButton(
                     onClick = onHangUp,
-                    modifier = Modifier.size(72.dp).clip(CircleShape).background(ext.callEnd)
+                    modifier = Modifier.size(68.dp).clip(CircleShape).background(ext.callEnd)
                 ) {
-                    Icon(Icons.Default.CallEnd, "挂断", tint = colors.onError, modifier = Modifier.size(36.dp))
+                    Icon(Icons.Default.CallEnd, "挂断", tint = colors.onError, modifier = Modifier.size(34.dp))
                 }
-                Spacer(modifier = Modifier.width(32.dp))
-                Spacer(modifier = Modifier.size(56.dp))
+                Spacer(modifier = Modifier.width(28.dp))
+                Spacer(modifier = Modifier.size(52.dp))
             }
         }
     }
+}
+
+/**
+ * 解析 bridge.js 上报的内容包围盒（形如 `"2160x3760@-1080,-1880"`），返回宽高比。
+ *
+ * 解析失败返回 null，调用方退回 `contain` —— 宁可小一点，也不要裁到角色。
+ */
+private fun parseContentAspect(content: String?): Float? {
+    val size = content?.substringBefore('@') ?: return null
+    val parts = size.split('x')
+    if (parts.size != 2) return null
+    val w = parts[0].toFloatOrNull() ?: return null
+    val h = parts[1].toFloatOrNull() ?: return null
+    if (w <= 0f || h <= 0f) return null
+    return w / h
+}
+
+/**
+ * 一条正式消息气泡。
+ *
+ * 样式：中性灰半透明 + 1dp 弱描边（plan1 一-4）。
+ * 之所以不做真·毛玻璃（背景模糊）：Compose 没有 backdrop blur，`Modifier.blur`
+ * 模糊的是**自身内容**，拿来实现毛玻璃只会把文字一起糊掉。
+ */
+@Composable
+private fun MessageBubble(
+    message: ChatMessage,
+    avatarResId: Int? = null,
+    animateIn: Boolean = false,
+    onEntrancePlayed: () -> Unit = {}
+) {
+    val colors = MaterialTheme.colorScheme
+    val shapes = MaterialTheme.shapes
+    val ext = UltraFlowTheme.extendedColors
+    val isUser = message.role == "user"
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bubbleEntrance(animate = animateIn, onPlayed = onEntrancePlayed)
+            .padding(vertical = 2.dp),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        if (!isUser) {
+            AssistantAvatar(avatarResId)
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Card(
+            shape = shapes.large,
+            colors = CardDefaults.cardColors(
+                containerColor = if (isUser) ext.userBubble else ext.aiBubble
+            ),
+            border = BorderStroke(1.dp, ext.bubbleBorder),
+            modifier = Modifier.widthIn(max = 280.dp)
+        ) {
+            Text(
+                text = message.content,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.onSurface,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                lineHeight = 20.sp
+            )
+        }
+        if (isUser) Spacer(modifier = Modifier.width(8.dp))
+    }
+}
+
+/**
+ * 「当前正在生成」的那一个气泡：转圈占位 ⇄ 流式文本。
+ *
+ * 两种形态共用一个气泡外壳与同一个 item key，所以：
+ * - 首字到达时不会「旧气泡消失 + 新气泡出现」，只是气泡内部换了内容；
+ * - 用 [Crossfade] 交接，转圈淡出、文字淡入，没有硬切。
+ */
+@Composable
+private fun LiveResponseBubble(
+    text: String,
+    thinking: Boolean,
+    avatarResId: Int? = null,
+    animateIn: Boolean = false,
+    onEntrancePlayed: () -> Unit = {}
+) {
+    val ext = UltraFlowTheme.extendedColors
+    val shapes = MaterialTheme.shapes
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bubbleEntrance(animate = animateIn, onPlayed = onEntrancePlayed)
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        AssistantAvatar(avatarResId)
+        Spacer(modifier = Modifier.width(8.dp))
+        Card(
+            shape = shapes.large,
+            colors = CardDefaults.cardColors(containerColor = ext.aiBubble),
+            border = BorderStroke(1.dp, ext.bubbleBorder),
+            modifier = Modifier.widthIn(max = 280.dp)
+        ) {
+            Crossfade(
+                targetState = thinking,
+                animationSpec = tween(180),
+                label = "thinkingToText"
+            ) { isThinking ->
+                if (isThinking) {
+                    ThinkingDots(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp))
+                } else {
+                    StreamingText(
+                        text = text,
+                        streaming = true,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 助手侧头像（Live2D 不可用或预设模式下的兜底形象） */
+@Composable
+private fun AssistantAvatar(avatarResId: Int?) {
+    Image(
+        painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
+        contentDescription = null,
+        modifier = Modifier.size(32.dp).clip(CircleShape),
+        contentScale = ContentScale.Crop
+    )
+}
+
+/**
+ * 气泡内的小转圈 —— 「模型正在思考」的占位动画。
+ *
+ * 用自绘的三点脉冲而不是 CircularProgressIndicator：
+ * 前者是「对方正在输入」的语义，比进度环更贴合聊天语境，也不会让人以为
+ * 在下载什么东西。三个点错峰起落，肉眼看着就是一个转圈的节奏。
+ */
+@Composable
+private fun ThinkingDots(modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val transition = rememberInfiniteTransition(label = "thinkingDots")
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(3) { index ->
+            val alpha by transition.animateFloat(
+                initialValue = 0.25f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 480, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse,
+                    // 错峰：每个点比前一个晚 160ms 起跳
+                    initialStartOffset = StartOffset(index * 160)
+                ),
+                label = "dot$index"
+            )
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .graphicsLayer { this.alpha = alpha }
+                    .clip(CircleShape)
+                    .background(colors.onSurfaceVariant)
+            )
+        }
+    }
+}
+
+/**
+ * 文本展示：流式时在末尾跟一个闪烁光标。
+ *
+ * 光标用 [androidx.compose.foundation.text.BasicText] 的 AnnotatedString 拼不进去，
+ * 所以这里用「文本 + 光标」并排的写法，让 Row 的基线对齐把它摆在最后一个字的右下角。
+ */
+@Composable
+private fun StreamingText(
+    text: String,
+    streaming: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val colors = MaterialTheme.colorScheme
+    Row(modifier = modifier) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurface,
+            lineHeight = 20.sp
+        )
+        if (streaming) {
+            Spacer(modifier = Modifier.width(3.dp))
+            BlinkingCaret()
+        }
+    }
+}
+
+/** 流式输出末尾的闪烁光标（模拟"还在打字"） */
+@Composable
+private fun BlinkingCaret() {
+    val colors = MaterialTheme.colorScheme
+    val transition = rememberInfiniteTransition(label = "caret")
+    val caretAlpha by transition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "caretAlpha"
+    )
+    Box(
+        modifier = Modifier
+            .width(2.dp)
+            .height(16.dp)
+            .graphicsLayer { alpha = caretAlpha }
+            .clip(RoundedCornerShape(1.dp))
+            .background(colors.tertiary)
+    )
 }
 
 /**
@@ -360,7 +711,7 @@ private fun StaticAvatar(callState: CallState, avatarUri: String?, avatarResId: 
     val colors = MaterialTheme.colorScheme
     val ext = UltraFlowTheme.extendedColors
 
-    Box(modifier = Modifier.fillMaxWidth().padding(top = 16.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val infiniteTransition = rememberInfiniteTransition(label = "breathing")
         val breathScale by infiniteTransition.animateFloat(
             initialValue = 1f,
@@ -372,7 +723,7 @@ private fun StaticAvatar(callState: CallState, avatarUri: String?, avatarResId: 
             label = "breathScale"
         )
         Box(
-            modifier = Modifier.scale(breathScale).size(100.dp).clip(CircleShape).background(
+            modifier = Modifier.scale(breathScale).size(140.dp).clip(CircleShape).background(
                 Brush.radialGradient(
                     colors = when (callState) {
                         CallState.LISTENING -> listOf(ext.listening.copy(alpha = 0.4f), ext.listening.copy(alpha = 0.1f))
@@ -384,75 +735,83 @@ private fun StaticAvatar(callState: CallState, avatarUri: String?, avatarResId: 
             ),
             contentAlignment = Alignment.Center
         ) {
-            if (!avatarUri.isNullOrEmpty()) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current).data(avatarUri).crossfade(true).build(),
-                    contentDescription = "角色头像",
-                    modifier = Modifier.size(88.dp).clip(CircleShape), contentScale = ContentScale.Crop
-                )
-            } else {
-                Image(
-                    painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
-                    contentDescription = "角色头像",
-                    modifier = Modifier.size(88.dp).clip(CircleShape),
+            when {
+                avatarResId != null -> Image(
+                    painter = painterResource(id = avatarResId),
+                    contentDescription = null,
+                    modifier = Modifier.size(120.dp).clip(CircleShape),
                     contentScale = ContentScale.Crop
+                )
+                !avatarUri.isNullOrEmpty() -> AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(avatarUri).crossfade(true).build(),
+                    contentDescription = null,
+                    modifier = Modifier.size(120.dp).clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+                else -> Text(
+                    text = "✦",
+                    fontSize = 40.sp,
+                    color = colors.tertiary
                 )
             }
         }
     }
 }
 
+/** 通话状态指示（胶囊） */
 @Composable
 private fun CallStatusIndicator(callState: CallState) {
     val colors = MaterialTheme.colorScheme
     val ext = UltraFlowTheme.extendedColors
-    val (text, color) = when (callState) {
-        CallState.IDLE -> "准备就绪" to colors.onSurfaceVariant
-        CallState.LISTENING -> "聆听中..." to ext.listening
-        CallState.THINKING -> "思考中..." to ext.thinking
-        CallState.SPEAKING -> "说话中..." to ext.speaking
-        CallState.ENDED -> "通话结束" to colors.onSurfaceVariant
-    }
-    AnimatedVisibility(visible = callState != CallState.IDLE, enter = fadeIn() + slideInVertically(), exit = fadeOut()) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center, modifier = Modifier.fillMaxWidth()) {
-            if (callState == CallState.LISTENING || callState == CallState.SPEAKING) {
-                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                val alpha by infiniteTransition.animateFloat(
-                    initialValue = 0.3f, targetValue = 1f,
-                    animationSpec = infiniteRepeatable(animation = tween(600), repeatMode = RepeatMode.Reverse), label = "alpha"
-                )
-                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color.copy(alpha = alpha)))
-                Spacer(modifier = Modifier.width(8.dp))
-            }
-            Text(text = text, style = MaterialTheme.typography.bodyMedium, color = color, fontWeight = FontWeight.Medium)
-        }
-    }
-}
 
-@Composable
-private fun MessageBubble(message: ChatMessage, isStreaming: Boolean = false, avatarResId: Int? = null) {
-    val colors = MaterialTheme.colorScheme
-    val shapes = MaterialTheme.shapes
-    val ext = UltraFlowTheme.extendedColors
-    val isUser = message.role == "user"
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start) {
-        if (!isUser) {
-            Image(
-                painter = painterResource(id = avatarResId ?: com.lv999call.app.R.drawable.touxiang),
-                contentDescription = null,
-                modifier = Modifier.size(32.dp).clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+    val (label, tint) = when (callState) {
+        CallState.LISTENING -> "聆听中…" to ext.listening
+        CallState.THINKING -> "思考中…" to ext.thinking
+        CallState.SPEAKING -> "说话中…" to ext.speaking
+        CallState.ENDED -> "通话已结束" to ext.callEnd
+        CallState.IDLE -> "" to colors.primary
+    }
+
+    AnimatedVisibility(
+        visible = label.isNotEmpty(),
+        enter = fadeIn(tween(220)) + slideInVertically(tween(260)) { -it / 2 } + scaleIn(initialScale = 0.9f),
+        exit = fadeOut(tween(160))
+    ) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(ext.panelSurface)
+                    .border(BorderStroke(1.dp, ext.panelBorder), RoundedCornerShape(50))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 状态点：呼吸式脉动
+                val transition = rememberInfiniteTransition(label = "statusDot")
+                val dotAlpha by transition.animateFloat(
+                    initialValue = 0.35f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(900, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "dotAlpha"
+                )
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .graphicsLayer { alpha = dotAlpha }
+                        .clip(CircleShape)
+                        .background(tint)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.onSurface.copy(alpha = 0.85f),
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
-        Card(
-            shape = shapes.large,
-            colors = CardDefaults.cardColors(containerColor = if (isUser) ext.userBubble else ext.aiBubble),
-            modifier = Modifier.widthIn(max = 280.dp)
-        ) {
-            Text(text = message.content, style = MaterialTheme.typography.bodyMedium, color = colors.onSurface,
-                modifier = Modifier.padding(12.dp), lineHeight = 20.sp)
-        }
-        if (isUser) { Spacer(modifier = Modifier.width(8.dp)) }
     }
 }

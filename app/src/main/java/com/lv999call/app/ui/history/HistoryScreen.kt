@@ -1,5 +1,6 @@
 package com.lv999call.app.ui.history
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
@@ -20,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lv999call.app.domain.model.ChatMessage
+import com.lv999call.app.ui.common.bubbleEntrance
 import com.lv999call.app.ui.theme.UltraFlowTheme
 import java.text.SimpleDateFormat
 import java.util.*
@@ -138,7 +140,10 @@ private fun HistoryMessageItem(message: ChatMessage) {
     val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            // 与通话页同款的入场过渡（淡入 + 轻微放大 + 上滑），风格统一
+            .bubbleEntrance(animate = true),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
     ) {
         if (!isUser) {
@@ -159,13 +164,14 @@ private fun HistoryMessageItem(message: ChatMessage) {
                 colors = CardDefaults.cardColors(
                     containerColor = if (isUser) ext.userBubble else ext.aiBubble
                 ),
+                border = BorderStroke(1.dp, ext.bubbleBorder),
                 modifier = Modifier.widthIn(max = 300.dp)
             ) {
                 Text(
                     text = message.content,
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.onSurface,
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                     lineHeight = 20.sp
                 )
             }
