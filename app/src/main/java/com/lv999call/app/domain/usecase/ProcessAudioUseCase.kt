@@ -24,7 +24,6 @@ class ProcessAudioUseCase(
 ) {
     companion object {
         private const val TAG = "ProcessAudioUseCase"
-        private const val RESPONSE_TOKEN_RESERVE = 2048
     }
 
     private fun estimateTokens(text: String): Int {
@@ -33,8 +32,19 @@ class ProcessAudioUseCase(
         return (chineseChars * 0.7 + otherChars * 0.25).toInt() + 4
     }
 
-    private fun truncateHistory(history: List<ChatMessage>, maxTokens: Int): List<ChatMessage> {
-        val budget = maxTokens - RESPONSE_TOKEN_RESERVE
+    /**
+     * 按 token 预算裁剪历史。
+     *
+     * [reserveForResponse] 必须取用户配置的**最大输出长度**而不是写死值：
+     * 两者不一致时，用户把回复上限调大就会把上下文窗口挤爆（请求被服务端拒），
+     * 调小又白白浪费上下文。见 [ApiConfig.llmMaxOutputTokens]。
+     */
+    private fun truncateHistory(
+        history: List<ChatMessage>,
+        maxTokens: Int,
+        reserveForResponse: Int
+    ): List<ChatMessage> {
+        val budget = (maxTokens - reserveForResponse).coerceAtLeast(0)
         var usedTokens = 0
         val result = mutableListOf<ChatMessage>()
         for (msg in history.reversed()) {
@@ -91,7 +101,11 @@ class ProcessAudioUseCase(
 
         // Step 2: LLM流式生成（文字实时更新UI）
         onStateChange(CallState.THINKING)
-        val contextMessages = truncateHistory(history, config.maxContextTokens)
+        val contextMessages = truncateHistory(
+            history = history,
+            maxTokens = config.maxContextTokens,
+            reserveForResponse = config.llmMaxOutputTokens
+        )
         val fullResponse = StringBuilder()
 
         // Live2D 开着才把表情标签协议拼进 system prompt：

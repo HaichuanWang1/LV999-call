@@ -198,10 +198,11 @@ fun SettingsScreen(
                 )
                 ParamSlider(
                     label = "最大输出长度",
-                    hint = "单次回复的 token 上限。语音对话太长会拖慢开口，建议 256~1024",
+                    hint = "单次回复的 token 上限。写太长会拖慢开口，语音对话建议 512~2048",
                     valueText = "${maxOutputTokens.toInt()}",
                     value = maxOutputTokens,
                     onValueChange = { maxOutputTokens = it },
+                    // 128 起步、128 一档：够粗也够用，避免滑杆停在 1903 这种怪数字上
                     valueRange = 128f..4096f,
                     steps = 30,
                     onReset = { maxOutputTokens = 2048f }

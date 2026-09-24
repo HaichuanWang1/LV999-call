@@ -62,7 +62,10 @@ fun Modifier.bubbleEntrance(
     // 初值只在首次组合时取一次：之后父层重组传入的 animate 变化不会打断正在跑的动画
     var entered by remember { mutableStateOf(!animate) }
     LaunchedEffect(Unit) {
-        if (animate) onPlayed()
+        // 无论这一帧是否播动画，都算「已经露过面」——
+        // 否则「生成中气泡原地转成正式气泡」这种不播动画的路径不会被记账，
+        // 等它被列表回收再滚回来时会突然重播一次。
+        onPlayed()
         entered = true
     }
     // 用 State 而不是解包值：状态读取落在 draw 阶段，每帧只重绘不重组

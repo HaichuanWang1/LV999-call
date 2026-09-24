@@ -19,10 +19,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -99,14 +99,13 @@ const val HANGUP_TRANSFORM_MS = 2_300L
 // ===================== 板块外观 =====================
 
 /**
- * 「舞台板块」（装 Live2D 模型）的圆角。
+ * 「主板块」的圆角 —— Live2D 舞台与对话框共同装在这一个容器里。
  *
- * 刻意做得比对话板块大一点：模型是主角，边界要更"软"。
+ * 做成一个整块（而不是上下两张卡片）是有意的：plan1 四-1 要的是
+ * 「模型和对话框都装进板块里」，一个容器天然就没有两块卡片之间的
+ * 缝隙、错位与互相遮挡问题，边界只需要表达一次。
  */
 private val STAGE_SHAPE = RoundedCornerShape(28.dp)
-
-/** 「对话板块」（装聊天气泡 + 输入栏）的圆角 */
-private val PANEL_SHAPE = RoundedCornerShape(24.dp)
 
 /**
  * 舞台板块里模型相对板块的填充比例。
@@ -266,19 +265,49 @@ fun CallScreen(
     //
     // 正在生成的那一条**不是**独立的 item 类型，而是列表最后一条的两种形态：
     // 转圈占位 → 流式文本。两者用同一个 item 承载，所以切换时气泡不会
-    // 消失再重建成两个（plan1 一-5「加载动画与正式输出的衔接」）。
+    // 消失再重建成两个（plan1 一-5「加载动画与最终输出的衔接」）。
+
+    // 流式气泡「转正」的识别。
+    //
+    // 回复落地时，流式气泡（key = live-response）消失、列表里换成一条正式的
+    // 助手消息（key = assistant-<ts>）。这里记下最后一段流式文本，用来认出
+    // 「刚落地的这条助手消息就是它」，从而让交接在同一帧内完成、且不重播入场动画。
+    var lastLiveText by remember { mutableStateOf("") }
+    LaunchedEffect(currentResponse) {
+        if (currentResponse.isNotEmpty()) lastLiveText = currentResponse
+    }
+    // 新一轮开始时清掉记忆，避免两轮回复内容恰好相同时误判成同一条
+    LaunchedEffect(isThinkingResponse) {
+        if (isThinkingResponse) lastLiveText = ""
+    }
+    val streamContinuationKey = messages.lastOrNull()
+        ?.takeIf { it.role == "assistant" && lastLiveText.isNotEmpty() && it.content == lastLiveText }
+        ?.let { "${it.role}-${it.timestamp}" }
+
     val showPlaceholder = isThinkingResponse && currentResponse.isEmpty() &&
         callState != CallState.ENDED
-    val showStreaming = currentResponse.isNotEmpty()
+    // 已落地成正式消息时立刻收掉流式气泡：ViewModel 是「先写消息、再清空流式文本」
+    // 两次独立更新，不这样收会在中间那一帧里同一段话出现两个气泡（闪一下）。
+    val showStreaming = currentResponse.isNotEmpty() && streamContinuationKey == null
     val hasLiveBubble = showPlaceholder || showStreaming
 
-    LaunchedEffect(messages.size, currentResponse, hasLiveBubble) {
-        val total = messages.size + if (hasLiveBubble) 1 else 0
-        if (total > 0) {
+    val itemCount = messages.size + if (hasLiveBubble) 1 else 0
+
+    // 新气泡出现：平滑滚到底
+    LaunchedEffect(itemCount) {
+        if (itemCount > 0) {
             delay(80)
-            // 自动滚到底：列表最后一项就是"当前气泡"（如果有）
-            listState.animateScrollToItem(total - 1)
+            listState.animateScrollToItem(itemCount - 1)
         }
+    }
+
+    // 流式文本变长：如果视线本来就在底部，就瞬时跟随。
+    // 这里刻意不用 animateScrollToItem —— 它每个 chunk 都会被取消重来，
+    // 既抖动又白费动画开销；用户手动往上翻时不打扰（只看最后一屏是否可见）。
+    LaunchedEffect(currentResponse) {
+        if (currentResponse.isEmpty() || itemCount == 0) return@LaunchedEffect
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (lastVisible >= itemCount - 1) listState.scrollToItem(itemCount - 1)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -315,7 +344,7 @@ fun CallScreen(
             )
         )
 
-        // ---------- 内容层：状态条 / 舞台板块 / 对话板块 / 输入 / 控制 ----------
+        // ---------- 内容层：状态条 / 主板块（舞台 + 对话）/ 控制 ----------
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -327,127 +356,144 @@ fun CallScreen(
             CallStatusIndicator(callState)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // ===== 舞台板块（装 Live2D 模型）=====
+            // ===== 主板块：Live2D 舞台 + 对话框，装在同一个容器里 =====
             //
-            // 注意：这里**不能**对装着 WebView 的容器做 clip。AndroidView 是真实
+            // 关于"弱边界"：用一层极低透明度的底色 + 1dp 低透明度描边表达容器感，
+            // 而不是实心卡片 —— 目的是让人看出"这里是一块"，又不切断背景氛围。
+            //
+            // 关于 clip：装着 WebView 的容器**不能**做圆角裁剪。AndroidView 是真实
             // View，Compose 的圆角裁剪对它的硬件层处理不一致，实测会导致模型整块
             // 不上屏（见 index.html 里那段 canvas 合成层注释）。
-            // 所以"不超出边界"靠的是布局本身：舞台区独占一块，模型用 contain 适配，
-            // 四周留出安全边距 —— 而不是靠把越界部分裁掉。
-            Box(
+            // 所以"不超出边界"靠布局本身保证：舞台与对话上下分区、互不重叠，
+            // 模型按板块宽高比适配并留 6% 安全边距，而不是靠把越界部分裁掉。
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .onSizeChanged { stageSize = it }
                     .background(ext.stageSurface, STAGE_SHAPE)
                     .border(BorderStroke(1.dp, ext.stageBorder), STAGE_SHAPE)
             ) {
-                if (live2dActive) {
-                    Live2DView(
-                        controller = l2d,
-                        modifier = Modifier.fillMaxSize(),
-                        // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
-                        // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
-                        paused = callState == CallState.ENDED && !hangupAnimating,
-                        onStatusChange = { l2dStatus = it }
-                    )
-                } else {
-                    StaticAvatar(callState, avatarUri, avatarResId)
+                // ---- 舞台区（Live2D）----
+                // 顶部两角圆角：板块的圆角靠底色体现，而这里给的是"上半块"的形状
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .onSizeChanged { stageSize = it }
+                ) {
+                    if (live2dActive) {
+                        Live2DView(
+                            controller = l2d,
+                            modifier = Modifier.fillMaxSize(),
+                            // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
+                            // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
+                            paused = callState == CallState.ENDED && !hangupAnimating,
+                            onStatusChange = { l2dStatus = it }
+                        )
+                    } else {
+                        StaticAvatar(callState, avatarUri, avatarResId)
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+                // 分区线：两个区域之间唯一的视觉分隔，比给各自画边框更轻
+                HorizontalDivider(color = ext.panelBorder, thickness = 1.dp)
 
-            // ===== 对话板块（聊天气泡 + 输入栏）=====
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1.15f)
-                    .clip(PANEL_SHAPE)
-                    .background(ext.panelSurface)
-                    .border(BorderStroke(1.dp, ext.panelBorder), PANEL_SHAPE)
-            ) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                            .padding(horizontal = 12.dp),
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(vertical = 12.dp)
-                    ) {
-                        items(
-                            items = messages,
-                            // 稳定 key：LazyColumn 靠它把「同一条消息」认成同一个槽位，
-                            // 否则滚动回收后重组会错位，入场动画也会串到别的气泡上
-                            key = { "${it.role}-${it.timestamp}" }
-                        ) { message ->
-                            val key = "${message.role}-${message.timestamp}"
-                            MessageBubble(
-                                message = message,
-                                avatarResId = avatarResId,
-                                animateIn = entranceTracker.shouldAnimate(key),
-                                onEntrancePlayed = { entranceTracker.markPlayed(key) }
-                            )
-                        }
-                        if (hasLiveBubble) {
-                            val liveKey = "live-${messages.size}"
-                            item(key = "live-response") {
-                                LiveResponseBubble(
-                                    text = currentResponse,
-                                    thinking = showPlaceholder,
+                // ---- 对话区（气泡 + 输入栏）----
+                // 底部两角用圆角背景，让对话区自身的浅底色不会把板块的圆角顶成直角
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1.2f)
+                        .background(
+                            color = ext.panelSurface,
+                            shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp)
+                        )
+                ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .padding(horizontal = 12.dp),
+                            state = listState,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(vertical = 12.dp)
+                        ) {
+                            items(
+                                items = messages,
+                                // 稳定 key：LazyColumn 靠它把「同一条消息」认成同一个槽位，
+                                // 否则滚动回收后重组会错位，入场动画也会串到别的气泡上
+                                key = { "${it.role}-${it.timestamp}" }
+                            ) { message ->
+                                val key = "${message.role}-${message.timestamp}"
+                                MessageBubble(
+                                    message = message,
                                     avatarResId = avatarResId,
-                                    animateIn = entranceTracker.shouldAnimate(liveKey),
-                                    onEntrancePlayed = { entranceTracker.markPlayed(liveKey) }
+                                    // 流式刚落地的那条不播入场动画：它上一帧还以流式气泡的
+                                    // 形态在屏幕上，重播一次会闪（见 streamContinuationKey）
+                                    animateIn = key != streamContinuationKey &&
+                                        entranceTracker.shouldAnimate(key),
+                                    onEntrancePlayed = { entranceTracker.markPlayed(key) }
                                 )
                             }
-                        }
-                    }
-
-                    // 文字输入栏（放在对话板块内，视觉上属于"这个对话框"）
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier.weight(1f),
-                            placeholder = {
-                                Text("输入消息…", color = colors.onSurfaceVariant.copy(alpha = 0.5f))
-                            },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = colors.primary,
-                                unfocusedBorderColor = colors.outline.copy(alpha = 0.4f),
-                                focusedTextColor = colors.onSurface,
-                                unfocusedTextColor = colors.onSurface,
-                                cursorColor = colors.tertiary
-                            ),
-                            shape = shapes.large,
-                            enabled = callState != CallState.ENDED
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(
-                            onClick = {
-                                if (inputText.isNotBlank()) {
-                                    onSendText(inputText.trim())
-                                    inputText = ""
+                            if (hasLiveBubble) {
+                                val liveKey = "live-${messages.size}"
+                                item(key = "live-response") {
+                                    LiveResponseBubble(
+                                        text = currentResponse,
+                                        thinking = showPlaceholder,
+                                        avatarResId = avatarResId,
+                                        animateIn = entranceTracker.shouldAnimate(liveKey),
+                                        onEntrancePlayed = { entranceTracker.markPlayed(liveKey) }
+                                    )
                                 }
-                            },
-                            enabled = inputText.isNotBlank() && callState != CallState.ENDED,
-                            modifier = Modifier.size(44.dp).clip(CircleShape).background(
-                                if (inputText.isNotBlank()) colors.primary else colors.surfaceVariant
-                            )
+                            }
+                        }
+
+                        // 文字输入栏（放在对话区内，视觉上属于"这个对话框"）
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.Default.Send, "发送",
-                                tint = if (inputText.isNotBlank()) colors.onPrimary else colors.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                modifier = Modifier.weight(1f),
+                                placeholder = {
+                                    Text("输入消息…", color = colors.onSurfaceVariant.copy(alpha = 0.5f))
+                                },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = colors.primary,
+                                    unfocusedBorderColor = colors.outline.copy(alpha = 0.4f),
+                                    focusedTextColor = colors.onSurface,
+                                    unfocusedTextColor = colors.onSurface,
+                                    cursorColor = colors.tertiary
+                                ),
+                                shape = shapes.large,
+                                enabled = callState != CallState.ENDED
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            IconButton(
+                                onClick = {
+                                    if (inputText.isNotBlank()) {
+                                        onSendText(inputText.trim())
+                                        inputText = ""
+                                    }
+                                },
+                                enabled = inputText.isNotBlank() && callState != CallState.ENDED,
+                                modifier = Modifier.size(44.dp).clip(CircleShape).background(
+                                    if (inputText.isNotBlank()) colors.primary else colors.surfaceVariant
+                                )
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send, "发送",
+                                    tint = if (inputText.isNotBlank()) colors.onPrimary else colors.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
