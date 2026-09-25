@@ -1,4 +1,4 @@
-# lv999call · 银狼AI通话
+# lv999call · AI通话(得名于第一个预制角色是银狼)
 
 基于 Jetpack Compose 的 Android 语音对话 Agent 应用，支持角色扮演式语音交互。
 
