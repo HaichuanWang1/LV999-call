@@ -131,9 +131,16 @@ class CallViewModel(
     // 当前通话使用的TTS提示词（内置角色用角色默认，自定义预设用preset）
     private var currentTtsPrompt: String = ""
 
-    /** 当前角色的表情集（无角色时为空集 → 不注入标签协议） */
+    /**
+     * 当前通话的表情集。
+     *
+     * 自定义预设（[currentCharacter] 为 null）回落到**银狼那一套**：自定义预设的
+     * 形象走 bridge.js 默认档位，也就是银狼模型 —— 表情名必须与真实加载的模型匹配，
+     * 否则标签会静默失效。改造前这里是全局单例枚举，对所有模式一视同仁；
+     * 若在这里返回空集，等于把自定义预设的表情驱动悄悄删掉。
+     */
     private val currentExpressions: ExpressionSet
-        get() = currentCharacter?.expressions ?: ExpressionSet.EMPTY
+        get() = currentCharacter?.expressions ?: Live2DExpressions.SILVERWOLF
 
     /**
      * 当前角色的发声策略。
