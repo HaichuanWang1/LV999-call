@@ -1,22 +1,34 @@
-# lv999call · 银狼AI通话
+# lv999call · AI 语音通话
 
 基于 Jetpack Compose 的 Android 语音对话 Agent 应用，支持角色扮演式语音交互。
 
 ## 功能特性
 
-### 两种对话模式
-- **银狼** — 内置角色人设和银狼音色，沉浸式角色扮演语音对话，支持自定义参考音频
+### 内置预设 + 自定义
+内置角色是**并列的数据行**，不是散落各处的硬编码（见「内置预设」）：
+
+- **银狼** — 角色扮演语音对话，自带银狼音色（参考音频克隆），支持自定义参考音频
+- **DeepSeek酱（大肥鱼）** — 傲娇干饭鲸鱼娘，独立提示词 / Live2D 形象 / 表情集，
+  发声强制锁定 MiMo 预置少女音「冰糖」
 - **自定义** — 完全自定义：提示词 + 角色头像/背景 + 参考音频 + TTS风格提示词
+
+> 新增第三个内置角色 = 加一行 `BuiltInCharacters` 数据 + 一个 assets 提示词
+> + 一个 `bridge.js` profile，调用链一行都不用改。
 
 ### 全链路语音交互
 ```
 用户说话 → VAD检测停顿 → ASR语音识别 → LLM流式生成 → TTS语音合成 → 实时播放
 ```
 
-### MiMo-V2.5-TTS-VoiceClone 集成
+### MiMo-V2.5-TTS 集成
+- 三种发声方式（由角色的 `TtsPolicy` 决定，调用链不认识任何具体角色）：
+  - **跟随设置**（银狼 / 自定义预设）—— 模型、音色、参考音频全部来自设置页
+  - **预置音色**（DeepSeek酱）—— 锁定 `mimo-v2.5-tts` + 音色名（`冰糖`），
+    无视设置里选的 TTS 模型
+  - **角色克隆音色** —— 锁定 `mimo-v2.5-tts-voiceclone`，参考音频由角色自带（assets）
 - 上传参考音频（5~15秒），克隆任意音色
 - 全局默认音色与自定义模式音色独立配置
-- TTS 风格提示词（控制语气、情感、语速等）
+- TTS 风格提示词（控制语气、情感、语速等），**按角色各存一份**，互不污染
 - 支持语速调节（0.5x ~ 2.0x）
 - **边收边播**：SSE 分块解码后直接喂给 AudioTrack，不等整段合成完（详见「TTS 播放链路」）
 - > TTS 当前仅支持 MiMo 系列（目前免费），仍需自行申请 API Key
@@ -27,10 +39,12 @@
 
 ### Live2D 动态形象
 - 通话界面可显示 Live2D 角色，替代静态头像
+- **多角色并列**：模型路径与形象档位（待机通道 / 布局 / 呼吸 / 是否变身）
+  由角色数据驱动，经 `?model=` / `?profile=` 传给 `bridge.js` 的 `PROFILES`
 - **口型同步**：TTS 播放音量实时驱动嘴型张合（快张慢合 + 轻微抖动）
 - **状态联动**：聆听/思考/说话/结束各有对应动作与表情
-- **情绪表情** ⚠️ *存疑待验证*：LLM 在回复开头插入 `[[e:生气]]` 之类的标签，
-  形象实时换脸，保持到本轮说完再回落（观感尚未在真机确认，详见下文）
+- **情绪表情**：LLM 在回复开头插入 `[[e:生气]]` / `[[m:抱胸]]` 标签，
+  形象实时换脸，保持到本轮说完再回落
 - 空闲时轻微视线游移，角色观感更自然
 - 设置页可开关；模型加载失败自动回退静态头像
 - 离线可用：运行时与模型本地内置，不依赖网络 CDN
@@ -53,9 +67,9 @@
 | 配置存储 | DataStore Preferences |
 | 网络 | Retrofit + OkHttp (SSE 流式) |
 | 音频录制 | AudioRecord + 能量阈值 VAD |
-| 音频播放 | AudioTrack (WAV/PCM 流式) |
+| 音频播放 | AudioTrack (PCM 流式) |
 | ASR | 自定义 HTTP / Vosk 离线 |
-| TTS | MiMo-V2.5-TTS-VoiceClone (OpenAI 兼容) |
+| TTS | MiMo-V2.5-TTS 系列（预置音色 / 音色克隆，OpenAI 兼容） |
 | 图片 | Coil |
 | Live2D | WebView + PixiJS 6 + pixi-live2d-display (Cubism 4) |
 
@@ -65,7 +79,7 @@
 app/src/main/java/com/lv999call/app/
 ├── audio/                  # 音频引擎
 │   ├── AudioRecorder.kt    #   录音 + VAD
-│   ├── AudioPlayer.kt      #   流式播放 (WAV自动检测)
+│   ├── AudioPlayer.kt      #   流式播放 (PCM16，自动兼容 WAV 头)
 │   ├── AudioPipe.kt        #   边收边播用的有界字节管道
 │   ├── VadDetector.kt      #   语音活动检测
 │   ├── AsrEngine.kt        #   ASR引擎 (PCM→WAV转换)
@@ -75,10 +89,12 @@ app/src/main/java/com/lv999call/app/
 │   ├── remote/             #   API服务 (LLM/ASR/TTS/Models)
 │   └── repository/         #   数据仓库
 ├── domain/
-│   ├── model/              #   领域模型
+│   ├── model/              #   领域模型（含 BuiltInCharacter / ExpressionSet）
 │   └── usecase/            #   业务用例
 ├── di/                     #   手动依赖注入
-├── navigation/             #   Compose Navigation
+├── navigation/             #   Compose Navigation（内置角色走参数化路由）
+├── preset/
+│   └── BuiltInCharacters.kt #  内置预设注册表（唯一事实来源）
 └── ui/                     #   界面层
     ├── home/               #     首页
     ├── prepare/            #     对话准备页
@@ -100,6 +116,7 @@ app/src/main/assets/live2d/  # Live2D 资源
 
 tools/
 ├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
+├── setup_deepseek_model.py    # 注册 DeepSeek酱 模型的动作/表情组（可重复执行）
 ├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
 ├── live2d_strip_watermark.py  # 剔除图集里的署名水印（坐标由 moc3 解析得到）
 ├── live2d_make_idle.py        # 生成待机动作（Idle 组），改模型文件的可重复来源
@@ -149,6 +166,55 @@ bash tools/setup_live2d_assets.sh
 
 > 如果使用本地局域网部署的模型（如 192.168.x.x），直接填入 HTTP 地址即可，已放行明文流量。
 
+## 内置预设
+
+内置角色不是硬编码，而是**并列的数据行**。早期「银狼」散落在全项目：模型路径写死在
+`bridge.js`、提示词写死在 `StartCallUseCase`、音色兜底写死在 `ProcessAudioUseCase`、
+背景图写死在路由、头像兜底写死在 `CallScreen`……加第二个角色时这些点会互相污染。
+
+现在全部收敛进 [`BuiltInCharacter`](app/src/main/java/com/lv999call/app/domain/model/BuiltInCharacter.kt)：
+
+| 维度 | 字段 |
+|---|---|
+| 身份 | `id` / `displayName` / `subtitle` / `emoji` |
+| 人格 | `promptAsset`（assets 里的系统提示词） |
+| 形象 | `live2dProfileId` / `modelPath` / `expressions` |
+| 外貌 | `avatarResId`（通话头像）/ `cardIconResId`（首页图标） |
+| 背景 | `backgroundResId` |
+| 发声 | `ttsPolicy` / `defaultTtsPrompt` |
+| 演出 | `hasTransform`（是否有变身过场） |
+| 署名 | `credit` |
+| 文案 | `prepareTitle` / `prepareDescription` |
+
+配套的三张并列注册表：
+
+- [`BuiltInCharacters.ALL`](app/src/main/java/com/lv999call/app/preset/BuiltInCharacters.kt) —— 角色注册表，顺序即首页顺序
+- [`Live2DExpressions`](app/src/main/java/com/lv999call/app/domain/model/Live2DExpression.kt) —— 每角色一套表情 / 姿势 + few-shot 示例
+- `bridge.js` 的 `PROFILES` —— 每角色一档形象参数（待机通道 / 布局 / 呼吸 / 变身）
+
+路由也是**参数化**的（`character_prepare/{characterId}` / `character_call/{characterId}`），
+不是每个角色两条专属路由 —— 否则 NavGraph 会随角色数线性膨胀。
+
+**加第三个角色的完整步骤**：`BuiltInCharacters` 加一行 → assets 放提示词 →
+`Live2DExpressions` 加一套 → `bridge.js` 加一档 profile → 首页图标/背景两张 drawable。
+
+### 一个踩过的坑：形象参数不能当成"会变的状态"
+
+`AndroidView` 的 `factory` **只在首次组合时执行一次**，之后 `modelPath` / `profileId`
+变了也不会重建 WebView。而续聊时角色是**异步**反查出来的（`matchCharacterByPrompt`，
+会话表里没存角色 id），首帧必然是 `null` → `bridge.js` 回落到默认档位（银狼）→
+角色到位后 WebView 已经建好，不会重建。
+
+现象就是**打开 DeepSeek酱 显示的是银狼**，且日志里模型 URL 明确是
+`models/silverwolf/silverwolf.model3.json`（表情标签还会报「模型没有这个表情」）。
+
+两处修复：
+1. `Live2DController.loadModel()` 记录已加载的 `modelPath`/`profileId` 并比对，
+   不一致就重载页面（重载会复位 `status` 并自增 `loadGeneration`，
+   让超时兜底重新计时）；`Live2DView` 里用 `LaunchedEffect(modelPath, profileId)` 触发。
+2. `NavGraph` 的内置角色路由**优先用路由参数里同步已知的角色**，而不是等
+   ViewModel 的异步状态 —— 否则首帧仍会按银狼建一次再重载，白闪一下。
+
 ## Live2D 形象
 
 ### 工作原理
@@ -195,6 +261,24 @@ Compose (CallScreen)
 `ParamBodyAngleX`、`ParamBreath` 做**加性**写入，周期 3.23~15.53s）、**眨眼**、
 bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输出：双马尾、
 袖子、裙子、蝴蝶结、兽耳、睫毛、翅膀……全由头身角度驱动）。
+
+### DeepSeek酱 模型（DS鲸鱼娘）
+
+与银狼完全不同的形态，差异全部由 profile 承载（下游逻辑零改动）：
+
+| 维度 | 银狼 | DeepSeek酱 |
+|---|---|---|
+| 动作组 | `Transform` / `AngryLoop` / `Sleep`（**无 `Idle`**） | **`Idle`**（真待机动作，4s / 89 曲线）+ `Action` ×6（吹泡泡 / 碰水 / 自拍 / 开盖 / 番茄酱…） |
+| 一次性演出 | `TransformOnce`（变身，接通 + 挂断都播） | 无 → `hasTransform = false`、`transform.enabled = false` |
+| 表情数 | 15（含 4 个姿势 key） | 44（大部分是**桌宠道具开关**，白名单筛出 19 个） |
+| 笑眼 / 眯眼参数 | 有 | **不存在**（已扫 moc3 确认）→ 通道表去掉 `smile` / `squint` |
+| 身体摆动 | 可程序化驱动 | **物理输出**（`physics3.json` setting3 / setting1，权重 100）→ 去掉 `sway` 通道，交给物理 |
+
+- **有真 `Idle` 动作**：运行库会自动循环播放，所以程序化待机层只做「状态联动的微表情」，
+  与动作层分工 —— 姿态幅度也刻意比银狼再小一点（动作文件会写大量道具/头发参数，叠大会打架）
+- 表情白名单按「角色情绪 + 干饭萌点」筛（脸红 / 生气 / 吐魂 / 呆呆眼 / 闭眼口水 / 蛋包饭…），
+  没把 44 个全丢给 LLM —— 既会乱来，提示词也会膨胀好几倍
+- 署名：模型作者「氵六青 @bilibili」，展示在舞台左下角（`BuiltInCharacter.credit`）
 
 ⚠️ **写参数前先查物理表**：moc3 的 358 个参数里有 **185 个是物理输出**，
 物理每帧都会覆盖它们，动作曲线或参数写上去等于没写。可安全驱动的是
@@ -298,26 +382,7 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
 - 仍然保留作者那份"越界"的原数据：`transform_out` 的 `Param172` 写着 10~20
   而 moc3 上限是 10，所以后半段的划卡特效会一直贴在最大值上（校验工具会告警）
 
-### LLM 情绪表情 ⚠️ 存疑：待真机复验
-
-> **当前状态：机制已跑通，观感未确认，不要当成已完成功能。**
->
-> 已证实（真机日志 + 截图）：
-> - 标签能被解析并从文本里剥净（`AI回复` 里看不到 `[[e:…]]`）
-> - 短标签能解析到模型真实表情名并成功下发（`[L2D] 情绪表情 → 06 0.0`）
-> - `model.expression()` 确实改变了画面（生效 / 复位两帧的眼型不同）
->
-> 未确认，以及已知踩过的两个坑：
-> - 实际观感是「只有第一句朗读前闪一下，说话时没变化」。根因是**保持时长按
->   「触发后固定 7 秒」计时**，而标签在生成阶段就到了、TTS 还要合成参考音色，
->   计时器正好在角色开口时到期 —— 已改为「保持到本轮说完」。
-> - 改完又发现 `snapshotFlow { callState }` 捕获的是协程启动那一刻的值
->   （`callState` 是普通参数，快照状态在 NavGraph 那层就读掉了），
->   导致复位永不触发、表情一直挂着 —— 已改用 `rememberUpdatedState`。
-> - **以上两处修复都还没在真机上复验过**（设备在验证过程中掉线）。
->
-> 复验要点：朗读**全程**都该看得到情绪表情，回到「聆听中」后自动复位。
-> 若说话时仍然没变化，说明还有第三个原因，别急着合进 main。
+### LLM 情绪表情
 
 形象的情绪不只跟着通话状态走，还可以由 LLM 自己决定：
 
@@ -358,7 +423,8 @@ CallScreen 下发 Live2DController.setExpression()，保持到本轮说完再回
   标签始终**最多 1 个**：表情与姿势二选一 —— 多条 exp3 会把同组 key 互相归零，
   同时下发的结果不可控。仍未开放：`10 吹泡泡`。
 
-可调项：`Live2DExpression.kt` 的枚举（标签 ↔ 真实表情名 ↔ 情绪说明）、
+可调项：[`Live2DExpressions`](app/src/main/java/com/lv999call/app/domain/model/Live2DExpression.kt)
+里每个角色的表情集（标签 ↔ 真实表情名 ↔ 情绪说明 ↔ few-shot 示例）、
 `CallScreen.kt` 的 `EXPRESSION_MIN_HOLD_MS` / `EXPRESSION_MAX_HOLD_MS`（保持时长兜底）。
 
 ### 资源不入库
@@ -374,13 +440,18 @@ CallScreen 下发 Live2DController.setExpression()，保持到本轮说完再回
 ### 使用自备模型
 
 1. 把模型放到 `app/src/main/assets/live2d/models/<your-model>/`
-2. 指定模型路径，二选一：
-   - 改 `js/bridge.js` 顶部的 `CFG.modelUrl`
-   - 或从 Kotlin 传参：`Live2DView(modelPath = "models/<your-model>/xxx.model3.json")`
-3. 若模型口型参数不是 `ParamMouthOpenY`，调整 `CFG.lipSyncParams`
-4. 按实际观感调整 `CFG.states` 中各状态的表情名
-5. 若换了模型的整套表情，记得同步 `Live2DExpression.kt` 的枚举，
-   然后跑 `node tools/check_expression_names.cjs` 校验名字是否对得上
+2. 在 `bridge.js` 的 `PROFILES` 里加一档（照抄 `silverwolf` 或 `deepseek` 那档改），
+   再把该档 id 填进角色的 `live2dProfileId`、模型路径填进 `modelPath`；
+   调试时也可直接传参：`Live2DView(modelPath = "...", profileId = "...")`
+3. 若模型口型参数不是 `ParamMouthOpenY`，调整该档的 `lipSyncParams`
+4. ⚠️ **先查 `physics3.json`**：物理输出参数每帧都会被物理覆写，写进去等于没写。
+   待机层能安全驱动的只有「物理输入 / 空闲」通道（`ParamBrow*`、`ParamMouthForm`、
+   `ParamAngleZ`…）—— DeepSeek酱 那档就去掉了 `smile`/`squint`/`sway`
+   （前两个参数不存在，后一个是物理输出）
+5. 在 `Live2DExpressions` 里加一套该角色的表情 / 姿势，然后跑
+   `node tools/check_expression_names.cjs` 校验名字与模型文件是否对得上
+6. 若没有「变身」这类一次性演出，把 `hasTransform` 设为 `false`
+   （否则挂断会白等一段过场），并在该档里 `transform.enabled = false`
 
 > 自备模型同样在 `.gitignore` 覆盖范围内，不会被误提交。
 
@@ -434,9 +505,10 @@ bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形
 ## TTS 播放链路（边收边播）
 
 ```
-MiMo SSE 分块(base64) → decodeTtsSseToPcm 逐块解码 → AudioPipe → AudioPlayer.read → AudioTrack.write
+MiMo SSE 分块(base64) → decodeTtsSseToPcm 逐块解码(+剥头) → AudioPipe → AudioPlayer.read → AudioTrack.write
 ```
 
+- **请求 `format=pcm16`，不是 `wav`**。这是**必须**的，理由见下节。
 - **真流式**：老实现把整段 SSE 音频攒进 `ByteArrayOutputStream` 才返回 InputStream，
   「开口前的静默期」就等于整段合成时长（句子越长越明显）。现在第一块音频到达即可出声。
 - **不占主线程**：整条链路跑在 `viewModelScope`（主线程）上，而老实现的解析是同步阻塞的，
@@ -449,6 +521,37 @@ MiMo SSE 分块(base64) → decodeTtsSseToPcm 逐块解码 → AudioPipe → Aud
   （`Job.cancel()` 叫不醒阻塞中的 `read`，只有 close 才行）。
 - **播放收尾**：`AudioPlayer.awaitPlaybackEnd()` 直接 join 播放任务，不再轮询 `isPlaying` ——
   服务端一块音频都没下发时 `isPlaying` 会在一帧内 true→false，轮询会整个错过、白等一个超时。
+
+### 流式必须用 pcm16（否则整段语音都是「哒哒」声）
+
+实测 MiMo 的行为：`stream=true` + `format=wav` 时，**每个 SSE 分块都是一个独立的完整
+WAV 文件**，各自带 44 字节 RIFF 头：
+
+```
+format=wav   stream=true
+  [0] RIFF total=7724  dataOff=44 pcm=7680
+  [1] RIFF total=15404 dataOff=44 pcm=15360   ← 每块都从头开始
+  [2] RIFF total=15404 dataOff=44 pcm=15360
+  ...  chunks=11  headerBytes=484
+
+format=pcm16 stream=true
+  chunks=11  headerBytes=0  pcmBytes=168960   ← 纯 PCM，零头
+```
+
+而播放端只认得**开头那一个**头（`AudioPlayer` 的 RIFF 检测），后续每块的 44 字节头
+都会被当成 PCM 采样写进 AudioTrack —— 每块边界爆出 22 个垃圾采样。
+一段 3.5 秒的话分 11 块，就炸 11 下，听感是**持续不断的「哒哒」声（约每秒 3 下）**。
+
+所以做了两件事：
+
+1. 请求改为 `format="pcm16"`（24kHz / PCM16LE / 单声道，与 `AudioPlayer` 默认参数一致）。
+   官方文档同样要求：流式调用请指定 `pcm16` 以便拼接成完整音频。
+2. 解码端加 `stripWavHeader()` 兜底：**逐个子块扫描 `data` 块**（不写死 44 字节偏移，
+   因为带 `LIST`/`fact` 等附加块的文件更长），就地剥头。
+   服务端若因版本/兼容原因回落成 wav，也只会播纯 PCM，不会把噪声播出去。
+
+> 排查提示：若再听到周期性杂音，先看 `TTS解析: 块=N` —— 块数远大于 1 说明确实在流式，
+> 此时杂音基本就是分块边界问题。
 
 ### 为什么不用 `java.io.PipedInputStream`
 

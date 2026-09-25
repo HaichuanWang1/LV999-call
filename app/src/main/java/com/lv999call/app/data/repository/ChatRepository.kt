@@ -310,7 +310,18 @@ class ChatRepository(
                         TtsModels.TtsMessage(role = "assistant", content = cleanText)
                     ),
                     audio = TtsModels.TtsAudioConfig(
-                        format = "wav",  // 文档仅支持 wav/mp3；AudioPlayer 已自动检测 WAV 头并跳过
+                        // 流式必须用 pcm16。
+                        //
+                        // 实测：stream=true + format=wav 时，MiMo 把**每个 SSE 分块**都
+                        // 返回成一个独立的完整 WAV —— 每块自带 44 字节 RIFF 头
+                        // （一段 3.5s 的话约 11 块，即 484 字节纯头）。播放端只认得开头
+                        // 那一个头，后续每块的头都会被当成 PCM 采样写进 AudioTrack，
+                        // 于是每块边界爆出 22 个垃圾采样 —— 听感就是整段语音里持续不断
+                        // 的「哒哒」声（约每秒 3 下）。
+                        //
+                        // 官方文档同样要求：流式调用请指定 pcm16 以便拼接成完整音频。
+                        // 24kHz / PCM16LE / 单声道，与 AudioPlayer 的默认参数一致。
+                        format = "pcm16",
                         voice = voiceUri,
                         speed = config.ttsSpeed,
                         prompt = ttsPrompt.ifEmpty { null }
@@ -408,10 +419,15 @@ class ChatRepository(
 
                         if (!base64Data.isNullOrEmpty()) {
                             val decoded = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                            // 兜底剥头：请求已改用 pcm16（纯 PCM 无头），但服务端若因任何
+                            // 原因回落成 wav 分块，每个分块都会自带完整 RIFF 头。直接写进
+                            // AudioTrack 会被当成采样值，每块边界爆一声「哒」—— 这里就地剥掉，
+                            // 让播放端永远只看到纯 PCM。
+                            val pcm = stripWavHeader(decoded)
                             // 管道满则阻塞在这里 → 背压，播放多快就解码多快
-                            out.write(decoded)
+                            out.write(pcm)
                             chunkCount++
-                            byteCount += decoded.size
+                            byteCount += pcm.size
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("ChatRepo", "TTS JSON解析失败: ${data.take(200)}, 原因: ${e.message}")
@@ -425,5 +441,48 @@ class ChatRepository(
 
         android.util.Log.d("ChatRepo", "TTS解析: 行=$lineCount, 块=$chunkCount, 字节=$byteCount")
         return byteCount
+    }
+
+    /**
+     * 剥掉单个音频分块可能自带的 WAV 头，只留 PCM 数据。
+     *
+     * 为什么需要：`stream=true` + `format=wav` 时，MiMo 返回的**每个** SSE 分块
+     * 都是一个独立的完整 WAV（各带 44 字节 RIFF 头）。播放端只会识别开头的第一个头，
+     * 后续每块的头都会被当作 PCM 采样播放 —— 每块边界「哒」一声。
+     *
+     * 现在请求已改为 `pcm16`（服务端不再下发头），本函数作为兜底：
+     * 服务端若因版本/兼容原因回落成 wav，也能就地剥干净，而不是把噪声播出去。
+     *
+     * @return 纯 PCM 数据；输入不是 WAV 时原样返回（含输入过短、头结构异常的情况）
+     */
+    private fun stripWavHeader(data: ByteArray): ByteArray {
+        // "RIFF"????"WAVE"：前 12 字节固定，缺一不可
+        if (data.size < 44) return data
+        if (data[0] != 'R'.code.toByte() || data[1] != 'I'.code.toByte() ||
+            data[2] != 'F'.code.toByte() || data[3] != 'F'.code.toByte()
+        ) return data
+        if (data[8] != 'W'.code.toByte() || data[9] != 'A'.code.toByte() ||
+            data[10] != 'V'.code.toByte() || data[11] != 'E'.code.toByte()
+        ) return data
+
+        // 从 fmt 块之后逐个找 "data" 子块：不能写死 44 字节偏移 ——
+        // 标准 PCM 是 44，但带 LIST/fact 等附加块的文件会更长。
+        var pos = 12
+        while (pos + 8 <= data.size) {
+            val id = String(data, pos, 4, Charsets.US_ASCII)
+            val size = (data[pos + 4].toInt() and 0xFF) or
+                ((data[pos + 5].toInt() and 0xFF) shl 8) or
+                ((data[pos + 6].toInt() and 0xFF) shl 16) or
+                ((data[pos + 7].toInt() and 0xFF) shl 24)
+            if (id == "data") {
+                val start = pos + 8
+                if (start >= data.size) return ByteArray(0)
+                // size 声明值不可全信（流式分块里可能写的是整段长度），以实际长度为准
+                return data.copyOfRange(start, data.size)
+            }
+            if (size < 0) return data
+            pos += 8 + size + (size and 1)  // 子块按偶数字节对齐
+        }
+        return data
     }
 }
