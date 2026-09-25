@@ -10,6 +10,7 @@ import com.lv999call.app.domain.model.*
 import com.lv999call.app.domain.usecase.ManageSessionUseCase
 import com.lv999call.app.domain.usecase.ProcessAudioUseCase
 import com.lv999call.app.domain.usecase.StartCallUseCase
+import com.lv999call.app.preset.BuiltInCharacters
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -60,6 +61,15 @@ class CallViewModel(
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
     /**
+     * 当前通话的内置角色（自定义预设通话时为 null）。
+     *
+     * UI 靠它决定 Live2D 模型路径与 profile、静态头像、背景图、署名与过场开关 ——
+     * 这样 [CallScreen] 不需要知道"银狼"或"DeepSeek 酱"是谁，只认这个描述对象。
+     */
+    private val _character = MutableStateFlow<BuiltInCharacter?>(null)
+    val character: StateFlow<BuiltInCharacter?> = _character.asStateFlow()
+
+    /**
      * 实时音量（0f ~ 1f），用于驱动 Live2D 口型同步。
      *
      * - SPEAKING：取 TTS 播放音量（口型跟着合成语音张合）
@@ -98,6 +108,18 @@ class CallViewModel(
 
     private var currentSession: Session? = null
     private var currentMode: DialogMode = DialogMode.QUICK
+
+    /**
+     * 当前通话的内置角色（自定义预设通话时为 null）。
+     *
+     * 提示词 / 表情集 / 发声策略 / 头像 / 背景 / 过场开关全部由它提供 ——
+     * ViewModel 里不再出现任何"如果是银狼就……"的分支。
+     *
+     * 读写都走 [_character]，避免"内部字段"与"UI 可见状态"两份数据不同步。
+     */
+    private var currentCharacter: BuiltInCharacter?
+        get() = _character.value
+        set(value) { _character.value = value }
     private var systemPrompt: String? = null
     @Volatile
     private var isProcessing = false
@@ -106,8 +128,34 @@ class CallViewModel(
     // 预设专用的TTS参考音频（不污染全局配置）
     private var presetRefAudioBase64: String? = null
     private var presetRefAudioMime: String? = null
-    // 当前通话使用的TTS提示词（银狼模式用config，自定义模式用preset）
+    // 当前通话使用的TTS提示词（内置角色用角色默认，自定义预设用preset）
     private var currentTtsPrompt: String = ""
+
+    /** 当前角色的表情集（无角色时为空集 → 不注入标签协议） */
+    private val currentExpressions: ExpressionSet
+        get() = currentCharacter?.expressions ?: ExpressionSet.EMPTY
+
+    /**
+     * 当前角色的发声策略。
+     *
+     * 内置角色若锁定了音色（如 DeepSeek 酱强制 MiMo 预置少女音），这里会返回
+     * 对应策略并**覆盖设置里的 TTS 模型选择**；银狼/自定义预设返回 null，
+     * 完全跟随全局设置（与改造前行为一致）。
+     */
+    private val currentTtsPolicy: TtsPolicy?
+        get() = appModule.resolveTtsPolicy(currentCharacter)
+
+    /**
+     * 当前通话实际使用的参考音频。
+     *
+     * 内置角色自带音色时用角色自带的（如银狼的内置参考音频），
+     * 自定义预设用预设里保存的。两者都不污染全局配置。
+     */
+    private val effectiveRefAudio: String?
+        get() = presetRefAudioBase64 ?: appModule.cloneRefAudio(currentCharacter)
+
+    private val effectiveRefAudioMime: String?
+        get() = presetRefAudioMime ?: appModule.cloneRefAudioMime(currentCharacter)
 
     val config: StateFlow<ApiConfig> = configRepository.configFlow
         .stateIn(
@@ -200,7 +248,8 @@ class CallViewModel(
     fun startCall(mode: DialogMode) {
         viewModelScope.launch {
             currentMode = mode
-            currentSession = startCallUseCase.createSession(mode)
+            currentCharacter = null
+            currentSession = startCallUseCase.createSession(mode, null)
             systemPrompt = currentSession?.systemPrompt
             _messages.value = emptyList()
 
@@ -228,6 +277,8 @@ class CallViewModel(
                     isAutoGreeting = true,
                     autoGreetingText = "你好",
                     ttsPrompt = currentTtsPrompt,
+                    expressions = currentExpressions,
+                    ttsPolicy = currentTtsPolicy,
                     onStateChange = { state -> onState(state) },
                     onUserMessage = ::appendUserMessage,
                     onPartialResponse = { partial -> onPartial(partial) },
@@ -261,6 +312,10 @@ class CallViewModel(
                 currentMode = session.mode
                 currentSession = session
                 systemPrompt = session.systemPrompt
+                // 续聊要恢复原角色的形象与发声策略。
+                // 判据是提示词内容与内置角色的提示词一致 —— 会话表里没存角色 id
+                // （加字段要走 Room 迁移，收益不抵成本），而提示词是角色的决定性特征。
+                currentCharacter = matchCharacterByPrompt(session.systemPrompt)
                 _messages.value = session.messages
                 _callState.value = CallState.LISTENING
                 startListening()
@@ -271,15 +326,104 @@ class CallViewModel(
         }
     }
 
+    /** 按会话的系统提示词反查内置角色（匹配不上返回 null，即当作自定义会话） */
+    private suspend fun matchCharacterByPrompt(prompt: String): BuiltInCharacter? {
+        if (prompt.isBlank()) return null
+        for (c in BuiltInCharacters.ALL) {
+            val asset = try {
+                application.assets.open(c.promptAsset).bufferedReader().use { it.readText() }
+            } catch (e: Exception) {
+                continue
+            }
+            if (asset == prompt) return c
+        }
+        return null
+    }
+
+    /**
+     * 使用内置角色开始通话（首页「内置预设」入口）。
+     *
+     * 提示词、表情集、发声策略、参考音频全部来自 [BuiltInCharacter]，
+     * 因此银狼与 DeepSeek 酱走的是**同一条代码路径**，区别只在数据。
+     */
+    fun startCharacterCall(characterId: String) {
+        val character = BuiltInCharacters.byId(characterId)
+        if (character == null) {
+            android.util.Log.e("CallVM", "未知内置角色: $characterId")
+            _callState.value = CallState.ENDED
+            return
+        }
+        viewModelScope.launch {
+            currentMode = DialogMode.LONG
+            currentCharacter = character
+            // 自定义预设的残留要清掉，否则会串到内置角色上
+            presetRefAudioBase64 = null
+            presetRefAudioMime = null
+            currentSession = startCallUseCase.createSession(DialogMode.LONG, character)
+            systemPrompt = currentSession?.systemPrompt
+            _messages.value = emptyList()
+
+            val currentConfig = configRepository.configFlow.first()
+            if (currentConfig.asrProvider == "vosk") {
+                val asrEngine = appModule.asrEngine
+                val modelId = currentConfig.asrVoskModelId.ifEmpty { "vosk-model-small-cn-0.22" }
+                if (!asrEngine.initVoskModel(modelId)) {
+                    _callState.value = CallState.ENDED
+                    return@launch
+                }
+            }
+
+            // TTS 风格提示词：角色有默认值就用角色的，否则跟随全局设置
+            currentTtsPrompt = character.defaultTtsPrompt.ifEmpty { currentConfig.ttsPrompt }
+
+            beginResponseTurn()
+            try {
+                val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
+                    pcmData = ByteArray(0),
+                    systemPrompt = systemPrompt,
+                    history = emptyList(),
+                    mode = currentMode,
+                    isAutoGreeting = true,
+                    autoGreetingText = "你好",
+                    overrideRefAudioBase64 = effectiveRefAudio,
+                    overrideRefAudioMime = effectiveRefAudioMime,
+                    ttsPrompt = currentTtsPrompt,
+                    expressions = currentExpressions,
+                    ttsPolicy = currentTtsPolicy,
+                    onStateChange = { state -> onState(state) },
+                    onUserMessage = ::appendUserMessage,
+                    onPartialResponse = { partial -> onPartial(partial) },
+                    onExpression = ::cueExpression
+                )
+                val newMessages = mutableListOf(userMsg)
+                if (assistantMsg != null) newMessages.add(assistantMsg)
+                _messages.value = newMessages
+                endResponseTurn()
+                currentSession?.let { session ->
+                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CallVM", "角色打招呼失败(${character.id}): ${e.message}")
+                _callState.value = CallState.ENDED
+                return@launch
+            }
+
+            _callState.value = CallState.LISTENING
+            startListening()
+        }
+    }
+
     /** 使用预设开始通话（从PresetDao加载数据） */
     fun startPresetCall(presetId: Long) {
         viewModelScope.launch {
             val preset = appModule.presetDao.getPresetById(presetId)
             if (preset != null) {
+                // 自定义预设不属于任何内置角色：形象/表情/发声全部跟随设置与预设自身
+                currentCharacter = null
                 // 使用预设的提示词和音频
                 systemPrompt = preset.prompt.ifEmpty { null }
                 currentMode = DialogMode.CUSTOM
-                currentSession = startCallUseCase.createSession(DialogMode.CUSTOM)
+                currentSession = startCallUseCase.createSession(DialogMode.CUSTOM, null)
                 _messages.value = emptyList()
 
                 // 保存预设音频到ViewModel本地字段，不污染全局配置
@@ -311,6 +455,8 @@ class CallViewModel(
                         overrideRefAudioBase64 = preset.refAudioBase64,
                         overrideRefAudioMime = preset.refAudioMime,
                         ttsPrompt = currentTtsPrompt,
+                        expressions = currentExpressions,
+                        ttsPolicy = currentTtsPolicy,
                         onStateChange = { state -> onState(state) },
                         onUserMessage = ::appendUserMessage,
                         onPartialResponse = { partial -> onPartial(partial) },
@@ -385,9 +531,11 @@ class CallViewModel(
                         systemPrompt = systemPrompt,
                         history = _messages.value,
                         mode = currentMode,
-                        overrideRefAudioBase64 = presetRefAudioBase64,
-                        overrideRefAudioMime = presetRefAudioMime,
+                        overrideRefAudioBase64 = effectiveRefAudio,
+                        overrideRefAudioMime = effectiveRefAudioMime,
                         ttsPrompt = currentTtsPrompt,
+                        expressions = currentExpressions,
+                        ttsPolicy = currentTtsPolicy,
                         onStateChange = { state -> onState(state) },
                         onUserMessage = ::appendUserMessage,
                         onPartialResponse = { partial -> onPartial(partial) },
@@ -441,9 +589,11 @@ class CallViewModel(
                     mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = text,
-                    overrideRefAudioBase64 = presetRefAudioBase64,
-                    overrideRefAudioMime = presetRefAudioMime,
+                    overrideRefAudioBase64 = effectiveRefAudio,
+                    overrideRefAudioMime = effectiveRefAudioMime,
                     ttsPrompt = currentTtsPrompt,
+                    expressions = currentExpressions,
+                    ttsPolicy = currentTtsPolicy,
                     onStateChange = { state -> onState(state) },
                     onUserMessage = ::appendUserMessage,
                     onPartialResponse = { partial -> onPartial(partial) },

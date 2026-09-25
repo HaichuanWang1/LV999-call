@@ -30,14 +30,20 @@ internal object Live2DAssetLoader {
     val INDEX_URL: String = "https://$HOST$URL_PREFIX" + "index.html"
 
     /**
-     * 带模型参数入口地址
+     * 带形象参数的入口地址。
      *
-     * 通过 `?model=` 让 Kotlin 侧指定模型，换模型无需改 JS。
-     * 传空则使用 bridge.js 中的默认路径。
+     * 通过 `?model=` 指定模型、`?profile=` 指定 bridge.js 里的形象参数档位
+     * （待机通道 / 布局 / 呼吸 / 是否变身等），换模型换角色都无需改 JS。
+     *
+     * @param modelPath 模型相对 assets/live2d 的路径；空则用 profile 里的默认值
+     * @param profileId bridge.js `PROFILES` 的键；空则回落银狼
      */
-    fun indexUrl(modelPath: String? = null): String =
-        if (modelPath.isNullOrBlank()) INDEX_URL
-        else "$INDEX_URL?model=" + Uri.encode(modelPath)
+    fun indexUrl(modelPath: String? = null, profileId: String? = null): String {
+        val params = mutableListOf<String>()
+        if (!modelPath.isNullOrBlank()) params += "model=" + Uri.encode(modelPath)
+        if (!profileId.isNullOrBlank()) params += "profile=" + Uri.encode(profileId)
+        return if (params.isEmpty()) INDEX_URL else "$INDEX_URL?" + params.joinToString("&")
+    }
 
     /**
      * 命中虚拟域名时返回 assets 内容，否则返回 null 交由系统处理

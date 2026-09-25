@@ -429,18 +429,24 @@ fun SettingsScreen(
                 }
 
                 // 模型作者署名（与通话页舞台左下角是同一个入口）。
+                // 每个内置角色的模型作者不同，这里按角色各列一行。
                 // 放在开关正下方而不是藏进"关于"：用户在这个页面决定要不要用这个形象，
                 // 出处就该在同一屏里给到。
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(modifier = Modifier.width(28.dp))
-                    Column {
-                        Live2DAuthorCredit()
-                        Text(
-                            text = "点击前往作者 B 站主页",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colors.onSurfaceVariant.copy(alpha = 0.45f)
-                        )
+                com.lv999call.app.preset.BuiltInCharacters.ALL.forEach { character ->
+                    character.credit?.let { credit ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(modifier = Modifier.width(28.dp))
+                            Column {
+                                Live2DAuthorCredit(label = credit.label, url = credit.url)
+                                Text(
+                                    text = "点击前往作者 B 站主页",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colors.onSurfaceVariant.copy(alpha = 0.45f)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
                     }
                 }
 

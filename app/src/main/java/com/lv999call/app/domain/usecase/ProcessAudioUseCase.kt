@@ -8,19 +8,23 @@ import com.lv999call.app.data.repository.ConfigRepository
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.domain.model.DialogMode
+import com.lv999call.app.domain.model.ExpressionSet
 import com.lv999call.app.domain.model.Live2DExpression
+import com.lv999call.app.domain.model.TtsPolicy
 import kotlinx.coroutines.flow.first
 
 /**
  * 处理音频用例
  * 流程：ASR → LLM流式生成(文字实时显示) → 完整响应单次TTS → 播放
+ *
+ * 角色无关：系统提示词、表情集、发声策略全部由调用方按当前角色传入
+ * （见 [com.lv999call.app.preset.BuiltInCharacters]），本类不认识任何具体角色。
  */
 class ProcessAudioUseCase(
     private val chatRepository: ChatRepository,
     private val configRepository: ConfigRepository,
     private val asrEngine: AsrEngine,
-    private val audioPlayer: AudioPlayer,
-    private val silverWolfRefAudioBase64: String = ""
+    private val audioPlayer: AudioPlayer
 ) {
     companion object {
         private const val TAG = "ProcessAudioUseCase"
@@ -66,6 +70,20 @@ class ProcessAudioUseCase(
         overrideRefAudioBase64: String? = null,
         overrideRefAudioMime: String? = null,
         ttsPrompt: String = "",
+        /**
+         * 该角色的表情集。为空集（或 Live2D 关闭）时不向 LLM 注入标签协议。
+         *
+         * 与 [ttsPolicy] 一样属于"按角色传入"的字段 —— 早期这里是全局单例枚举，
+         * 加入并列角色后无法共存，故上移为参数。
+         */
+        expressions: ExpressionSet = ExpressionSet.EMPTY,
+        /**
+         * 该角色的发声策略（null / [TtsPolicy.Inherit] 表示跟随全局设置）。
+         *
+         * 内置角色可以借此锁定自己的模型与音色，例如 DeepSeek 酱强制使用
+         * MiMo 预置少女音，无视设置里选的 TTS 模型。
+         */
+        ttsPolicy: TtsPolicy? = null,
         onStateChange: (CallState) -> Unit,
         /**
          * 用户这句话一确定就回调（ASR 出结果 / 文字输入）。
@@ -108,13 +126,14 @@ class ProcessAudioUseCase(
         )
         val fullResponse = StringBuilder()
 
-        // Live2D 开着才把表情标签协议拼进 system prompt：
-        // 关掉形象时 LLM 根本不知道这套机制，既省 token 也不会跑偏。
+        // Live2D 开着、且该角色确实有表情表时，才把标签协议拼进 system prompt：
+        // 关掉形象（或角色没有可用表情）时 LLM 根本不知道这套机制，
+        // 既省 token 也不会跑偏。
         val effectivePrompt = systemPrompt?.let {
-            if (config.live2dEnabled) it + Live2DExpression.promptBlock() else it
+            if (config.live2dEnabled && !expressions.isEmpty) it + expressions.promptBlock() else it
         }
         // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来
-        val tagParser = ExpressionTagParser(onExpression)
+        val tagParser = ExpressionTagParser(expressions, onExpression)
         // 边收边剥离推理块：思考内容既不显示也不朗读（详见 ReasoningStripper）
         val reasoningStripper = ReasoningStripper()
         /** 是否已经出现过可见正文 —— 它决定 UI 是「思考中转圈」还是「流式打字」 */
@@ -159,17 +178,23 @@ class ProcessAudioUseCase(
         // Step 3: 单次TTS合成完整响应并播放
         onStateChange(CallState.SPEAKING)
         try {
-            // 优先级：预设override > 配置音频 > 银狼内置音频（仅银狼模式兜底）
+            // 发声来源优先级：
+            //   1. 角色锁定的发声策略（如 DeepSeek 酱强制 MiMo 预置少女音）——
+            //      这一档会**无视设置里选的 TTS 模型**，是"强制锁定"的落点；
+            //   2. 预设自带的参考音频（override，自定义预设用）；
+            //   3. 全局配置里对应模式的参考音频。
+            // 三者都为空时交给 ChatRepository 按策略决定（预置音色不需要参考音频）。
             val refAudio: String = overrideRefAudioBase64?.takeIf { it.isNotEmpty() }
                 ?: config.getRefAudioForMode(mode).takeIf { it.isNotEmpty() }
-                ?: silverWolfRefAudioBase64.takeIf { it.isNotEmpty() && mode != DialogMode.CUSTOM }
                 ?: ""
             val refMime: String = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true }
                 ?: config.getRefAudioMimeForMode(mode).takeIf { config.getRefAudioForMode(mode).isNotEmpty() }
                 ?: "audio/wav"
-            Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime")
+            Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime, policy=${ttsPolicy ?: "inherit"}")
 
-            val audioStream = chatRepository.synthesizeSpeech(config, aiResponse, refAudio, refMime, ttsPrompt)
+            val audioStream = chatRepository.synthesizeSpeech(
+                config, aiResponse, refAudio, refMime, ttsPrompt, voiceOverride = ttsPolicy
+            )
             if (audioStream != null) {
                 val speakRequestedAt = android.os.SystemClock.uptimeMillis()
                 audioPlayer.playStream(audioStream)

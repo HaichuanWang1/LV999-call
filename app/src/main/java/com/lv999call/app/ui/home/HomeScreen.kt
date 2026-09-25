@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,12 +23,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lv999call.app.data.local.entity.PresetEntity
+import com.lv999call.app.domain.model.BuiltInCharacter
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     presets: List<PresetEntity>,
-    onNavigateToSilverWolf: () -> Unit,
+    /** 内置角色（银狼 / DeepSeek 酱…），来自 [BuiltInCharacters.ALL]，按顺序并列展示 */
+    builtInCharacters: List<BuiltInCharacter>,
+    onNavigateToCharacter: (String) -> Unit,
     onNavigateToPreset: (Long) -> Unit,
     onNavigateToNewPreset: () -> Unit,
     onDeletePreset: (Long) -> Unit,
@@ -54,41 +58,50 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(48.dp))
 
-            // 银狼（内置，不可删除）
-            PresetCard(
-                title = "银狼",
-                subtitle = "角色扮演语音对话",
-                isBuiltIn = true,
-                onClick = onNavigateToSilverWolf,
-                onLongClick = {}
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 用户自定义预设
-            presets.forEach { preset ->
-                PresetCard(
-                    title = preset.name,
-                    subtitle = "自定义方案",
-                    isBuiltIn = false,
-                    onClick = { onNavigateToPreset(preset.id) },
-                    onLongClick = { showDeleteDialog = preset.id }
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-
-            // 新建预设按钮
-            OutlinedButton(
-                onClick = onNavigateToNewPreset,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(16.dp)
+            // 内置角色（不可删除）。用可滚动列表承载：
+            // 内置角色数量是会增长的（现在两个），写死 Column 迟早会溢出屏幕。
+            androidx.compose.foundation.lazy.LazyColumn(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("新建自定义方案")
+                items(builtInCharacters, key = { "builtin-${it.id}" }) { character ->
+                    PresetCard(
+                        title = character.displayName,
+                        subtitle = character.subtitle,
+                        isBuiltIn = true,
+                        iconResId = character.cardIconResId,
+                        onClick = { onNavigateToCharacter(character.id) },
+                        onLongClick = {}
+                    )
+                }
+
+                // 用户自定义预设
+                items(presets, key = { "preset-${it.id}" }) { preset ->
+                    PresetCard(
+                        title = preset.name,
+                        subtitle = "自定义方案",
+                        isBuiltIn = false,
+                        iconResId = null,
+                        onClick = { onNavigateToPreset(preset.id) },
+                        onLongClick = { showDeleteDialog = preset.id }
+                    )
+                }
+
+                item {
+                    // 新建预设按钮
+                    OutlinedButton(
+                        onClick = onNavigateToNewPreset,
+                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("新建自定义方案")
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Column(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
@@ -130,8 +143,12 @@ fun HomeScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PresetCard(
-    title: String, subtitle: String, isBuiltIn: Boolean,
-    onClick: () -> Unit, onLongClick: () -> Unit
+    title: String,
+    subtitle: String,
+    isBuiltIn: Boolean,
+    iconResId: Int?,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
 
@@ -155,10 +172,10 @@ private fun PresetCard(
                     .background(if (isBuiltIn) colors.secondary.copy(alpha = 0.2f) else colors.tertiary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
-                if (isBuiltIn) {
+                if (iconResId != null) {
                     Image(
-                        painter = painterResource(id = com.lv999call.app.R.drawable.touxiang),
-                        contentDescription = "银狼头像",
+                        painter = painterResource(id = iconResId),
+                        contentDescription = title,
                         modifier = Modifier.size(40.dp).clip(CircleShape),
                         contentScale = ContentScale.Crop
                     )

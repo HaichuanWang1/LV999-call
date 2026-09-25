@@ -45,6 +45,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
+import com.lv999call.app.domain.model.BuiltInCharacter
 import com.lv999call.app.ui.live2d.Live2DStatus
 import com.lv999call.app.ui.live2d.Live2DView
 import com.lv999call.app.ui.live2d.rememberLive2DController
@@ -134,6 +135,13 @@ fun CallScreen(
     live2dEnabled: Boolean = true,
     /** 是否播放接通/挂断的"变身"过场（纯演出，关掉不影响待机动作、表情与口型） */
     transformEnabled: Boolean = true,
+    /**
+     * 当前内置角色（自定义预设通话时为 null）。
+     *
+     * 决定 Live2D 模型路径与形象档位、静态头像兜底、舞台左下角署名。
+     * 传 null 时全部走通用兜底 —— 本组件不认识任何具体角色。
+     */
+    character: BuiltInCharacter? = null,
     /** LLM 触发的情绪表情，null 表示无 */
     expressionCue: ExpressionCue? = null,
     /**
@@ -158,6 +166,10 @@ fun CallScreen(
     // 只有启用且未出错时才用 Live2D 渲染，否则回退到静态头像
     val live2dActive = live2dEnabled && l2dStatus != Live2DStatus.ERROR
 
+    // 过场只在"角色真的有这套演出"且用户没关掉时才播。
+    // DeepSeek 酱的模型没有一次性动作组，硬播会静默失败、挂断侧还会白等一段时间。
+    val transformActive = transformEnabled && (character?.hasTransform ?: false)
+
     // 舞台板块的实际尺寸：模型要按「板块」而不是「屏幕」重新适配，
     // 否则从全屏铺底改成板块内嵌后，按宽度缩放会把角色的头脚裁掉。
     var stageSize by remember { mutableStateOf(IntSize.Zero) }
@@ -176,15 +188,15 @@ fun CallScreen(
     LaunchedEffect(l2dStatus) {
         if (l2dStatus == Live2DStatus.READY && !entrancePlayed) {
             entrancePlayed = true
-            if (transformEnabled) l2d.playTransform("full")
+            if (transformActive) l2d.playTransform("full")
         }
     }
 
     // 挂断过场：播"还原"（约 2.3s）。跳转前的等待在 NavGraph，用的是同一个常量，
-    // 且那边同样只在 transformEnabled 时才等。
+    // 且那边同样只在 transformActive 时才等。
     var hangupAnimating by remember { mutableStateOf(false) }
     LaunchedEffect(callState) {
-        if (callState == CallState.ENDED && transformEnabled) {
+        if (callState == CallState.ENDED && transformActive) {
             hangupAnimating = true
             l2d.playTransform("out")
             delay(HANGUP_TRANSFORM_MS)
@@ -386,6 +398,9 @@ fun CallScreen(
                         Live2DView(
                             controller = l2d,
                             modifier = Modifier.fillMaxSize(),
+                            // 按角色选模型与形象档位（待机通道 / 布局 / 呼吸 / 是否变身）
+                            modelPath = character?.modelPath,
+                            profileId = character?.live2dProfileId,
                             // 挂断过场期间不能暂停渲染，否则"还原"会停在半路；
                             // 过场结束后（或没有历史记录、不跳转时）照旧暂停省电
                             paused = callState == CallState.ENDED && !hangupAnimating,
@@ -395,16 +410,20 @@ fun CallScreen(
                         StaticAvatar(callState, avatarUri, avatarResId)
                     }
 
-                    // 模型作者署名：钉在舞台区左下角，点击跳转作者 B 站主页。
+                    // 模型作者署名：钉在舞台区左下角，点击跳转作者主页。
                     //
                     // 必须写在 Live2DView **之后**（即叠在它上层）：WebView 是真实
                     // View，会被绘制在所有 Compose 内容之上，反过来放就会被完全盖住。
                     // 舞台区是独立分区、不与下方对话区重叠，所以不会压到气泡。
-                    Live2DAuthorCredit(
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .padding(start = 12.dp, bottom = 8.dp)
-                    )
+                    character?.credit?.let { credit ->
+                        Live2DAuthorCredit(
+                            label = credit.label,
+                            url = credit.url,
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(start = 12.dp, bottom = 8.dp)
+                        )
+                    }
                 }
 
                 // 分区线：两个区域之间唯一的视觉分隔，比给各自画边框更轻

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DeepSeek 酱通话页背景。
+
+  刻意不做成图片：银狼用的是作者提供的实拍背景图（silverwolf_bg.jpg），
+  而 DS鲸鱼娘 的模型包只带角色立绘，没有配套背景；随手配一张网图既有版权
+  风险又和角色色调打架。这里直接用 DeepSeek 官方主色 #4D6BFE 做一层
+  深浅渐变，配合通话页本来就有的模糊 + 渐变遮罩，观感是"深海"而不是空背景。
+
+  用 shape 而不是 vector：纯色渐变不需要路径数据，shape 更省内存，
+  且能直接吃到 blur 效果。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#FF0B1030"
+        android:centerColor="#FF16265C"
+        android:endColor="#FF2E4BA8"
+        android:type="linear" />
+</shape>

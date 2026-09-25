@@ -15,9 +15,21 @@
   'use strict';
 
   // ============================ 配置 ============================
-  var CFG = {
-    modelUrl: 'models/silverwolf/silverwolf.model3.json',
+  //
+  // 结构：BASE（所有角色共用） + PROFILES（每个内置角色一档） → 深合并成 CFG。
+  //
+  // 为什么要有 PROFILES
+  // -------------------
+  // 早期只有「银狼」一个形象，所有参数平铺在 CFG 里就够了。加入并列的
+  // 「DeepSeek 酱」后，两个模型的参数命名、可用通道、动作组、演出方式都不同
+  // （银狼有变身过场与兽耳物理链，DeepSeek 酱有真 Idle 动作但没有变身），
+  // 平铺就会互相污染。
+  //
+  // 所以拆成"共用 + 每角色一档"，由宿主通过 ?profile=<id> 选择（见文件末尾的
+  // 解析逻辑），合并后仍然叫 CFG —— 下游代码一行都不用改。
+  // 新增角色 = 在 PROFILES 里加一档，不需要动任何渲染逻辑。
 
+  var BASE = {
     // 口型参数（不同模型可能命名不同，会逐个尝试）
     lipSyncParams: ['ParamMouthOpenY', 'ParamMouthOpen'],
 
@@ -33,8 +45,7 @@
     trimHigh: 0.97,    // 上分位
     fillRatio: 1.25,   // 内容尺寸 / 视口对应边（>1 表示放大裁切）
     offsetX: 0.0,      // 水平偏移，视口宽度的比例
-    offsetY: -0.24,    // 垂直偏移，视口高度的比例（正数 = 下移）
-                       // 银狼为 Q 版角色，需上移让出底部消息区
+    offsetY: 0.0,      // 垂直偏移，视口高度的比例（正数 = 下移）
 
     // 口型动态
     mouthGain: 2.2,    // 音量 → 张口幅度 增益
@@ -48,9 +59,10 @@
 
     // 各通话状态 → 表现映射
     //
-    // 银狼模型的动作组只有 Transform / AngryLoop / Sleep（变身、生气循环、睡觉），
-    // 没有通用待机动作 —— 待机感由 ParamBreath 呼吸 + EyeBlink 眨眼 + 物理驱动。
-    // 因此这里 motion 一律留空，避免播放不合时宜的特效动画。
+    // motion 一律留空：两个模型的"状态动作"要么不存在、要么不合时宜
+    // （银狼只有 Transform / AngryLoop / Sleep 三组特效；DeepSeek 酱只有
+    //   idle 与道具演出）。待机感由各自 profile 的 idle 层 + 运行库的
+    //   Idle 动作组（若模型有注册）负责。
     //
     // expression 一律留空是刻意的：情绪表情由 LLM 通过 [[e:标签]] 驱动
     // （见 applyStateExpression 的 _cue 覆盖层）。早期 thinking 占位用了 '06 0.0'，
@@ -62,142 +74,270 @@
       thinking:  { expression: null, motion: null, focus: 0.10 },
       speaking:  { expression: null, motion: null, focus: 0.35 },
       ended:     { expression: null, motion: null, focus: 0.0  }
-    },
+    }
+  };
 
-    // ==================== 程序化待机（不依赖动作文件）====================
-    //
-    // 模型自带的 3 组动作（Transform / AngryLoop / Sleep）全是「变身 / 生气 / 睡觉」
-    // 的特效循环，没有待机动作；而运行库的自动待机只认名字叫 Idle 的动作组，
-    // 找不到就一条都不播 —— 于是角色除了呼吸、眨眼、视线之外全程静止。
-    //
-    // 这里用「每帧写参数」补一层待机微动作，而不是加动作文件，因为要的是
-    // 跟通话状态联动（聆听时挑眉屏息、思考时歪头眯眼），
-    // 而运行库的机制是「没动作时随机播一条 Idle」——它不知道通话状态。
-    //
-    // ⚠️ 只能写「物理输入 / 空闲」参数：moc3 的 358 个参数里有 185 个是物理输出，
-    //    物理每帧都会把它们覆盖掉，动作/参数写上去等于没写。
-    //    下面这组通道还有个附带好处 —— 眉毛/嘴形/眼睛形状经物理链会带动兽耳
-    //    （ParamBrowLForm→Param3→ParamnekoL*），所以「做个微表情」和
-    //    「抖一下耳朵」是同一件事，不需要单独动耳朵参数（耳朵本身是物理输出，动不了）。
-    idle: {
-      enabled: true,
+  var PROFILES = {
+    // ======================================================================
+    // 银狼
+    // ======================================================================
+    silverwolf: {
+      modelUrl: 'models/silverwolf/silverwolf.model3.json',
 
-      // 各通道对应的模型参数（模型里不存在的会被自动跳过）
-      channels: {
-        brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
-        browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈）
-        smile:     ['ParamEyeLSmile', 'ParamEyeRSmile'],     // 笑眼
-        squint:    ['ParamEyeLSquint', 'ParamEyeRSquint'],   // 眯眼
-        mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
-        breath:    ['ParamBreath'],                           // 呼吸深度（运行库的呼吸会在上面再叠加）
-        tilt:      ['ParamAngleZ'],                           // 头部侧倾（单位：度）
-        sway:      ['ParamBodyAngleZ']                        // 身体左右摆（单位：度）
+      // 银狼为 Q 版角色，需上移让出底部消息区
+      offsetY: -0.24,
+
+      // ==================== 程序化待机（不依赖动作文件）====================
+      //
+      // 模型自带的 3 组动作（Transform / AngryLoop / Sleep）全是「变身 / 生气 / 睡觉」
+      // 的特效循环，没有待机动作；而运行库的自动待机只认名字叫 Idle 的动作组，
+      // 找不到就一条都不播 —— 于是角色除了呼吸、眨眼、视线之外全程静止。
+      //
+      // 这里用「每帧写参数」补一层待机微动作，而不是加动作文件，因为要的是
+      // 跟通话状态联动（聆听时挑眉屏息、思考时歪头眯眼），
+      // 而运行库的机制是「没动作时随机播一条 Idle」——它不知道通话状态。
+      //
+      // ⚠️ 只能写「物理输入 / 空闲」参数：moc3 的 358 个参数里有 185 个是物理输出，
+      //    物理每帧都会把它们覆盖掉，动作/参数写上去等于没写。
+      //    下面这组通道还有个附带好处 —— 眉毛/嘴形/眼睛形状经物理链会带动兽耳
+      //    （ParamBrowLForm→Param3→ParamnekoL*），所以「做个微表情」和
+      //    「抖一下耳朵」是同一件事，不需要单独动耳朵参数（耳朵本身是物理输出，动不了）。
+      idle: {
+        enabled: true,
+
+        // 各通道对应的模型参数（模型里不存在的会被自动跳过）
+        channels: {
+          brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
+          browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈）
+          smile:     ['ParamEyeLSmile', 'ParamEyeRSmile'],     // 笑眼
+          squint:    ['ParamEyeLSquint', 'ParamEyeRSquint'],   // 眯眼
+          mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
+          breath:    ['ParamBreath'],                           // 呼吸深度（运行库的呼吸会在上面再叠加）
+          tilt:      ['ParamAngleZ'],                           // 头部侧倾（单位：度）
+          sway:      ['ParamBodyAngleZ']                        // 身体左右摆（单位：度）
+        },
+
+        // 各状态的目标姿态
+        // 幅度刻意压得很小：这些参数会和 LLM 表情、物理、运行库的呼吸叠在一起，
+        // 给大了就会打架（比如「生气脸」配上一个大幅度「聆听微笑」）。
+        poses: {
+          idle:      { brow:  0.00, browForm: 0.00, smile: 0.00, squint: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 1.00 },
+          listening: { brow:  0.22, browForm: 0.05, smile: 0.28, squint: 0.00, mouthForm: -0.10, breath: 0.02, tilt:  2.0, sway: 0.45 },
+          thinking:  { brow: -0.15, browForm: 0.32, smile: 0.00, squint: 0.30, mouthForm:  0.16, breath: 0.00, tilt: -3.0, sway: 0.20 },
+          speaking:  { brow:  0.10, browForm: 0.02, smile: 0.14, squint: 0.00, mouthForm:  0.04, breath: 0.30, tilt:  0.8, sway: 0.70 },
+          ended:     { brow: -0.10, browForm: 0.12, smile: 0.00, squint: 0.08, mouthForm: -0.04, breath: 0.00, tilt: -1.6, sway: 0.15 }
+        },
+
+        // 姿态过渡速度（越小越慢；约等于 1/poseRate 帧到达 63%）
+        poseRate: 0.06,
+
+        // 常驻微漂移：周期刻意避开运行库呼吸用的 3.23 / 3.53 / 5.53 / 6.53 / 15.53s，
+        // 否则两者会共振，看起来像机器人在抖
+        drift: {
+          brow:      { amp: 0.06, period: 7.3 },
+          mouthForm: { amp: 0.05, period: 11.7 },
+          smile:     { amp: 0.05, period: 9.1 },
+          squint:    { amp: 0.03, period: 8.3 }
+        },
+
+        // 偶发「抖一下耳朵」：给眉毛/嘴形一个短脉冲，经物理链传到兽耳
+        flick: { minGap: 4.0, maxGap: 9.0, duration: 0.28, amp: 0.30 },
+
+        // 有情绪表情（LLM 触发）时，把状态姿态压到这个比例
+        // 否则会出现「明明在生气，眉毛却在笑」的错位
+        cuePoseScale: 0.3
       },
 
-      // 各状态的目标姿态
-      // 幅度刻意压得很小：这些参数会和 LLM 表情、物理、运行库的呼吸叠在一起，
-      // 给大了就会打架（比如「生气脸」配上一个大幅度「聆听微笑」）。
-      poses: {
-        idle:      { brow:  0.00, browForm: 0.00, smile: 0.00, squint: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 1.00 },
-        listening: { brow:  0.22, browForm: 0.05, smile: 0.28, squint: 0.00, mouthForm: -0.10, breath: 0.02, tilt:  2.0, sway: 0.45 },
-        thinking:  { brow: -0.15, browForm: 0.32, smile: 0.00, squint: 0.30, mouthForm:  0.16, breath: 0.00, tilt: -3.0, sway: 0.20 },
-        speaking:  { brow:  0.10, browForm: 0.02, smile: 0.14, squint: 0.00, mouthForm:  0.04, breath: 0.30, tilt:  0.8, sway: 0.70 },
-        ended:     { brow: -0.10, browForm: 0.12, smile: 0.00, squint: 0.08, mouthForm: -0.04, breath: 0.00, tilt: -1.6, sway: 0.15 }
+      // ==================== 呼吸幅度（接管库内置值）====================
+      //
+      // 运行库内置 CubismBreath，用的是官方示例值：ParamAngleX 峰值 15 × 权重 0.5
+      // = 头部左右摇 ±7.5°、周期 6.53s。对"角色在看着你"这件事来说这个摆幅偏大
+      // （和待机动作叠加后实测观感就是"没在看你"），所以这里接管成更小的幅度：
+      // 头 yaw ±4°、pitch ±2.5°、roll ±3°、身体 ±2°，周期保持官方值。
+      // 想恢复官方幅度就把 angleX/angleY/angleZ 改回 15/8/10。
+      breath: {
+        enabled: true,
+        angleX: 8,          // ±4°
+        angleY: 5,          // ±2.5°
+        angleZ: 6,          // ±3°
+        bodyAngleX: 4,      // ±2°
+        breath: 0.5,
+        cycles: {           // 官方示例周期（秒）
+          angleX: 6.5345, angleY: 3.5345, angleZ: 5.5345,
+          bodyAngleX: 15.5345, breath: 3.2345
+        }
       },
 
-      // 姿态过渡速度（越小越慢；约等于 1/poseRate 帧到达 63%）
-      poseRate: 0.06,
+      // ==================== 变身过场（一次性动作）====================
+      //
+      // 模型自带的 Transform_1/2 是同一段演出的前后两半（_1 摘眼镜+变身开+特效
+      // 0→10，_2 戴回眼镜+变身关+特效 10→20），但**都是 Loop: true**，直接播会
+      // 一直循环。tools/live2d_make_idle.py 生成两份"只改 Loop"的副本并注册成
+      // TransformOnce 组（0 = 进入 / 1 = 还原）。
+      transform: {
+        enabled: true,
+        group: 'TransformOnce',
+        inIndex: 0,
+        outIndex: 1,
 
-      // 常驻微漂移：周期刻意避开运行库呼吸用的 3.23 / 3.53 / 5.53 / 6.53 / 15.53s，
-      // 否则两者会共振，看起来像机器人在抖
-      drift: {
-        brow:      { amp: 0.06, period: 7.3 },
-        mouthForm: { amp: 0.05, period: 11.7 },
-        smile:     { amp: 0.05, period: 9.1 },
-        squint:    { amp: 0.03, period: 8.3 }
-      },
+        // 播放期间压掉程序化待机层：变身动作自己会画眉毛/眼睛，
+        // 而待机层写在 afterMotionUpdate（更晚），不压就会把它盖掉
+        muteIdle: true,
 
-      // 偶发「抖一下耳朵」：给眉毛/嘴形一个短脉冲，经物理链传到兽耳
-      flick: { minGap: 4.0, maxGap: 9.0, duration: 0.28, amp: 0.30 },
-
-      // 有情绪表情（LLM 触发）时，把状态姿态压到这个比例
-      // 否则会出现「明明在生气，眉毛却在笑」的错位
-      cuePoseScale: 0.3
-    },
-
-    // ==================== 呼吸幅度（接管库内置值）====================
-    //
-    // 运行库内置 CubismBreath，用的是官方示例值：ParamAngleX 峰值 15 × 权重 0.5
-    // = 头部左右摇 ±7.5°、周期 6.53s。对"角色在看着你"这件事来说这个摆幅偏大
-    // （和待机动作叠加后实测观感就是"没在看你"），所以这里接管成更小的幅度：
-    // 头 yaw ±4°、pitch ±2.5°、roll ±3°、身体 ±2°，周期保持官方值。
-    // 想恢复官方幅度就把 angleX/angleY/angleZ 改回 15/8/10。
-    breath: {
-      enabled: true,
-      angleX: 8,          // ±4°
-      angleY: 5,          // ±2.5°
-      angleZ: 6,          // ±3°
-      bodyAngleX: 4,      // ±2°
-      breath: 0.5,
-      cycles: {           // 官方示例周期（秒）
-        angleX: 6.5345, angleY: 3.5345, angleZ: 5.5345,
-        bodyAngleX: 15.5345, breath: 3.2345
+        // 序列结束（或被打断）后，把"变身相关"参数一次性写回中性值
+        //
+        // 正常路径其实不需要兜底：_2 自己会把眼镜戴回去、变身关掉，而且动作权重
+        // 淡出也会把参数带回基准值。但序列可能被中途打断（切后台、WebView 暂停、
+        // 模型重载、秒挂断），那时角色会停在"变到一半"的样子上 ——
+        // 参数级兜底比"指望动画一定播完"可靠。下面的值就是 moc3 里的默认值。
+        reset: {
+          key9: 1,        // 09 正常眼镜（默认值本来就是 1）
+          key11: 0,       // 11 变身
+          key15: 0,       // 14 划卡手
+          Param172: 0,    // 划卡特效
+          Param173: 0,    // 划卡 R x
+          Param204: 0,    // 划卡 R y
+          Param212: 0,    // 划卡 R z
+          Param210: 0,    // 划卡 L x
+          Param211: 0,    // 划卡 L y
+          Param213: 0,    // 划卡 L z
+          Param214: 0,    // 迈腿
+          Param218: 0     // 人物变暗
+        }
       }
     },
 
-    // ==================== 变身过场（一次性动作）====================
+    // ======================================================================
+    // DeepSeek 酱（DS鲸鱼娘）
+    // ======================================================================
     //
-    // 模型自带的 Transform_1/2 是同一段演出的前后两半（_1 摘眼镜+变身开+特效
-    // 0→10，_2 戴回眼镜+变身关+特效 10→20），但**都是 Loop: true**，直接播会
-    // 一直循环。tools/live2d_make_idle.py 生成两份"只改 Loop"的副本并注册成
-    // TransformOnce 组（0 = 进入 / 1 = 还原）。
-    transform: {
-      enabled: true,
-      group: 'TransformOnce',
-      inIndex: 0,
-      outIndex: 1,
+    // 与银狼的关键差异（都由 profile 承载，下游逻辑零改动）：
+    //   1. 没有变身演出 —— transform.enabled = false。硬播 TransformOnce 会
+    //      因为组不存在而静默失败（JS 侧只记一条 warn 并返回 false，不抛异常），
+    //      但挂断侧会白等一段过场时间，所以要显式关掉。
+    //   2. 有待机动作 —— 模型自带 idle.motion3.json（4s / 89 曲线），已由
+    //      tools/setup_deepseek_model.py 注册成 Idle 组，运行库会自动循环播放。
+    //      程序化待机层因此只做"状态联动的微表情"，与动作层分工。
+    //   3. 没有笑眼/眯眼参数 —— 已直接扫 moc3 确认 ParamEyeLSmile /
+    //      ParamEyeRSmile / ParamEyeLSquint / ParamEyeRSquint 都不存在。
+    //      所以 channels 里去掉 smile / squint 两条通道：留着也不会报错
+    //      （paramOK 会跳过缺失参数），但写进去毫无效果，只会让调参时困惑。
+    //   4. 嘴部通道与银狼同名（ParamMouthOpenY / ParamMouthForm），口型层可直接复用。
+    deepseek: {
+      modelUrl: 'models/deepseek/c_0120.model3.json',
 
-      // 播放期间压掉程序化待机层：变身动作自己会画眉毛/眼睛，
-      // 而待机层写在 afterMotionUpdate（更晚），不压就会把它盖掉
-      muteIdle: true,
+      // 立绘是接近正方的半身像（画布 2048），内容重心比银狼低一点
+      offsetY: -0.06,
 
-      // 序列结束（或被打断）后，把"变身相关"参数一次性写回中性值
-      //
-      // 正常路径其实不需要兜底：_2 自己会把眼镜戴回去、变身关掉，而且动作权重
-      // 淡出也会把参数带回基准值。但序列可能被中途打断（切后台、WebView 暂停、
-      // 模型重载、秒挂断），那时角色会停在"变到一半"的样子上 ——
-      // 参数级兜底比"指望动画一定播完"可靠。下面的值就是 moc3 里的默认值。
-      reset: {
-        key9: 1,        // 09 正常眼镜（默认值本来就是 1）
-        key11: 0,       // 11 变身
-        key15: 0,       // 14 划卡手
-        Param172: 0,    // 划卡特效
-        Param173: 0,    // 划卡 R x
-        Param204: 0,    // 划卡 R y
-        Param212: 0,    // 划卡 R z
-        Param210: 0,    // 划卡 L x
-        Param211: 0,    // 划卡 L y
-        Param213: 0,    // 划卡 L z
-        Param214: 0,    // 迈腿
-        Param218: 0     // 人物变暗
+      idle: {
+        enabled: true,
+
+        // 只保留该模型真实存在的通道（见上方说明 3）
+        channels: {
+          brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
+          browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈/抗议）
+          mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
+          breath:    ['ParamBreath'],                           // 呼吸深度
+          tilt:      ['ParamAngleZ'],                           // 头部侧倾（单位：度）
+          sway:      ['ParamBodyAngleZ']                        // 身体左右摆（单位：度）
+        },
+
+        // 姿态幅度整体比银狼再小一点：这个模型自带 Idle 动作（89 条曲线）会写
+        // 大量道具/头发参数，叠加大幅度会打架；而且它是软乎乎的圆脸角色，
+        // 微表情做太大就不可爱了。
+        poses: {
+          idle:      { brow:  0.00, browForm: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 1.00 },
+          listening: { brow:  0.18, browForm: 0.04, mouthForm: -0.08, breath: 0.02, tilt:  1.6, sway: 0.45 },
+          thinking:  { brow: -0.12, browForm: 0.26, mouthForm:  0.12, breath: 0.00, tilt: -2.4, sway: 0.20 },
+          speaking:  { brow:  0.08, browForm: 0.02, mouthForm:  0.04, breath: 0.28, tilt:  0.6, sway: 0.70 },
+          ended:     { brow: -0.08, browForm: 0.10, mouthForm: -0.04, breath: 0.00, tilt: -1.4, sway: 0.15 }
+        },
+
+        poseRate: 0.06,
+
+        // 漂移通道同步收窄（没有 smile / squint 可漂）
+        drift: {
+          brow:      { amp: 0.05, period: 7.7 },
+          mouthForm: { amp: 0.04, period: 11.3 }
+        },
+
+        // 这个角色没有兽耳，"抖一下"改成眉毛/嘴形的短脉冲（更像"被戳了一下"）
+        flick: { minGap: 5.0, maxGap: 11.0, duration: 0.30, amp: 0.22 },
+
+        cuePoseScale: 0.3
+      },
+
+      // 呼吸：与银狼同一套（头 yaw ±4°、pitch ±2.5°、roll ±3°、身体 ±2°），
+      // 周期保持官方值。该模型的 ParamAngleX/Y/Z、ParamBodyAngleX、ParamBreath 都存在。
+      breath: {
+        enabled: true,
+        angleX: 8,
+        angleY: 5,
+        angleZ: 6,
+        bodyAngleX: 4,
+        breath: 0.5,
+        cycles: {
+          angleX: 6.5345, angleY: 3.5345, angleZ: 5.5345,
+          bodyAngleX: 15.5345, breath: 3.2345
+        }
+      },
+
+      // 没有一次性演出：playTransform 会直接返回 false，
+      // 宿主据此（hasTransform=false）也不会播、不会等
+      transform: {
+        enabled: false,
+        group: 'TransformOnce',
+        inIndex: 0,
+        outIndex: 1,
+        muteIdle: false,
+        reset: {}
       }
     }
   };
 
-  // 允许宿主通过 ?model= 指定模型，换模型无需改本文件
-  (function () {
-    try {
-      var m = null;
-      var q = window.location && window.location.search;
-      if (q && typeof URLSearchParams === 'function') {
-        m = new URLSearchParams(q).get('model');
-      } else if (q) {
-        // 兜底解析，兼容不支持 URLSearchParams 的环境
-        var hit = /[?&]model=([^&]*)/.exec(q);
-        if (hit) m = decodeURIComponent(hit[1]);
+  /** 深合并：把 profile 的字段覆盖到 BASE 上（对象逐层合并，数组整体替换） */
+  function deepMerge(base, override) {
+    var out = {}, k;
+    for (k in base) {
+      if (Object.prototype.hasOwnProperty.call(base, k)) out[k] = base[k];
+    }
+    for (k in override) {
+      if (!Object.prototype.hasOwnProperty.call(override, k)) continue;
+      var b = out[k], o = override[k];
+      if (b && o && typeof b === 'object' && typeof o === 'object' &&
+          !Array.isArray(b) && !Array.isArray(o)) {
+        out[k] = deepMerge(b, o);
+      } else {
+        out[k] = o;
       }
-      if (m) CFG.modelUrl = m;
-    } catch (e) { /* 解析失败则沿用默认模型 */ }
+    }
+    return out;
+  }
+
+  // 宿主可通过 ?profile= 指定形象档位、?model= 覆盖模型路径。
+  // 两者都不传时回落到银狼（与改造前的默认行为一致）。
+  var _query = (function () {
+    try { return (window.location && window.location.search) || ''; }
+    catch (e) { return ''; }
+  })();
+  function queryParam(name) {
+    try {
+      if (typeof URLSearchParams === 'function') {
+        return new URLSearchParams(_query).get(name);
+      }
+      var hit = new RegExp('[?&]' + name + '=([^&]*)').exec(_query);
+      return hit ? decodeURIComponent(hit[1]) : null;
+    } catch (e) { return null; }
+  }
+
+  var PROFILE_ID = queryParam('profile') || 'silverwolf';
+  if (!PROFILES[PROFILE_ID]) PROFILE_ID = 'silverwolf';
+
+  var CFG = deepMerge(BASE, PROFILES[PROFILE_ID]);
+
+  (function () {
+    var m = queryParam('model');
+    if (m) CFG.modelUrl = m;
   })();
 
   // ============================ 状态 ============================

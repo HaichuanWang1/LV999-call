@@ -1,9 +1,10 @@
 package com.lv999call.app.domain.usecase
 
+import com.lv999call.app.domain.model.ExpressionSet
 import com.lv999call.app.domain.model.Live2DExpression
 
 /**
- * 从 LLM 流式输出中解析并剥离表情 / 动作标签（[Live2DExpression.TAG_REGEX]）。
+ * 从 LLM 流式输出中解析并剥离表情 / 动作标签（[ExpressionSet.TAG_REGEX]）。
  *
  * 要解决两个现实问题：
  *
@@ -13,9 +14,14 @@ import com.lv999call.app.domain.model.Live2DExpression
  *    重扫成本可以忽略），但表情只能触发一次，因此用 [emitted] 记录已触发的标签数，
  *    只回调新增的那些。
  *
+ * 解析本身与角色无关（标签词法是全局统一的 `[[e:key]]`），但**查表**必须走当前角色的
+ * [ExpressionSet] —— 银狼的 `[[e:月卡]]` 和 DeepSeek 酱的 `[[e:脸红]]` 是两套不同的
+ * 名字空间，混用会让标签静默失效。
+ *
  * 线程约束：仅在单条 LLM 收集协程内串行使用，不加锁。
  */
 class ExpressionTagParser(
+    private val expressions: ExpressionSet,
     private val onExpression: (Live2DExpression) -> Unit
 ) {
     /** 已经处理过的完整标签数量，用来避免同一条标签被重复触发 */
@@ -27,10 +33,10 @@ class ExpressionTagParser(
      * 尾部未闭合的标签会被暂时扣住，等后续 chunk 补齐后自然补全。
      */
     fun consume(raw: String): String {
-        val matches = Live2DExpression.TAG_REGEX.findAll(raw).toList()
+        val matches = ExpressionSet.TAG_REGEX.findAll(raw).toList()
 
         for (i in emitted until matches.size) {
-            Live2DExpression.byKey(matches[i].groupValues[2])?.let(onExpression)
+            expressions.byKey(matches[i].groupValues[2])?.let(onExpression)
         }
         emitted = matches.size
 

@@ -45,6 +45,29 @@
 > **Haru 仅供本地技术验证与开发调试**，请勿随产品分发或商用。
 > 正式发布前必须替换为自有或已获授权的模型。
 
+### 内置角色模型（`models/silverwolf/`、`models/deepseek/`）
+
+这两个模型是**内置角色**的形象，同样处于 `.gitignore` 覆盖范围内，需本地获取。
+
+| 模型 | 角色 | 作者 | 获取方式 | 作者声明 |
+|------|------|------|---------|---------|
+| `models/silverwolf/` | 银狼 | B 站 @槿絮OuO | 自备 | 按作者要求标注来源 |
+| `models/deepseek/` | DeepSeek酱（DS鲸鱼娘） | B 站 @氵六青（11272072） | `python tools/setup_deepseek_model.py --zip <DS鲸鱼娘.zip>` | 商用直播 ✓ / 自印物料 ✓ / 禁止盗用与出售，模型为无偿分享 |
+
+DeepSeek 酱的模型**必须用安装脚本**而不是手动拷贝：作者的 `model3.json`
+里没有 `Motions` 与 `Expressions` 段（44 个表情与 7 条动作都是"裸文件"），
+不补注册的话 LLM 调表情 / 播动作会全部静默失效。脚本同时把中文文件名
+ASCII 化（AAPT2 在 Windows 上对 assets 里的非 ASCII 文件名支持不一致）。
+
+### 角色头像
+
+| 资源 | 来源 | 许可 |
+|------|------|------|
+| `res/drawable/deepseek_avatar.xml` | DeepSeek 官方仓库 `deepseek-ai/DeepSeek-Coder-V2` 的 `figures/logo.svg`（仅取鲸鱼 mark，官方主色 `#4D6BFE`） | MIT License, Copyright (c) 2023 DeepSeek |
+
+> 官方 logo 为商标（trademark）；此处仅用于标识该角色对应 DeepSeek，
+> 不暗示任何官方背书或关联。
+
 ## 使用自备模型
 
 1. 把模型放进 `app/src/main/assets/live2d/models/<your-model>/`

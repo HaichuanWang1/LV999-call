@@ -258,9 +258,9 @@ private fun String.jsEscape(): String =
 private fun createWebView(
     context: android.content.Context,
     controller: Live2DController,
-    modelPath: String? = null
-): WebView {
-    return WebView(context).apply {
+    modelPath: String? = null,
+    profileId: String? = null
+): WebView = WebView(context).apply {
         // 透明背景，才能叠在 Compose 渐变之上。
         //
         // 切勿对 WebView 调用 setLayerType(LAYER_TYPE_HARDWARE)：
@@ -325,9 +325,9 @@ private fun createWebView(
             }
         }
 
-        loadUrl(Live2DAssetLoader.indexUrl(modelPath))
+        loadUrl(Live2DAssetLoader.indexUrl(modelPath, profileId))
     }
-}
+
 /** 记住一个 Live2D 控制器，随 Composable 生命周期自动释放 */
 @Composable
 fun rememberLive2DController(): Live2DController = remember { Live2DController() }
@@ -345,7 +345,10 @@ fun rememberLive2DController(): Live2DController = remember { Live2DController()
  *
  * @param controller 由 [rememberLive2DController] 创建
  * @param modelPath 模型相对 assets/live2d 的路径，如
- *        `models/haru/haru_greeter_t03.model3.json`；传 null 用 JS 默认值
+ *        `models/haru/haru_greeter_t03.model3.json`；传 null 用 profile 默认值
+ * @param profileId bridge.js `PROFILES` 里的形象参数档位（待机通道 / 布局 / 呼吸 /
+ *        是否变身等），与 [com.lv999call.app.domain.model.BuiltInCharacter.live2dProfileId]
+ *        对应；传 null 回落银狼
  * @param paused 为 true 时暂停渲染以省电（例如通话结束）
  * @param onStatusChange 状态变化回调，可据此回退到静态头像
  */
@@ -354,13 +357,14 @@ fun Live2DView(
     controller: Live2DController,
     modifier: Modifier = Modifier,
     modelPath: String? = null,
+    profileId: String? = null,
     paused: Boolean = false,
     onStatusChange: (Live2DStatus) -> Unit = {}
 ) {
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            createWebView(ctx, controller, modelPath).also { controller.webView = it }
+            createWebView(ctx, controller, modelPath, profileId).also { controller.webView = it }
         }
     )
 

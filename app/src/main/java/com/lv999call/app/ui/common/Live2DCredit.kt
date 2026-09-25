@@ -18,20 +18,23 @@ import androidx.compose.ui.unit.dp
 /**
  * Live2D 模型作者署名。
  *
- * 该形象（银狼 Live2D 模型）的作者是 B 站 UP 主「槿絮OuO」，按作者要求标注来源，
- * 并给一个能直接点进主页的入口。
+ * 每个内置角色的模型作者不同（银狼：槿絮OuO；DeepSeek 酱：氵六青），
+ * 所以文案与链接都由 [com.lv999call.app.domain.model.BuiltInCharacter.credit]
+ * 传入，而不是写死在这里 —— 署名信息属于角色数据，不属于渲染逻辑。
  *
- * 用 [Uri] 打开 `https://b23.tv/...` 短链而不是写死 UID：短链由作者本人维护，
+ * 用 [Uri] 打开短链/主页而不是写死 UID：短链由作者本人维护，
  * 指向哪儿、以后换不换主页都不用改代码；系统里装了 B 站客户端时
- * 会由客户端接管（`b23.tv` 是其官方短链域名），没装则落到浏览器。
+ * 会由客户端接管，没装则落到浏览器。
  *
  * 视觉上刻意压低存在感：半透明小字，不跟界面主体抢视线。
  */
 @Composable
 fun Live2DAuthorCredit(
     modifier: Modifier = Modifier,
-    /** 展示文案，可被调用方按版面需要改写 */
-    label: String = "模型作者：槿絮OuO @bilibili"
+    /** 展示文案，由角色的 credit 提供 */
+    label: String = "模型作者：槿絮OuO @bilibili",
+    /** 点击跳转的地址，由角色的 credit 提供 */
+    url: String = Live2DAuthorCreditUrl
 ) {
     val context = LocalContext.current
     val colors = MaterialTheme.colorScheme
@@ -45,7 +48,7 @@ fun Live2DAuthorCredit(
             .clickable {
                 try {
                     context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(Live2DAuthorCreditUrl))
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
                             // 从非 Activity 上下文启动时要带 NEW_TASK；这里虽是 Activity，
                             // 带上不影响，且能兼容以后被别处复用
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

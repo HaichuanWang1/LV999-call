@@ -11,6 +11,7 @@ import com.lv999call.app.data.remote.TtsApiService
 import com.lv999call.app.data.remote.TtsModels
 import com.lv999call.app.domain.model.ApiConfig
 import com.lv999call.app.domain.model.ChatMessage
+import com.lv999call.app.domain.model.TtsPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -230,15 +231,21 @@ class ChatRepository(
      * 管道写满自然阻塞形成背压，内存占用有上限（[TTS_PIPE_BUFFER_BYTES]），不会攒整段音频。
      *
      * MiMo-V2.5-TTS: 通过 chat completions 端点，文本放 assistant 消息，参考音频放 audio.voice
+     *
      * @param refAudioBase64 模式对应的参考音频base64（为空则使用默认音色）
      * @param refAudioMime 参考音频MIME类型
+     * @param voiceOverride 强制使用的发声方式。见 [TtsPolicy]：
+     *        内置角色可以锁定自己的模型与音色（例如 DeepSeek 酱固定用 MiMo
+     *        预置少女音），此时**无视全局设置**里选的 TTS 模型。
+     *        传 null / [TtsPolicy.Inherit] 则完全跟随设置（历史行为不变）。
      */
     suspend fun synthesizeSpeech(
         config: ApiConfig,
         text: String,
         refAudioBase64: String = config.ttsReferenceAudioBase64,
         refAudioMime: String = config.ttsReferenceAudioMime,
-        ttsPrompt: String = ""
+        ttsPrompt: String = "",
+        voiceOverride: TtsPolicy? = null
     ): InputStream? {
         // 去除emoji、特殊符号、LLM推理标签、语气标注，TTS无法处理会导致乱音/卡顿
         val cleanText = text
@@ -252,21 +259,52 @@ class ChatRepository(
         // 请求体里塞着整段参考音频（~900KB base64），构建 + 网络 + 响应头都在 IO 线程做
         return withContext(Dispatchers.IO) {
             try {
-                val voiceUri = if (refAudioBase64.isNotEmpty()) {
-                    // MiMo限制: base64不超过10MB
-                    if (refAudioBase64.length > 10 * 1024 * 1024) {
-                        android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
-                        return@withContext null
+                // 发声方式：默认跟随全局设置；角色若锁定策略则整体覆盖
+                val modelId: String
+                val voiceUri: String
+                when (voiceOverride) {
+                    is TtsPolicy.PresetVoice -> {
+                        // 预置音色只能配 mimo-v2.5-tts：voice 传纯音色名（如「冰糖」），
+                        // 不是 data URI —— 传错格式服务端会直接报错
+                        modelId = voiceOverride.modelId.ifEmpty { TtsPolicy.PresetVoice.DEFAULT_MODEL }
+                        voiceUri = voiceOverride.voice
                     }
-                    "data:$refAudioMime;base64,$refAudioBase64"
-                } else {
-                    // voiceclone模型必须有参考音频，无音频则跳过TTS
-                    android.util.Log.w("ChatRepo", "无参考音频，voiceclone模型无法工作，跳过TTS")
-                    return@withContext null
+
+                    is TtsPolicy.CloneVoice -> {
+                        // 角色自带参考音频：从 assets 读（AppModule 已按角色缓存好 base64）
+                        modelId = voiceOverride.modelId.ifEmpty { "mimo-v2.5-tts-voiceclone" }
+                        voiceUri = if (refAudioBase64.isNotEmpty()) {
+                            if (refAudioBase64.length > 10 * 1024 * 1024) {
+                                android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
+                                return@withContext null
+                            }
+                            "data:$refAudioMime;base64,$refAudioBase64"
+                        } else {
+                            android.util.Log.w("ChatRepo", "角色锁定了克隆音色但参考音频为空，跳过TTS")
+                            return@withContext null
+                        }
+                    }
+
+                    else -> {
+                        // Inherit：完全跟随设置
+                        modelId = config.ttsModel.ifEmpty { "mimo-v2.5-tts-voiceclone" }
+                        voiceUri = if (refAudioBase64.isNotEmpty()) {
+                            // MiMo限制: base64不超过10MB
+                            if (refAudioBase64.length > 10 * 1024 * 1024) {
+                                android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
+                                return@withContext null
+                            }
+                            "data:$refAudioMime;base64,$refAudioBase64"
+                        } else {
+                            // voiceclone模型必须有参考音频，无音频则跳过TTS
+                            android.util.Log.w("ChatRepo", "无参考音频，voiceclone模型无法工作，跳过TTS")
+                            return@withContext null
+                        }
+                    }
                 }
 
                 val request = TtsModels.TtsChatRequest(
-                    model = config.ttsModel.ifEmpty { "mimo-v2.5-tts-voiceclone" },
+                    model = modelId,
                     messages = listOf(
                         TtsModels.TtsMessage(role = "user", content = ""),
                         TtsModels.TtsMessage(role = "assistant", content = cleanText)
@@ -280,10 +318,10 @@ class ChatRepository(
                     stream = true
                 )
 
-                // TTS锁死MiMo端点，当前只支持MiMo-V2.5-TTS-VoiceClone格式
+                // TTS锁死MiMo端点，当前只支持MiMo-V2.5-TTS系列格式
                 val url = "https://api.xiaomimimo.com/v1/chat/completions"
                 val voicePreview = voiceUri.take(60)
-                android.util.Log.d("ChatRepo", "TTS: url=$url, model=${request.model}, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
+                android.util.Log.d("ChatRepo", "TTS: url=$url, model=$modelId, text=${text.take(20)}..., voice=$voicePreview..., voiceLen=${voiceUri.length}")
 
                 val response = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
                 if (!response.isSuccessful) {

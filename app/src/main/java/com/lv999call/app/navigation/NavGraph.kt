@@ -15,6 +15,7 @@ import androidx.navigation.navArgument
 import com.lv999call.app.App
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.DialogMode
+import com.lv999call.app.preset.BuiltInCharacters
 import com.lv999call.app.ui.call.CallScreen
 import com.lv999call.app.ui.call.CallViewModel
 import com.lv999call.app.ui.custom.CustomEditScreen
@@ -28,14 +29,26 @@ import com.lv999call.app.ui.settings.SettingsViewModel
 
 object Routes {
     const val HOME = "home"
-    const val SILVERWOLF_PREPARE = "silverwolf_prepare"
-    const val SILVERWOLF_CALL = "silverwolf_call"
+
+    /**
+     * 内置角色的准备页 / 通话页。
+     *
+     * 用**一个参数化路由**承载所有内置角色，而不是每个角色各写一条
+     * （原来是 SILVERWOLF_PREPARE / SILVERWOLF_CALL 两条专属路由）——
+     * 每加一个角色就多两条路由，NavGraph 会线性膨胀且到处是重复代码。
+     * 角色差异全部由 [BuiltInCharacters] 的数据承载。
+     */
+    const val CHARACTER_PREPARE = "character_prepare/{characterId}"
+    const val CHARACTER_CALL = "character_call/{characterId}"
+
     const val PRESET_EDIT = "preset_edit/{presetId}"
     const val PRESET_CALL = "preset_call/{presetId}"
     const val CALL_CONTINUE = "call_continue/{sessionId}"
     const val HISTORY = "history/{sessionId}"
     const val SETTINGS = "settings"
 
+    fun characterPrepare(id: String) = "character_prepare/$id"
+    fun characterCall(id: String) = "character_call/$id"
     fun presetEdit(id: Long) = "preset_edit/$id"
     fun presetCall(id: Long) = "preset_call/$id"
     fun callContinue(sessionId: String) = "call_continue/$sessionId"
@@ -61,7 +74,8 @@ fun NavGraph() {
 
             HomeScreen(
                 presets = presets,
-                onNavigateToSilverWolf = { navController.navigate(Routes.SILVERWOLF_PREPARE) },
+                builtInCharacters = BuiltInCharacters.ALL,
+                onNavigateToCharacter = { id -> navController.navigate(Routes.characterPrepare(id)) },
                 onNavigateToPreset = { presetId -> navController.navigate(Routes.presetEdit(presetId)) },
                 onNavigateToNewPreset = { navController.navigate(Routes.presetEdit(0)) },
                 onDeletePreset = { presetId -> presetViewModel.deletePreset(presetId) },
@@ -69,25 +83,43 @@ fun NavGraph() {
             )
         }
 
-        // ===== 银狼准备页 =====
-        composable(Routes.SILVERWOLF_PREPARE) {
+        // ===== 内置角色准备页（银狼 / DeepSeek 酱 共用）=====
+        composable(
+            route = Routes.CHARACTER_PREPARE,
+            arguments = listOf(navArgument("characterId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val characterId = backStackEntry.arguments?.getString("characterId")
+            val character = BuiltInCharacters.byId(characterId)
+            if (character == null) {
+                // 非法 id（旧版本深链、手改路由）不应白屏：直接退回首页
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
+
             val configRepository = appModule.configRepository
             val config by configRepository.configFlow.collectAsState(initial = com.lv999call.app.domain.model.ApiConfig())
             val scope = rememberCoroutineScope()
 
+            // TTS 风格提示词：角色有默认值时用它作为首次进入的初值。
+            // 这里不写回配置 —— 角色默认值属于角色，不该污染全局设置。
+            val effectiveTtsPrompt = config.ttsPrompt.ifEmpty { character.defaultTtsPrompt }
+
             PrepareScreen(
                 mode = DialogMode.LONG,
+                character = character,
                 promptPreview = "",  // 内置提示词，不预览
-                backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
-                hasCustomAudio = config.ttsReferenceAudioBase64.isNotEmpty(),
-                ttsPrompt = config.ttsPrompt,
+                backgroundResId = character.backgroundResId,
+                // 音色被角色锁定时，参考音频设置无意义（见 PrepareScreen 内部说明）
+                hasCustomAudio = character.ttsPolicy !is com.lv999call.app.domain.model.TtsPolicy.PresetVoice &&
+                    config.ttsReferenceAudioBase64.isNotEmpty(),
+                ttsPrompt = effectiveTtsPrompt,
                 onTtsPromptChange = { newPrompt ->
                     scope.launch {
                         val currentConfig = configRepository.configFlow.first()
                         configRepository.saveConfig(currentConfig.copy(ttsPrompt = newPrompt))
                     }
                 },
-                onStartCall = { navController.navigate(Routes.SILVERWOLF_CALL) },
+                onStartCall = { navController.navigate(Routes.characterCall(character.id)) },
                 onSelectAudio = { uri ->
                     // 在IO线程提取WAV并保存到配置
                     scope.launch {
@@ -118,8 +150,14 @@ fun NavGraph() {
             )
         }
 
-        // ===== 银狼通话页 =====
-        composable(Routes.SILVERWOLF_CALL) {
+        // ===== 内置角色通话页（银狼 / DeepSeek 酱 共用）=====
+        composable(
+            route = Routes.CHARACTER_CALL,
+            arguments = listOf(navArgument("characterId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val characterId = backStackEntry.arguments?.getString("characterId") ?: ""
+            val character = BuiltInCharacters.byId(characterId)
+
             val viewModel: CallViewModel = viewModel(
                 factory = CallViewModel.Factory(appModule, context.applicationContext as android.app.Application)
             )
@@ -131,16 +169,21 @@ fun NavGraph() {
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
+            val activeCharacter by viewModel.character.collectAsState()
 
-            LaunchedEffect(Unit) { viewModel.startCall(DialogMode.LONG) }
+            LaunchedEffect(characterId) { viewModel.startCharacterCall(characterId) }
+
+            // 过场只在"角色确实有这套演出"时才等（见 BuiltInCharacter.hasTransform）
+            val waitsForTransform = config.live2dEnabled && config.live2dTransformEnabled &&
+                (character?.hasTransform ?: false)
 
             LaunchedEffect(callState) {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
                         // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
-                        // 过场被关掉时不延迟，保持原来的即时跳转手感
-                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                        // 过场被关掉（或角色没有过场）时不延迟，保持即时跳转手感
+                        if (waitsForTransform) {
                             delay(HANGUP_TRANSFORM_MS)
                         }
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
@@ -157,8 +200,10 @@ fun NavGraph() {
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
                 transformEnabled = config.live2dTransformEnabled,
+                character = activeCharacter,
                 avatarUri = config.characterAvatarUri,
-                backgroundResId = com.lv999call.app.R.drawable.silverwolf_bg,
+                avatarResId = character?.avatarResId ?: com.lv999call.app.R.drawable.touxiang,
+                backgroundResId = character?.backgroundResId,
                 onHangUp = { viewModel.hangUp() },
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
@@ -257,11 +302,7 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
-                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
-                        // 过场被关掉时不延迟，保持原来的即时跳转手感
-                        if (config.live2dEnabled && config.live2dTransformEnabled) {
-                            delay(HANGUP_TRANSFORM_MS)
-                        }
+                        // 自定义预设没有"变身"过场（模型由用户自选），不做延迟
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -276,6 +317,9 @@ fun NavGraph() {
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
                 transformEnabled = config.live2dTransformEnabled,
+                // 自定义预设不属于任何内置角色：形象参数走 bridge.js 默认档，
+                // 头像/背景用预设自己的
+                character = null,
                 avatarUri = presetAvatarUri?.ifEmpty { config.characterAvatarUri } ?: config.characterAvatarUri,
                 avatarResId = com.lv999call.app.R.drawable.default_avatar,
                 backgroundUri = presetBgUri?.ifEmpty { null },
@@ -304,16 +348,20 @@ fun NavGraph() {
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
+            val activeCharacter by viewModel.character.collectAsState()
 
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
+
+            // 续聊时角色是异步反查出来的（见 CallViewModel.matchCharacterByPrompt），
+            // 所以这里跟着 activeCharacter 重算
+            val waitsForTransform = config.live2dEnabled && config.live2dTransformEnabled &&
+                (activeCharacter?.hasTransform ?: false)
 
             LaunchedEffect(callState) {
                 if (callState == CallState.ENDED) {
                     val currentSessionId = viewModel.getSessionId()
                     if (currentSessionId != null) {
-                        // 等挂断过场（"还原变身"）播完再跳，见 CallScreen.HANGUP_TRANSFORM_MS；
-                        // 过场被关掉时不延迟，保持原来的即时跳转手感
-                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                        if (waitsForTransform) {
                             delay(HANGUP_TRANSFORM_MS)
                         }
                         navController.navigate(Routes.history(currentSessionId)) { popUpTo(Routes.HOME) }
@@ -325,7 +373,11 @@ fun NavGraph() {
                 callState = callState, messages = messages, currentResponse = currentResponse,
                 isThinkingResponse = isThinkingResponse,
                 audioLevel = audioLevel, live2dEnabled = config.live2dEnabled,
-                transformEnabled = config.live2dTransformEnabled, avatarUri = config.characterAvatarUri,
+                transformEnabled = config.live2dTransformEnabled,
+                character = activeCharacter,
+                avatarUri = config.characterAvatarUri,
+                avatarResId = activeCharacter?.avatarResId ?: com.lv999call.app.R.drawable.touxiang,
+                backgroundResId = activeCharacter?.backgroundResId,
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted
