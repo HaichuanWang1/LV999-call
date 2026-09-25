@@ -84,6 +84,28 @@ class Live2DController internal constructor() {
     var modelInfo: JSONObject? by mutableStateOf(null)
         internal set
 
+    /**
+     * 当前 WebView 实际加载的模型与档位。
+     *
+     * WebView 是真实 View，[androidx.compose.ui.viewinterop.AndroidView] 的 factory
+     * **只在首次组合时执行一次**，之后 modelPath / profileId 变了也不会重建。
+     * 而内置角色的形象参数可能是异步就绪的（续聊时要按提示词反查角色，
+     * 见 CallViewModel.matchCharacterByPrompt），首帧必然还是 null ——
+     * 若不记录已加载值并据此重载，页面就会一直停在 bridge.js 的默认档位（银狼），
+     * 表现为「打开 DeepSeek 酱却是银狼的脸」。
+     */
+    internal var loadedModelPath: String? = null
+    internal var loadedProfileId: String? = null
+
+    /**
+     * 加载代次，每次（重新）载入页面自增。
+     *
+     * 超时兜底的 LaunchedEffect 挂在它上面：否则重载失败时没人再判超时，
+     * 状态会永远停在 LOADING → UI 不回退静态头像 → 舞台空白。
+     */
+    var loadGeneration: Int by mutableStateOf(0)
+        internal set
+
     /** 最近一次向 JS 推送口型的时间戳，用于限流 */
     private var lastMouthPushAt = 0L
 
@@ -186,6 +208,27 @@ class Live2DController internal constructor() {
         } catch (e: Exception) {
             Log.w(TAG, "evaluateJavascript 失败: ${e.message}")
         }
+    }
+
+    /**
+     * 让 WebView 载入指定模型与形象档位。
+     *
+     * @return 目标与当前已加载值一致时返回 false（无需重载），否则重新载入并返回 true
+     */
+    internal fun loadModel(modelPath: String?, profileId: String?): Boolean {
+        if (modelPath == loadedModelPath && profileId == loadedProfileId) return false
+        val wv = webView ?: return false
+
+        loadedModelPath = modelPath
+        loadedProfileId = profileId
+        // 重新载入期间必须复位状态：否则残留的 READY 会让宿主以为模型还在，
+        // 新页面加载完之前的 setState/setMouth 全部打在空页面上
+        status = Live2DStatus.LOADING
+        lastError = null
+        modelInfo = null
+        loadGeneration++
+        wv.loadUrl(Live2DAssetLoader.indexUrl(modelPath, profileId))
+        return true
     }
 
     /** 超时兜底：仍处于 LOADING 则判定失败，让 UI 回退静态头像 */
@@ -325,6 +368,9 @@ private fun createWebView(
             }
         }
 
+        // 记下首帧实际载入的档位，供后续比对（见 Live2DController.loadModel）
+        controller.loadedModelPath = modelPath
+        controller.loadedProfileId = profileId
         loadUrl(Live2DAssetLoader.indexUrl(modelPath, profileId))
     }
 
@@ -368,13 +414,24 @@ fun Live2DView(
         }
     )
 
+    // 形象参数变化时重载页面。
+    //
+    // AndroidView 的 factory 只跑一次，所以角色晚于首帧就绪（续聊时按提示词反查、
+    // 或首页进入后 ViewModel 异步落位）时，必须显式重载，否则会一直停在
+    // bridge.js 的默认档位（银狼）上。同一档位重复组合不会触发（loadModel 内部比对）。
+    LaunchedEffect(modelPath, profileId) {
+        controller.loadModel(modelPath, profileId)
+    }
+
     // 状态变化向上汇报
     LaunchedEffect(controller.status) {
         onStatusChange(controller.status)
     }
 
-    // 加载超时兜底：避免资源缺失时停在 LOADING 导致空白
-    LaunchedEffect(controller) {
+    // 加载超时兜底：避免资源缺失时停在 LOADING 导致空白。
+    // 依赖 loadGeneration —— 重载后要重新计时，否则第一次的计时器早已跑完，
+    // 新页面加载失败时无人判超时。
+    LaunchedEffect(controller, controller.loadGeneration) {
         kotlinx.coroutines.delay(LOAD_TIMEOUT_MS)
         controller.markLoadTimeout()
     }

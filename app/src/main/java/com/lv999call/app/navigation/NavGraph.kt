@@ -202,7 +202,12 @@ fun NavGraph() {
                 expressionCue = expressionCue,
                 live2dEnabled = config.live2dEnabled,
                 transformEnabled = config.live2dTransformEnabled,
-                character = activeCharacter,
+                // 路由参数里已经能同步拿到角色（同一个 BuiltInCharacters.byId），
+                // 优先用它而不是等 ViewModel 的异步状态：否则首帧 activeCharacter 还是
+                // null，Live2D 会先按 bridge.js 默认档位（银狼）建一次 WebView，
+                // 角色到位后才发现档位不对而重载 —— 白闪一下。
+                // activeCharacter 作兜底，它与路由参数等价（同一份数据）。
+                character = activeCharacter ?: character,
                 avatarUri = config.characterAvatarUri,
                 avatarResId = character?.avatarResId ?: com.lv999call.app.R.drawable.touxiang,
                 backgroundResId = character?.backgroundResId,
