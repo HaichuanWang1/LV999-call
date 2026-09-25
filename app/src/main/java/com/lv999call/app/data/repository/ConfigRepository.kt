@@ -42,6 +42,16 @@ class ConfigRepository(private val context: Context) {
         val TTS_VOICE_ID = stringPreferencesKey("tts_voice_id")
         val TTS_SPEED = floatPreferencesKey("tts_speed")
         val TTS_PROMPT = stringPreferencesKey("tts_prompt")
+
+        /**
+         * 各内置角色的 TTS 风格提示词。
+         *
+         * 存成一个 JSON 对象（`{"silverwolf":"…","deepseek":"…"}`）而不是给每个角色
+         * 开一个 key：角色是会增加的，动态 key 会让 DataStore 里散落一堆
+         * `tts_prompt_xxx`，清理与迁移都麻烦。解析失败时静默回落到空表，
+         * 不影响其他配置加载。
+         */
+        val CHARACTER_TTS_PROMPTS = stringPreferencesKey("character_tts_prompts")
         val TTS_REF_AUDIO_BASE64 = stringPreferencesKey("tts_ref_audio_base64")
         val TTS_REF_AUDIO_MIME = stringPreferencesKey("tts_ref_audio_mime")
 
@@ -79,6 +89,7 @@ class ConfigRepository(private val context: Context) {
             ttsVoiceId = prefs[TTS_VOICE_ID] ?: "",
             ttsSpeed = prefs[TTS_SPEED] ?: 1.0f,
             ttsPrompt = prefs[TTS_PROMPT] ?: "",
+            characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
             ttsReferenceAudioMime = prefs[TTS_REF_AUDIO_MIME] ?: "audio/wav",
             customTtsReferenceAudioBase64 = prefs[CUSTOM_TTS_REF_AUDIO_BASE64] ?: "",
@@ -114,6 +125,7 @@ class ConfigRepository(private val context: Context) {
             prefs[TTS_VOICE_ID] = config.ttsVoiceId
             prefs[TTS_SPEED] = config.ttsSpeed
             prefs[TTS_PROMPT] = config.ttsPrompt
+            prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(config.characterTtsPrompts)
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64
             prefs[TTS_REF_AUDIO_MIME] = config.ttsReferenceAudioMime
             prefs[CUSTOM_TTS_REF_AUDIO_BASE64] = config.customTtsReferenceAudioBase64
@@ -143,5 +155,43 @@ class ConfigRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[BACKGROUND_URI] = uri
         }
+    }
+
+    /**
+     * 只更新某个内置角色的 TTS 风格提示词，**不动其他配置**。
+     *
+     * 用 read-modify-write 而不是整体 [saveConfig]：后者要求调用方先把整份配置读出来，
+     * 在准备页这种"改个输入框"的场景下极易把并发改动的其他字段覆盖回旧值。
+     */
+    suspend fun updateCharacterTtsPrompt(characterId: String, prompt: String) {
+        context.dataStore.edit { prefs ->
+            val current = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]).toMutableMap()
+            if (prompt.isEmpty()) current.remove(characterId) else current[characterId] = prompt
+            prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(current)
+        }
+    }
+
+    private fun parseCharacterPrompts(raw: String?): Map<String, String> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(raw)
+            buildMap {
+                obj.keys().forEach { key ->
+                    val v = obj.optString(key, "")
+                    if (v.isNotEmpty()) put(key, v)
+                }
+            }
+        } catch (e: Exception) {
+            // 配置损坏不该让整份设置读不出来，退回空表即可
+            android.util.Log.w("ConfigRepo", "角色 TTS 提示词解析失败: ${e.message}")
+            emptyMap()
+        }
+    }
+
+    private fun serializeCharacterPrompts(map: Map<String, String>): String {
+        if (map.isEmpty()) return ""
+        val obj = org.json.JSONObject()
+        map.forEach { (k, v) -> obj.put(k, v) }
+        return obj.toString()
     }
 }

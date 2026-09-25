@@ -100,9 +100,11 @@ fun NavGraph() {
             val config by configRepository.configFlow.collectAsState(initial = com.lv999call.app.domain.model.ApiConfig())
             val scope = rememberCoroutineScope()
 
-            // TTS 风格提示词：角色有默认值时用它作为首次进入的初值。
-            // 这里不写回配置 —— 角色默认值属于角色，不该污染全局设置。
-            val effectiveTtsPrompt = config.ttsPrompt.ifEmpty { character.defaultTtsPrompt }
+            // TTS 风格提示词：优先用户为该角色单独设置的值，其次角色自带默认值。
+            // 每个角色各存一份，互不污染（见 ApiConfig.characterTtsPrompts）。
+            val effectiveTtsPrompt = config.getTtsPromptForCharacter(
+                character.id, character.defaultTtsPrompt
+            )
 
             PrepareScreen(
                 mode = DialogMode.LONG,
@@ -115,8 +117,8 @@ fun NavGraph() {
                 ttsPrompt = effectiveTtsPrompt,
                 onTtsPromptChange = { newPrompt ->
                     scope.launch {
-                        val currentConfig = configRepository.configFlow.first()
-                        configRepository.saveConfig(currentConfig.copy(ttsPrompt = newPrompt))
+                        // 只写该角色那一格，不碰其他角色的语气与全局配置
+                        configRepository.updateCharacterTtsPrompt(character.id, newPrompt)
                     }
                 },
                 onStartCall = { navController.navigate(Routes.characterCall(character.id)) },

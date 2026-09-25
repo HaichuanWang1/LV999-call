@@ -69,6 +69,15 @@ class ProcessAudioUseCase(
         autoGreetingText: String = "",
         overrideRefAudioBase64: String? = null,
         overrideRefAudioMime: String? = null,
+        /**
+         * 角色自带参考音频，作为**最后**兜底（优先级见下方 Step 3）。
+         *
+         * 与 [overrideRefAudioBase64] 的区别：预设的 override 优先级最高，
+         * 而角色自带音色要让位给用户在准备页/设置里主动选的音频 ——
+         * 否则用户换了音色却发现没生效。
+         */
+        fallbackRefAudioBase64: String? = null,
+        fallbackRefAudioMime: String? = null,
         ttsPrompt: String = "",
         /**
          * 该角色的表情集。为空集（或 Live2D 关闭）时不向 LLM 注入标签协议。
@@ -182,13 +191,16 @@ class ProcessAudioUseCase(
             //   1. 角色锁定的发声策略（如 DeepSeek 酱强制 MiMo 预置少女音）——
             //      这一档会**无视设置里选的 TTS 模型**，是"强制锁定"的落点；
             //   2. 预设自带的参考音频（override，自定义预设用）；
-            //   3. 全局配置里对应模式的参考音频。
-            // 三者都为空时交给 ChatRepository 按策略决定（预置音色不需要参考音频）。
+            //   3. 用户在设置/准备页里主动选的参考音频；
+            //   4. 角色自带的参考音频（如银狼内置音色）作为兜底 ——
+            //      放在最后是为了让用户的主动选择始终生效。
             val refAudio: String = overrideRefAudioBase64?.takeIf { it.isNotEmpty() }
                 ?: config.getRefAudioForMode(mode).takeIf { it.isNotEmpty() }
+                ?: fallbackRefAudioBase64?.takeIf { it.isNotEmpty() }
                 ?: ""
             val refMime: String = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true }
                 ?: config.getRefAudioMimeForMode(mode).takeIf { config.getRefAudioForMode(mode).isNotEmpty() }
+                ?: fallbackRefAudioMime?.takeIf { fallbackRefAudioBase64?.isNotEmpty() == true }
                 ?: "audio/wav"
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime, policy=${ttsPolicy ?: "inherit"}")
 

@@ -146,16 +146,23 @@ class CallViewModel(
         get() = appModule.resolveTtsPolicy(currentCharacter)
 
     /**
-     * 当前通话实际使用的参考音频。
+     * 当前通话的预设参考音频（仅自定义预设用）。
      *
-     * 内置角色自带音色时用角色自带的（如银狼的内置参考音频），
-     * 自定义预设用预设里保存的。两者都不污染全局配置。
+     * 内置角色**不走这里** —— 它们自带音色走 [characterRefAudio]，优先级更低，
+     * 这样用户在准备页里选的音频始终能覆盖内置音色。
      */
-    private val effectiveRefAudio: String?
-        get() = presetRefAudioBase64 ?: appModule.cloneRefAudio(currentCharacter)
+    private val presetRefAudio: String?
+        get() = presetRefAudioBase64
 
-    private val effectiveRefAudioMime: String?
-        get() = presetRefAudioMime ?: appModule.cloneRefAudioMime(currentCharacter)
+    private val presetRefAudioMimeValue: String?
+        get() = presetRefAudioMime
+
+    /** 角色自带参考音频（仅 [TtsPolicy.CloneVoice] 的角色有，如银狼） */
+    private val characterRefAudio: String?
+        get() = appModule.cloneRefAudio(currentCharacter)
+
+    private val characterRefAudioMime: String?
+        get() = appModule.cloneRefAudioMime(currentCharacter)
 
     val config: StateFlow<ApiConfig> = configRepository.configFlow
         .stateIn(
@@ -385,8 +392,9 @@ class CallViewModel(
                     mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = "你好",
-                    overrideRefAudioBase64 = effectiveRefAudio,
-                    overrideRefAudioMime = effectiveRefAudioMime,
+                    // 角色自带音色只作为兜底：用户在准备页里选的音频优先级更高
+                    fallbackRefAudioBase64 = characterRefAudio,
+                    fallbackRefAudioMime = characterRefAudioMime,
                     ttsPrompt = currentTtsPrompt,
                     expressions = currentExpressions,
                     ttsPolicy = currentTtsPolicy,
@@ -531,8 +539,11 @@ class CallViewModel(
                         systemPrompt = systemPrompt,
                         history = _messages.value,
                         mode = currentMode,
-                        overrideRefAudioBase64 = effectiveRefAudio,
-                        overrideRefAudioMime = effectiveRefAudioMime,
+                        // 预设音频优先级最高；内置角色音色作为兜底
+                        overrideRefAudioBase64 = presetRefAudio,
+                        overrideRefAudioMime = presetRefAudioMimeValue,
+                        fallbackRefAudioBase64 = characterRefAudio,
+                        fallbackRefAudioMime = characterRefAudioMime,
                         ttsPrompt = currentTtsPrompt,
                         expressions = currentExpressions,
                         ttsPolicy = currentTtsPolicy,
@@ -589,8 +600,11 @@ class CallViewModel(
                     mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = text,
-                    overrideRefAudioBase64 = effectiveRefAudio,
-                    overrideRefAudioMime = effectiveRefAudioMime,
+                    // 预设音频优先级最高；内置角色音色作为兜底
+                    overrideRefAudioBase64 = presetRefAudio,
+                    overrideRefAudioMime = presetRefAudioMimeValue,
+                    fallbackRefAudioBase64 = characterRefAudio,
+                    fallbackRefAudioMime = characterRefAudioMime,
                     ttsPrompt = currentTtsPrompt,
                     expressions = currentExpressions,
                     ttsPolicy = currentTtsPolicy,
