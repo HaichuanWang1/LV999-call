@@ -36,7 +36,23 @@ data class ApiConfig(
     val asrProvider: String = "custom",  // "custom" | "vosk"
     val asrBaseUrl: String = "",
     val asrApiKey: String = "",
-    val asrLanguage: String = "zh-CN",
+
+    /**
+     * ASR 模型名（如 `whisper-1` / `whisper-large-v3` / `FunAudioLLM/SenseVoiceSmall`）。
+     *
+     * OpenAI 的 `/v1/audio/transcriptions` 把 `model` 列为**必填**，缺失直接 400；
+     * 旧实现虽然声明了这个 part 却从来没下发过，导致官方端点必然失败。
+     * 留空 = 不发该字段，交给自建服务端用自己的默认模型。
+     */
+    val asrModel: String = "",
+
+    /**
+     * 识别语言，ISO-639-1（`zh` / `en`）或 `auto`。
+     *
+     * 历史上默认 `zh-CN`，但 Whisper 只认两位码，下发前由
+     * [com.lv999call.app.data.remote.AsrApiService.normalizeLanguage] 归一化。
+     */
+    val asrLanguage: String = "zh",
     val asrVoskModelId: String = "",  // Vosk离线模型ID
 
     // TTS配置 (MiMo-V2.5-TTS-VoiceClone)
@@ -77,9 +93,6 @@ data class ApiConfig(
 
     // 自定义模式提示词
     val customPrompt: String = "",
-
-    // TTS播放完毕后才开始录音（防止录到TTS声音）
-    val waitTtsBeforeRecord: Boolean = true,
 
     // 通话界面使用 Live2D 动态形象（关闭后回退到静态头像）
     val live2dEnabled: Boolean = true,

@@ -172,6 +172,7 @@ fun NavGraph() {
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
             val activeCharacter by viewModel.character.collectAsState()
+            val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
             LaunchedEffect(characterId) { viewModel.startCharacterCall(characterId) }
 
@@ -214,7 +215,8 @@ fun NavGraph() {
                 onHangUp = { viewModel.hangUp() },
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
-                isMuted = isMuted
+                isMuted = isMuted,
+                asrRetryHint = asrRetryHint
             )
         }
 
@@ -294,6 +296,7 @@ fun NavGraph() {
             val config by viewModel.config.collectAsState()
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
+            val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
             // 加载预设数据用于显示
             var presetBgUri by remember { mutableStateOf<String?>(null) }
@@ -337,7 +340,8 @@ fun NavGraph() {
                 onHangUp = { viewModel.hangUp() },
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
-                isMuted = isMuted
+                isMuted = isMuted,
+                asrRetryHint = asrRetryHint
             )
         }
 
@@ -360,6 +364,7 @@ fun NavGraph() {
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
             val activeCharacter by viewModel.character.collectAsState()
+            val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
 
@@ -392,7 +397,8 @@ fun NavGraph() {
                 backgroundResId = activeCharacter?.backgroundResId,
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
-                onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted
+                onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted,
+                asrRetryHint = asrRetryHint
             )
         }
 

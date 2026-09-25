@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.lv999call.app.data.remote.AsrApiService
 import com.lv999call.app.domain.model.ApiConfig
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -32,6 +33,7 @@ class ConfigRepository(private val context: Context) {
         val ASR_PROVIDER = stringPreferencesKey("asr_provider")
         val ASR_BASE_URL = stringPreferencesKey("asr_base_url")
         val ASR_API_KEY = stringPreferencesKey("asr_api_key")
+        val ASR_MODEL = stringPreferencesKey("asr_model")
         val ASR_LANGUAGE = stringPreferencesKey("asr_language")
         val ASR_VOSK_MODEL_ID = stringPreferencesKey("asr_vosk_model_id")
 
@@ -62,7 +64,6 @@ class ConfigRepository(private val context: Context) {
         val CHARACTER_AVATAR_URI = stringPreferencesKey("character_avatar_uri")
         val BACKGROUND_URI = stringPreferencesKey("background_uri")
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
-        val WAIT_TTS_BEFORE_RECORD = stringPreferencesKey("wait_tts_before_record")
         val LIVE2D_ENABLED = stringPreferencesKey("live2d_enabled")
         val LIVE2D_TRANSFORM_ENABLED = stringPreferencesKey("live2d_transform_enabled")
     }
@@ -80,7 +81,11 @@ class ConfigRepository(private val context: Context) {
             asrProvider = prefs[ASR_PROVIDER] ?: "custom",
             asrBaseUrl = prefs[ASR_BASE_URL] ?: "",
             asrApiKey = prefs[ASR_API_KEY] ?: "",
-            asrLanguage = prefs[ASR_LANGUAGE] ?: "zh-CN",
+            asrModel = prefs[ASR_MODEL] ?: "",
+            // 旧版本存的是 zh-CN，下发前会被归一化成 zh；这里顺手读出来就归一，
+            // 让设置页显示的也是规范值（否则用户会以为 zh-CN 是服务端要的格式）
+            asrLanguage = AsrApiService.normalizeLanguage(prefs[ASR_LANGUAGE] ?: "zh")
+                .ifEmpty { "auto" },
             asrVoskModelId = prefs[ASR_VOSK_MODEL_ID] ?: "",
             ttsProvider = prefs[TTS_PROVIDER] ?: "mimo",
             ttsBaseUrl = prefs[TTS_BASE_URL] ?: "",
@@ -97,7 +102,6 @@ class ConfigRepository(private val context: Context) {
             characterAvatarUri = prefs[CHARACTER_AVATAR_URI] ?: "",
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             customPrompt = prefs[CUSTOM_PROMPT] ?: "",
-            waitTtsBeforeRecord = prefs[WAIT_TTS_BEFORE_RECORD]?.toBooleanStrictOrNull() ?: true,
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
             live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true
         )
@@ -116,6 +120,7 @@ class ConfigRepository(private val context: Context) {
             prefs[ASR_PROVIDER] = config.asrProvider
             prefs[ASR_BASE_URL] = config.asrBaseUrl
             prefs[ASR_API_KEY] = config.asrApiKey
+            prefs[ASR_MODEL] = config.asrModel
             prefs[ASR_LANGUAGE] = config.asrLanguage
             prefs[ASR_VOSK_MODEL_ID] = config.asrVoskModelId
             prefs[TTS_PROVIDER] = config.ttsProvider
@@ -133,7 +138,6 @@ class ConfigRepository(private val context: Context) {
             prefs[CHARACTER_AVATAR_URI] = config.characterAvatarUri
             prefs[BACKGROUND_URI] = config.backgroundUri
             prefs[CUSTOM_PROMPT] = config.customPrompt
-            prefs[WAIT_TTS_BEFORE_RECORD] = config.waitTtsBeforeRecord.toString()
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()
             prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
         }

@@ -62,6 +62,7 @@ fun SettingsScreen(
     var asrProvider by remember(config) { mutableStateOf(config.asrProvider) }
     var asrBaseUrl by remember(config) { mutableStateOf(config.asrBaseUrl) }
     var asrApiKey by remember(config) { mutableStateOf(config.asrApiKey) }
+    var asrModel by remember(config) { mutableStateOf(config.asrModel) }
     var asrLanguage by remember(config) { mutableStateOf(config.asrLanguage) }
     var asrVoskModelId by remember(config) { mutableStateOf(config.asrVoskModelId) }
 
@@ -71,7 +72,6 @@ fun SettingsScreen(
     var ttsSpeed by remember(config) { mutableFloatStateOf(config.ttsSpeed) }
 
     var showApiKey by remember { mutableStateOf(false) }
-    var waitTts by remember(config) { mutableStateOf(config.waitTtsBeforeRecord) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
     var live2dTransformEnabled by remember(config) { mutableStateOf(config.live2dTransformEnabled) }
     val scrollState = rememberScrollState()
@@ -224,6 +224,13 @@ fun SettingsScreen(
                 if (asrProvider == "custom") {
                     SettingsTextField("ASR URL", asrBaseUrl, { asrBaseUrl = it }, "https://api.openai.com/v1/audio/transcriptions")
                     SettingsTextField("ASR API Key", asrApiKey, { asrApiKey = it }, isPassword = !showApiKey, placeholder = "sk-xxx...")
+                    SettingsTextField("ASR 模型名", asrModel, { asrModel = it }, "whisper-1")
+                    Text(
+                        text = "OpenAI 官方端点必填（如 whisper-1 / whisper-large-v3）；自建服务端可留空，由服务端用默认模型",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                 }
 
                 // Vosk 离线模型管理
@@ -342,7 +349,12 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsTextField("语言", asrLanguage, { asrLanguage = it }, "zh-CN")
+                SettingsTextField("语言", asrLanguage, { asrLanguage = it }, "zh")
+                Text(
+                    text = "ISO-639-1 两位码（zh / en / ja）；填 auto 走自动检测。旧值 zh-CN 会自动转成 zh",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+                )
 
                 Spacer(modifier = Modifier.height(24.dp))
 
@@ -410,16 +422,6 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = waitTts, onCheckedChange = { waitTts = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text("TTS播完再录音", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
-                        Text("关闭可降低延迟，但可能录到TTS声音", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = live2dEnabled, onCheckedChange = { live2dEnabled = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
@@ -475,9 +477,9 @@ fun SettingsScreen(
                             llmTopP = topP,
                             llmMaxOutputTokens = maxOutputTokens.toInt(),
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
+                            asrModel = asrModel,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
-                            waitTtsBeforeRecord = waitTts,
                             live2dEnabled = live2dEnabled,
                             live2dTransformEnabled = live2dTransformEnabled
                         ))

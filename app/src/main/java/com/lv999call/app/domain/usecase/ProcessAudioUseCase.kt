@@ -5,6 +5,8 @@ import com.lv999call.app.audio.AudioPlayer
 import com.lv999call.app.audio.AsrEngine
 import com.lv999call.app.data.repository.ChatRepository
 import com.lv999call.app.data.repository.ConfigRepository
+import com.lv999call.app.domain.model.ApiConfig
+import com.lv999call.app.domain.model.AsrEmptyException
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.domain.model.DialogMode
@@ -115,8 +117,11 @@ class ProcessAudioUseCase(
             onStateChange(CallState.THINKING)
             val text = asrEngine.transcribe(config, pcmData)
             if (text.isBlank()) {
-                Log.w(TAG, "ASR识别结果为空")
-                return Pair(ChatMessage(role = "user", content = "（语音识别失败）"), null)
+                // 抛异常而不是伪造一条「（语音识别失败）」的用户消息：
+                // 后者会被写进消息列表并持久化到历史，识别失败一次就永久多一条假发言，
+                // 还会被当成真实用户输入送进 LLM 上下文。交给上层提示重说。
+                Log.w(TAG, "ASR识别结果为空（音频 ${pcmData.size} 字节）")
+                throw AsrEmptyException()
             }
             text
         }

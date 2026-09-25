@@ -150,7 +150,15 @@ fun CallScreen(
      * 由 CallViewModel 显式给出，而不是让 UI 看 `currentResponse.isEmpty()` 去猜 ——
      * 否则首字到达前那段空白里 UI 不知道要不要先摆一个转圈气泡。
      */
-    isThinkingResponse: Boolean = false
+    isThinkingResponse: Boolean = false,
+    /**
+     * 「没听清」提示的计数器（[CallViewModel.asrRetryHint]）。
+     *
+     * 识别为空时不该伪造一条用户消息写进历史，但也不能毫无反馈 ——
+     * 这里在状态胶囊上短暂顶一句提示，然后自然回到「聆听中…」。
+     * 用自增计数而非布尔：连续两次没听清时 LaunchedEffect 才会重新触发。
+     */
+    asrRetryHint: Int = 0
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
@@ -159,6 +167,16 @@ fun CallScreen(
     var inputText by remember { mutableStateOf("") }
     // 记住哪些气泡已经播过入场动画（列表回收重建时不重播）
     val entranceTracker = rememberBubbleEntranceTracker()
+
+    // 「没听清」提示：计数变化时短暂顶替状态胶囊文案，之后自动恢复
+    var showAsrRetryHint by remember { mutableStateOf(false) }
+    LaunchedEffect(asrRetryHint) {
+        if (asrRetryHint > 0) {
+            showAsrRetryHint = true
+            kotlinx.coroutines.delay(2000)
+            showAsrRetryHint = false
+        }
+    }
 
     // ===================== Live2D 形象 =====================
     val l2d = rememberLive2DController()
@@ -369,7 +387,7 @@ fun CallScreen(
                 .padding(horizontal = 12.dp)
         ) {
             Spacer(modifier = Modifier.height(8.dp))
-            CallStatusIndicator(callState)
+            CallStatusIndicator(callState, showAsrRetryHint)
             Spacer(modifier = Modifier.height(8.dp))
 
             // ===== 主板块：Live2D 舞台 + 对话框，装在同一个容器里 =====
@@ -840,11 +858,14 @@ private fun StaticAvatar(callState: CallState, avatarUri: String?, avatarResId: 
 
 /** 通话状态指示（胶囊） */
 @Composable
-private fun CallStatusIndicator(callState: CallState) {
+private fun CallStatusIndicator(callState: CallState, showAsrRetryHint: Boolean = false) {
     val colors = MaterialTheme.colorScheme
     val ext = UltraFlowTheme.extendedColors
 
-    val (label, tint) = when (callState) {
+    val (label, tint) = if (showAsrRetryHint) {
+        // 「没听清」优先于常规状态文案：这是用户当下最需要知道的信息
+        "没听清，再说一次～" to ext.thinking
+    } else when (callState) {
         CallState.LISTENING -> "聆听中…" to ext.listening
         CallState.THINKING -> "思考中…" to ext.thinking
         CallState.SPEAKING -> "说话中…" to ext.speaking

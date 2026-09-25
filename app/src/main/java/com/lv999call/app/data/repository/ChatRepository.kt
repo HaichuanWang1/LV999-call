@@ -2,7 +2,6 @@ package com.lv999call.app.data.repository
 
 import com.google.gson.Gson
 import com.lv999call.app.audio.AudioPipe
-import com.lv999call.app.data.remote.AsrApiService
 import com.lv999call.app.data.remote.LlmApiService
 import com.lv999call.app.data.remote.LlmModels
 import com.lv999call.app.data.remote.ModelsApiService
@@ -20,16 +19,12 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.ResponseBody
 import java.io.InputStream
 
-/** 对话仓库 - 处理LLM/ASR/TTS的网络调用 */
+/** 对话仓库 - 处理LLM/TTS的网络调用（ASR 走 [com.lv999call.app.audio.AsrEngine]，支持 Vosk 离线） */
 class ChatRepository(
     private val llmApi: LlmApiService,
-    private val asrApi: AsrApiService,
     private val ttsApi: TtsApiService,
     private val modelsApi: ModelsApiService
 ) {
@@ -191,32 +186,6 @@ class ChatRepository(
             emit("[错误: ${e.message}]")
         }
     }.flowOn(Dispatchers.IO)
-
-    /**
-     * 调用ASR将音频转为文本
-     */
-    suspend fun transcribeAudio(
-        config: ApiConfig,
-        audioData: ByteArray,
-        mimeType: String = "audio/wav"
-    ): String {
-        return try {
-            val requestFile = audioData.toRequestBody(mimeType.toMediaTypeOrNull())
-            val audioPart = MultipartBody.Part.createFormData("file", "audio.wav", requestFile)
-
-            val languageBody = config.asrLanguage.toRequestBody("text/plain".toMediaTypeOrNull())
-
-            val url = AsrApiService.buildTranscribeUrl(config.asrBaseUrl)
-            val auth = "Bearer ${config.asrApiKey}"
-
-            val response = asrApi.transcribe(url, auth, audioPart, language = languageBody)
-            response.text.ifEmpty {
-                response.result?.firstOrNull()?.text ?: ""
-            }
-        } catch (e: Exception) {
-            "[ASR错误: ${e.message}]"
-        }
-    }
 
     /**
      * 调用TTS合成语音，返回**边收边播**的PCM音频流（调用方读完即 EOF）。

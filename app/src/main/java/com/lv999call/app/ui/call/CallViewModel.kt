@@ -61,6 +61,15 @@ class CallViewModel(
     val isMuted: StateFlow<Boolean> = _isMuted.asStateFlow()
 
     /**
+     * 「没听清」提示的计数器。
+     *
+     * 用自增计数而不是 Boolean：连续两次都没听清时，UI 侧的 LaunchedEffect
+     * 只比较布尔值不会重启，第二次提示就弹不出来了（与表情 cue 同一个坑）。
+     */
+    private val _asrRetryHint = MutableStateFlow(0)
+    val asrRetryHint: StateFlow<Int> = _asrRetryHint.asStateFlow()
+
+    /**
      * 当前通话的内置角色（自定义预设通话时为 null）。
      *
      * UI 靠它决定 Live2D 模型路径与 profile、静态头像、背景图、署名与过场开关 ——
@@ -578,6 +587,12 @@ class CallViewModel(
                     android.util.Log.w("CallVM", "处理音频超时")
                     endResponseTurn()
                 }
+            } catch (e: AsrEmptyException) {
+                // 没听清：不写任何消息（否则历史里会多一条假发言），
+                // 只把状态收回聆听让用户重说，并给一个短暂提示
+                android.util.Log.w("CallVM", "语音识别为空，等待用户重说")
+                endResponseTurn()
+                _asrRetryHint.value = _asrRetryHint.value + 1
             } catch (e: Exception) {
                 endResponseTurn()
             } finally {

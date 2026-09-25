@@ -5,7 +5,6 @@ import com.lv999call.app.audio.AudioPlayer
 import com.lv999call.app.audio.AsrEngine
 import com.lv999call.app.audio.VoskModelManager
 import com.lv999call.app.data.local.AppDatabase
-import com.lv999call.app.data.remote.AsrApiService
 import com.lv999call.app.data.remote.LlmApiService
 import com.lv999call.app.data.remote.ModelsApiService
 import com.lv999call.app.data.remote.NetworkClient
@@ -27,13 +26,14 @@ class AppModule(private val context: Context) {
     val presetDao by lazy { database.presetDao() }
 
     val llmApiService: LlmApiService by lazy { NetworkClient.createService(LlmApiService::class.java) }
-    val asrApiService: AsrApiService by lazy { NetworkClient.createService(AsrApiService::class.java) }
+    // ASR 不需要在这里建：它走 AsrEngine（要同时支持 Vosk 离线，不能只有 HTTP 一条路），
+    // AsrEngine 自己持有 HTTP 服务实例
     val ttsApiService: TtsApiService by lazy { NetworkClient.createService(TtsApiService::class.java) }
     val modelsApiService: ModelsApiService by lazy { NetworkClient.createService(ModelsApiService::class.java) }
 
     val configRepository: ConfigRepository by lazy { ConfigRepository(context) }
     val sessionRepository: SessionRepository by lazy { SessionRepository(sessionDao, messageDao) }
-    val chatRepository: ChatRepository by lazy { ChatRepository(llmApiService, asrApiService, ttsApiService, modelsApiService) }
+    val chatRepository: ChatRepository by lazy { ChatRepository(llmApiService, ttsApiService, modelsApiService) }
 
     val asrEngine: AsrEngine by lazy { AsrEngine(context) }
     val voskModelManager: VoskModelManager by lazy { VoskModelManager(context) }
