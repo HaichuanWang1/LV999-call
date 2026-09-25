@@ -39,7 +39,8 @@ object BuiltInCharacters {
             url = "https://b23.tv/5bDRwj4"
         ),
         prepareTitle = "银狼",
-        prepareDescription = "使用银狼专属提示词和音色，开启沉浸式角色扮演语音对话。"
+        prepareDescription = "使用银狼专属提示词和音色，开启沉浸式角色扮演语音对话。",
+        emoji = "🐺"
     )
 
     /**
@@ -71,7 +72,8 @@ object BuiltInCharacters {
             url = "https://space.bilibili.com/11272072"
         ),
         prepareTitle = "DeepSeek酱",
-        prepareDescription = "使用 DeepSeek 酱专属提示词与少女音，和爱干饭的鲸鱼娘聊天。"
+        prepareDescription = "使用 DeepSeek 酱专属提示词与少女音，和爱干饭的鲸鱼娘聊天。",
+        emoji = "🐳"
     )
 
     /** 全部内置预设，顺序即首页展示顺序 */

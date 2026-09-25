@@ -94,6 +94,7 @@ sealed interface TtsPolicy {
  * @param defaultTtsPrompt 该角色默认的 TTS 风格提示词（首次进入准备页的占位）
  * @param hasTransform 是否有"变身"一次性过场（没有则挂断不做等待、不播动作）
  * @param credit 模型作者署名（null 表示不需要展示）
+ * @param emoji 准备页介绍卡的图标前缀
  */
 data class BuiltInCharacter(
     val id: String,
@@ -111,15 +112,9 @@ data class BuiltInCharacter(
     val hasTransform: Boolean = false,
     val credit: ModelCredit? = null,
     val prepareTitle: String = displayName,
-    val prepareDescription: String = ""
-) {
-    /** 角色介绍卡里的图标前缀（准备页顶部） */
-    val emoji: String get() = when (id) {
-        "silverwolf" -> "🐺"
-        "deepseek" -> "🐳"
-        else -> "✦"
-    }
-}
+    val prepareDescription: String = "",
+    val emoji: String = "✦"
+)
 
 /**
  * Live2D 模型作者署名。
