@@ -223,6 +223,11 @@
     //      所以 channels 里去掉 smile / squint 两条通道：留着也不会报错
     //      （paramOK 会跳过缺失参数），但写进去毫无效果，只会让调参时困惑。
     //   4. 嘴部通道与银狼同名（ParamMouthOpenY / ParamMouthForm），口型层可直接复用。
+    //   5. **身体摆动不可用**：这个模型的物理把 ParamBodyAngleZ / ParamBodyAngleX
+    //      当作**输出**（physics3.json 的 setting3 / setting1，权重 100），
+    //      每帧都会被物理覆写 —— 待机层再写一遍等于没写。
+    //      银狼的物理不输出这两个参数，所以那一档的 sway 通道是有效的。
+    //      这里去掉 sway，改由物理自己驱动身体摆动。
     deepseek: {
       modelUrl: 'models/deepseek/c_0120.model3.json',
 
@@ -232,25 +237,27 @@
       idle: {
         enabled: true,
 
-        // 只保留该模型真实存在的通道（见上方说明 3）
+        // 只保留该模型真实存在、且**不是物理输出**的通道（见上方说明 3、5）
         channels: {
           brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
           browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈/抗议）
           mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
           breath:    ['ParamBreath'],                           // 呼吸深度
-          tilt:      ['ParamAngleZ'],                           // 头部侧倾（单位：度）
-          sway:      ['ParamBodyAngleZ']                        // 身体左右摆（单位：度）
+          tilt:      ['ParamAngleZ']                            // 头部侧倾（单位：度）
         },
 
         // 姿态幅度整体比银狼再小一点：这个模型自带 Idle 动作（89 条曲线）会写
         // 大量道具/头发参数，叠加大幅度会打架；而且它是软乎乎的圆脸角色，
         // 微表情做太大就不可爱了。
+        //
+        // 注意：这里的 sway 只是占位（0），实际不会写进模型 —— 该参数是物理输出，
+        // 通道表里已经没有它了。保留字段是为了让姿态表和银狼同构、便于对照。
         poses: {
-          idle:      { brow:  0.00, browForm: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 1.00 },
-          listening: { brow:  0.18, browForm: 0.04, mouthForm: -0.08, breath: 0.02, tilt:  1.6, sway: 0.45 },
-          thinking:  { brow: -0.12, browForm: 0.26, mouthForm:  0.12, breath: 0.00, tilt: -2.4, sway: 0.20 },
-          speaking:  { brow:  0.08, browForm: 0.02, mouthForm:  0.04, breath: 0.28, tilt:  0.6, sway: 0.70 },
-          ended:     { brow: -0.08, browForm: 0.10, mouthForm: -0.04, breath: 0.00, tilt: -1.4, sway: 0.15 }
+          idle:      { brow:  0.00, browForm: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 0.00 },
+          listening: { brow:  0.18, browForm: 0.04, mouthForm: -0.08, breath: 0.02, tilt:  1.6, sway: 0.00 },
+          thinking:  { brow: -0.12, browForm: 0.26, mouthForm:  0.12, breath: 0.00, tilt: -2.4, sway: 0.00 },
+          speaking:  { brow:  0.08, browForm: 0.02, mouthForm:  0.04, breath: 0.28, tilt:  0.6, sway: 0.00 },
+          ended:     { brow: -0.08, browForm: 0.10, mouthForm: -0.04, breath: 0.00, tilt: -1.4, sway: 0.00 }
         },
 
         poseRate: 0.06,
@@ -267,14 +274,17 @@
         cuePoseScale: 0.3
       },
 
-      // 呼吸：与银狼同一套（头 yaw ±4°、pitch ±2.5°、roll ±3°、身体 ±2°），
-      // 周期保持官方值。该模型的 ParamAngleX/Y/Z、ParamBodyAngleX、ParamBreath 都存在。
+      // 呼吸：头 yaw ±4°、pitch ±2.5°、roll ±3°。
+      //
+      // 刻意**不含 bodyAngleX**（银狼那档有）：该模型的 ParamBodyAngleX 是物理输出
+      // （physics3.json setting1，权重 100），呼吸写进去会被物理每帧覆盖；
+      // 让它只作为物理的输入（setting0 权重 50）间接影响身体，观感反而更自然。
       breath: {
         enabled: true,
         angleX: 8,
         angleY: 5,
         angleZ: 6,
-        bodyAngleX: 4,
+        bodyAngleX: 0,      // 该模型由物理驱动身体，不在此接管
         breath: 0.5,
         cycles: {
           angleX: 6.5345, angleY: 3.5345, angleZ: 5.5345,
@@ -721,13 +731,17 @@
         return;
       }
       var b = CFG.breath, c = b.cycles;
-      im.breath.setParameters([
-        new B('ParamAngleX', 0, b.angleX, c.angleX, 0.5),
-        new B('ParamAngleY', 0, b.angleY, c.angleY, 0.5),
-        new B('ParamAngleZ', 0, b.angleZ, c.angleZ, 0.5),
-        new B('ParamBodyAngleX', 0, b.bodyAngleX, c.bodyAngleX, 0.5),
-        new B('ParamBreath', 0, b.breath, c.breath, 0.5)
-      ]);
+      // 幅度为 0 的条目直接不注册：某些模型的某个角度参数是**物理输出**
+      // （例：DeepSeek 酱的 ParamBodyAngleX），注册进去每帧都会被物理覆盖，
+      // 写了等于没写；而且会把库内置的呼吸数据挤掉。不注册则完全交给物理。
+      var list = [];
+      if (b.angleX) list.push(new B('ParamAngleX', 0, b.angleX, c.angleX, 0.5));
+      if (b.angleY) list.push(new B('ParamAngleY', 0, b.angleY, c.angleY, 0.5));
+      if (b.angleZ) list.push(new B('ParamAngleZ', 0, b.angleZ, c.angleZ, 0.5));
+      if (b.bodyAngleX) list.push(new B('ParamBodyAngleX', 0, b.bodyAngleX, c.bodyAngleX, 0.5));
+      if (b.breath) list.push(new B('ParamBreath', 0, b.breath, c.breath, 0.5));
+      if (!list.length) return;
+      im.breath.setParameters(list);
       console.log('[L2D] 呼吸幅度已接管：头 yaw ±' + (b.angleX * 0.5) + '°');
     } catch (e) { /* 拿不到就沿用库内置值 */ }
   }

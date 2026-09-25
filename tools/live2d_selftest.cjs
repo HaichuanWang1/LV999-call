@@ -458,6 +458,159 @@ function check(name, cond, extra = '') {
   win.L2D.dispose();
   check('dispose 后 ready 为 false', win.L2D.ready === false);
 
+  // ========================================================================
+  // [14] 形象档位（PROFILES）—— 并列预设的接线
+  //
+  // 上面的用例跑的是默认档位（银狼）。内置预设已并列化，宿主通过 ?profile=
+  // 选档位；这里重新加载 bridge.js 并切到 DeepSeek 酱那档，验证：
+  //   - 模型路径确实换了（不是仍加载银狼模型）
+  //   - 该档位剔除了模型不存在的通道（smile / squint），不会写无效参数
+  //   - 没有一次性演出（transform.enabled=false）→ playTransform 返回 false
+  //   - 未知档位安全回落默认档，不抛异常
+  // ========================================================================
+  console.log('\n[14] 形象档位切换（PROFILES）');
+
+  /**
+   * 用指定 query 重新加载 bridge.js，等就绪后返回 ready 事件里的模型能力信息。
+   *
+   * 两个注意点：
+   * 1. 必须 await：bridge.js 异步加载模型（Live2DModel.from(...).then(...)），
+   *    同步读 rec.events 只会拿到空数组；
+   * 2. 事件 payload 是 JSON **字符串**（notify 内部 JSON.stringify 过），
+   *    要 parse 后才能取字段。
+   */
+  async function bootWith(search) {
+    rec.events.length = 0;
+    rec.params = {};
+    win.location = { search };
+    eval(BRIDGE);   // 覆盖 window.L2D，得到一份全新的桥接实例
+    await sleep(40);
+    const ready = rec.events.filter(([t]) => t === 'ready');
+    if (!ready.length) return null;
+    try { return JSON.parse(ready[ready.length - 1][1]); } catch (e) { return null; }
+  }
+
+  const dsInfo = await bootWith('?profile=deepseek');
+
+  check('DeepSeek 档位加载成功并上报 ready',
+        !!dsInfo, JSON.stringify(rec.events.map(([t]) => t)));
+  check('档位切换后模型路径随之改变（不是仍加载银狼模型）',
+        !!dsInfo && /deepseek/.test(dsInfo.modelUrl), dsInfo && dsInfo.modelUrl);
+  check('模型路径来自档位而非 ?model= 兜底',
+        !!dsInfo && dsInfo.modelUrl === 'models/deepseek/c_0120.model3.json',
+        dsInfo && dsInfo.modelUrl);
+
+  // 该模型没有笑眼/眯眼参数（已扫 moc3 确认），档位里剔除了这两条通道
+  const dsBridge = fs.readFileSync(BRIDGE_PATH, 'utf8');
+  const dsProfile = (dsBridge.match(/deepseek:\s*\{([\s\S]*?)\n\s{4}\}\n\s{4}\}/) || [])[1] || '';
+  const dsChannels = (dsProfile.match(/channels:\s*\{([\s\S]*?)\}/) || [])[1] || '';
+  check('DeepSeek 档位的待机通道不含 smile（该模型无此参数）',
+        !/smile\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 120));
+  check('DeepSeek 档位的待机通道不含 squint（该模型无此参数）',
+        !/squint\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 120));
+
+  // 实证：跑一段时间，确认那些参数一次都没被写过
+  win.L2D.setState('listening');
+  tick(240);
+  check('运行期确实没有写入 smile/squint 参数',
+        !('ParamEyeLSmile' in rec.params) && !('ParamEyeLSquint' in rec.params),
+        JSON.stringify(Object.keys(rec.params)));
+
+  check('DeepSeek 档位没有变身演出 → playTransform 返回 false',
+        win.L2D.playTransform('full') === false);
+  check('无演出时不会误排动作序列', win.L2D.debug().indexOf('"sequence":null') >= 0);
+
+  // ----------------------------------------------------------------------
+  // 关键回归：待机 / 呼吸写入的参数**不能是物理输出**
+  //
+  // 物理每帧都会覆写自己的输出参数，待机层写上去等于没写（静默失效，
+  // 不报错、参数读回还是自己的值，只是渲染时被物理盖掉）。
+  // 实测踩到过：DeepSeek 酱的 ParamBodyAngleZ / ParamBodyAngleX 都是物理输出
+  // （physics3.json setting3 / setting1，权重 100），银狼的则不是 ——
+  // 所以这条必须按档位、对着各自的 physics3.json 逐参数校验。
+  // ----------------------------------------------------------------------
+  function physicsOutputs(modelDirName, physicsFile) {
+    const p = path.join(__dirname, '..', 'app', 'src', 'main', 'assets',
+                        'live2d', 'models', modelDirName, physicsFile);
+    if (!fs.existsSync(p)) return null;
+    const phys = JSON.parse(fs.readFileSync(p, 'utf8'));
+    const outs = new Set();
+    for (const st of phys.PhysicsSettings || []) {
+      for (const o of st.Output || []) outs.add(o.Destination.Id);
+    }
+    return outs;
+  }
+
+  /** 从 bridge.js 源码里抠出某个档位的 idle.channels 参数名 */
+  function profileIdleParams(profileId) {
+    const src = fs.readFileSync(BRIDGE_PATH, 'utf8');
+    // 找到 `<profileId>: {` 到下一个同级档位（或文件末尾）之间的片段
+    const start = src.search(new RegExp('\\n\\s{4}' + profileId + ':\\s*\\{'));
+    if (start < 0) return [];
+    const rest = src.slice(start + 1);
+    const next = rest.slice(1).search(/\n {4}[a-zA-Z_$][\w$]*:\s*\{/);
+    const seg = next >= 0 ? rest.slice(0, next + 1) : rest;
+    const ch = (seg.match(/channels:\s*\{([\s\S]*?)\n\s*\}/) || [])[1] || '';
+    return [...ch.matchAll(/'([A-Za-z_][\w]*)'/g)].map((m) => m[1]);
+  }
+
+  /** 从 bridge.js 源码里抠出某个档位的 breath 幅度 */
+  function profileBreath(profileId) {
+    const src = fs.readFileSync(BRIDGE_PATH, 'utf8');
+    const start = src.search(new RegExp('\\n\\s{4}' + profileId + ':\\s*\\{'));
+    if (start < 0) return null;
+    const rest = src.slice(start + 1);
+    const next = rest.slice(1).search(/\n {4}[a-zA-Z_$][\w$]*:\s*\{/);
+    const seg = next >= 0 ? rest.slice(0, next + 1) : rest;
+    const br = (seg.match(/breath:\s*\{([\s\S]*?)\n\s*\}/) || [])[1] || '';
+    const num = (k) => {
+      const m = br.match(new RegExp(k + ':\\s*(-?[\\d.]+)'));
+      return m ? Number(m[1]) : 0;
+    };
+    return {
+      angleX: num('angleX'), angleY: num('angleY'), angleZ: num('angleZ'),
+      bodyAngleX: num('bodyAngleX'), breath: num('breath'),
+    };
+  }
+
+  const PROFILE_MODELS = {
+    silverwolf: ['silverwolf', 'silverwolf.physics3.json'],
+    deepseek: ['deepseek', 'c_0120.physics3.json'],
+  };
+
+  for (const [pid, [dir, physFile]] of Object.entries(PROFILE_MODELS)) {
+    const outs = physicsOutputs(dir, physFile);
+    if (!outs) { console.log(`  (跳过 ${pid} 物理交叉校验：本地没有模型文件)`); continue; }
+
+    const idleParams = profileIdleParams(pid);
+    check(`${pid}: 解析到待机通道`, idleParams.length > 0, idleParams.join(','));
+    const badIdle = idleParams.filter((id) => outs.has(id));
+    check(`${pid}: 待机通道都不是物理输出`,
+          badIdle.length === 0, badIdle.join(','));
+
+    const br = profileBreath(pid);
+    const breathParams = [
+      ['angleX', 'ParamAngleX'], ['angleY', 'ParamAngleY'],
+      ['angleZ', 'ParamAngleZ'], ['bodyAngleX', 'ParamBodyAngleX'],
+      ['breath', 'ParamBreath'],
+    ].filter(([k]) => br && br[k]);
+    const badBreath = breathParams.filter(([, id]) => outs.has(id)).map(([k, id]) => `${k}(${id})`);
+    check(`${pid}: 呼吸接管的参数都不是物理输出`,
+          badBreath.length === 0, badBreath.join(','));
+  }
+
+  // 未知档位必须安全回落，而不是让形象整个加载失败
+  const fallbackInfo = await bootWith('?profile=__nonexistent__');
+  check('未知档位安全回落默认档（银狼）',
+        !!fallbackInfo && /silverwolf/.test(fallbackInfo.modelUrl),
+        fallbackInfo && fallbackInfo.modelUrl);
+
+  // ?model= 仍然要能覆盖档位里的模型路径（自定义模型入口）
+  const overrideInfo = await bootWith(
+    '?profile=deepseek&model=' + encodeURIComponent('models/haru/haru_greeter_t03.model3.json'));
+  check('?model= 能覆盖档位内的模型路径',
+        !!overrideInfo && /haru/.test(overrideInfo.modelUrl), overrideInfo && overrideInfo.modelUrl);
+
   console.log(`\n${'='.repeat(46)}`);
   console.log(`通过 ${pass} / 失败 ${fail}`);
   process.exit(fail === 0 ? 0 : 1);
