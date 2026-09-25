@@ -302,7 +302,11 @@ fun NavGraph() {
                 if (callState == CallState.ENDED) {
                     val sessionId = viewModel.getSessionId()
                     if (sessionId != null) {
-                        // 自定义预设没有"变身"过场（模型由用户自选），不做延迟
+                        // 自定义预设的形象走 bridge.js 默认档位（即银狼那档），是有过场的，
+                        // 所以这里同样等待，保持改造前的观感
+                        if (config.live2dEnabled && config.live2dTransformEnabled) {
+                            delay(HANGUP_TRANSFORM_MS)
+                        }
                         navController.navigate(Routes.history(sessionId)) { popUpTo(Routes.HOME) }
                     }
                 }
@@ -353,9 +357,10 @@ fun NavGraph() {
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
 
             // 续聊时角色是异步反查出来的（见 CallViewModel.matchCharacterByPrompt），
-            // 所以这里跟着 activeCharacter 重算
+            // 所以这里跟着 activeCharacter 重算。反查不到 = 自定义会话，
+            // 按"有过场"处理（默认档位就是银狼那档），保持改造前观感
             val waitsForTransform = config.live2dEnabled && config.live2dTransformEnabled &&
-                (activeCharacter?.hasTransform ?: false)
+                (activeCharacter?.hasTransform ?: true)
 
             LaunchedEffect(callState) {
                 if (callState == CallState.ENDED) {

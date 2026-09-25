@@ -167,8 +167,11 @@ fun CallScreen(
     val live2dActive = live2dEnabled && l2dStatus != Live2DStatus.ERROR
 
     // 过场只在"角色真的有这套演出"且用户没关掉时才播。
-    // DeepSeek 酱的模型没有一次性动作组，硬播会静默失败、挂断侧还会白等一段时间。
-    val transformActive = transformEnabled && (character?.hasTransform ?: false)
+    //
+    // character 为 null 表示自定义预设（形象由 bridge.js 默认档位提供，即银狼），
+    // 这一档是有过场的 —— 所以未知角色按 true 处理，保持改造前自定义预设的观感，
+    // 而不是把过场一起"优化"掉。DeepSeek 酱这类明确声明没有过场的角色才关。
+    val transformActive = transformEnabled && (character?.hasTransform ?: true)
 
     // 舞台板块的实际尺寸：模型要按「板块」而不是「屏幕」重新适配，
     // 否则从全屏铺底改成板块内嵌后，按宽度缩放会把角色的头脚裁掉。
