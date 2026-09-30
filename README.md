@@ -136,7 +136,8 @@ tools/
 ├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
 ├── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
 ├── audio_pipe_test.sh         # AudioPipe 自测（12 项断言，JVM 直跑真实 .class）
-└── AudioPipeTest.java         #   ↑ 的测试主体
+├── AudioPipeTest.java         #   ↑ 的测试主体
+└── memory_migration_check.py  # Room 3→4 迁移实测（23 项断言，纯标准库 sqlite3）
 ```
 
 ## 快速开始
@@ -494,6 +495,7 @@ node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情
 node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
 node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
 bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形回绕
+python tools/memory_migration_check.py # Room 3→4 迁移：结构/数据存活/游标初始化（23 项）
 ```
 
 > `check_expression_names.cjs` 的价值在于：模型表情名少写一个空格 pixi 只会静默忽略，
@@ -502,6 +504,10 @@ bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形
 > `audio_pipe_test.sh` 直接拿 Gradle 编出来的 `.class` 在桌面 JVM 上跑 ——
 > `AudioPipe` 是纯 JDK 实现（不碰 Android API），测的就是真正进 APK 的那份代码。
 > 换掉 `PipedInputStream` 那个坑就是它逮出来的（见下文「TTS 播放链路」）。
+
+> `memory_migration_check.py` 用 Python 标准库 `sqlite3` 造一个 schema=3 的库并跑一遍
+> `MIGRATION_3_4`（见「长期记忆 → 数据模型」）。同一类问题的共同点：**迁移写错不会立刻报错，
+> 而是表现为「升级后莫名多跑了几十次 LLM」或「用户历史没了」**，只能靠断言逮住。
 
 ### 许可提醒
 
@@ -622,6 +628,14 @@ adb logcat -s ChatRepo:D AudioPlayer:D ProcessAudioUseCase:D
   所以判据写成字典序 `timestamp > ts OR (timestamp = ts AND id > id)`，
   与 `MessageDao` 的 `ORDER BY timestamp ASC, id ASC` 同口径。
   也不能拿「已总结到的 message id」当游标：`replaceMessages()` 是先删后插，id 会整批重排。
+- ⚠️ **`sourceToId` 里是真实 `messages.id`，两条路径都是**。挂断主路径手里只有内存
+  `ChatMessage`（没有 id），所以 `MessageDao.replaceMessages()` / `insertMessages()` 会
+  **回传落库后的 rowId**，经 `saveMessages()` → `saveCallMessages()` 一路透传到总结侧；
+  尺寸对不上（内存列表与刚落库那份不是同一份快照）时**宁可不总结也不写错游标**。
+  这条不能省：`messages.id` 是**全库自增**（`replaceMessages` 先删后插，id 一路往上走），
+  一旦拿列表下标当 id 写进游标，它就永远小于库里的 id ——
+  每通电话都会被「待整理」判据命中，把补总结的名额占满，**真该补的旧会话反而永久补不上**，
+  而且一个异常都不会抛。
 - **`importance`（0~10）由 LLM 在同一次总结调用里顺带给出**，解析失败默认 5，
   **不为它多打一次请求**。它不参与排序，只决定超限时折叠谁。
 - **`lastUsedAt`** 注入后回写，当前只作观测 —— 一旦参与排序就成了「用过就更容易被用」的正反馈，
@@ -644,6 +658,21 @@ Room 从 3 升到 4（`MIGRATION_3_4`）做四件事，顺序都不能改：
 ⚠️ `exportSchema = false` **没有**关掉运行时校验：Room 首次打开会用实体推导出的期望 schema
 比对真实库结构（表、列、**索引名**、外键），而破坏性兜底已经去掉 —— 迁移写错就是**启动即崩且无自愈**。
 这是本项目唯一「写错就崩」的一步，所以必须用一份**存量库**实测覆盖安装（新装测不出来）。
+
+实测工具：[`tools/memory_migration_check.py`](tools/memory_migration_check.py)。
+它只用 Python 标准库 `sqlite3` 造一个 schema=3 的库（含存量会话与消息）、执行
+`MIGRATION_3_4` 的逐字副本，然后断言 23 项：列与实体一致、索引名/唯一索引/外键 CASCADE、
+数据存活、**游标初始化到各自末条**（含「无消息的会话 → 0」与「同毫秒多条 → 靠 id 决胜」）、
+**升级后待整理 = 0**（否则会批量重跑 LLM）、增量消息被判待整理、哈希去重、级联删除、外键拒绝孤儿。
+
+```bash
+python tools/memory_migration_check.py
+```
+
+> ⚠️ 改迁移 SQL 时必须同步脚本里的副本，否则这个测试就失去意义。
+> 它验的是「迁移本身」，**不能替代真机覆盖安装**（Room 的运行时 schema 校验、真实 IO 只有真机上才跑）。
+> 脚本的价值在于：游标初始化这类错误在真机上只表现为「升级后莫名多跑了几十次 LLM」，
+> 肉眼根本看不出来。
 
 ### 总结时机：只接挂断 + 补总结兜底
 
