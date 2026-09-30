@@ -23,6 +23,8 @@ import com.lv999call.app.ui.custom.PresetViewModel
 import com.lv999call.app.ui.history.HistoryScreen
 import com.lv999call.app.ui.history.HistoryViewModel
 import com.lv999call.app.ui.home.HomeScreen
+import com.lv999call.app.ui.memory.MemoryRoute
+import com.lv999call.app.ui.memory.MemoryViewModel
 import com.lv999call.app.ui.prepare.PrepareScreen
 import com.lv999call.app.ui.settings.SettingsScreen
 import com.lv999call.app.ui.settings.SettingsViewModel
@@ -46,6 +48,9 @@ object Routes {
     const val CALL_CONTINUE = "call_continue/{sessionId}"
     const val HISTORY = "history/{sessionId}"
     const val SETTINGS = "settings"
+
+    /** 记忆库（plan4 §6.1）：独立页面而不是弹窗，记忆条目需要真正的列表区域 */
+    const val MEMORY = "memory"
 
     fun characterPrepare(id: String) = "character_prepare/$id"
     fun characterCall(id: String) = "character_call/$id"
@@ -72,6 +77,13 @@ fun NavGraph() {
         composable(Routes.HOME) {
             val presets by presetViewModel.presets.collectAsState()
 
+            // 「🧠 记忆库（N 条）」的条数。subscribe 记忆流本身（而不是新加一个 count 查询）：
+            // 记忆条目只有几十条，且清空/删除后首页的条数要跟着变。
+            // ⚠️ Flow 实例必须 remember 住：每次重组新建一个 Flow 会让 collectAsState
+            // 重启收集（Room 那边就等于重新注册一次查询）。
+            val memoryFlow = remember { appModule.memoryRepository.getAllMemories() }
+            val memories by memoryFlow.collectAsState(initial = emptyList())
+
             HomeScreen(
                 presets = presets,
                 builtInCharacters = BuiltInCharacters.ALL,
@@ -79,7 +91,9 @@ fun NavGraph() {
                 onNavigateToPreset = { presetId -> navController.navigate(Routes.presetEdit(presetId)) },
                 onNavigateToNewPreset = { navController.navigate(Routes.presetEdit(0)) },
                 onDeletePreset = { presetId -> presetViewModel.deletePreset(presetId) },
-                onNavigateToSettings = { navController.navigate(Routes.SETTINGS) }
+                onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
+                memoryCount = memories.size,
+                onNavigateToMemory = { navController.navigate(Routes.MEMORY) }
             )
         }
 
@@ -450,6 +464,27 @@ fun NavGraph() {
                 onDownloadVoskModel = { model -> viewModel.downloadVoskModel(model) },
                 onDeleteVoskModel = { modelId -> viewModel.deleteVoskModel(modelId) },
                 onResetDownloadState = { viewModel.resetDownloadState() },
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // ===== 记忆库（plan4 §6.2）=====
+        // ViewModel 绑定在这条路由的 back stack entry 上（与 HistoryViewModel 一样），
+        // 离开页面就回收；「立即整理」自己跑在 Application scope 上，不受它影响。
+        composable(Routes.MEMORY) {
+            val viewModel: MemoryViewModel = viewModel(
+                factory = MemoryViewModel.Factory(
+                    memoryRepository = appModule.memoryRepository,
+                    sessionRepository = appModule.sessionRepository,
+                    summarizeMemoryUseCase = appModule.summarizeMemoryUseCase,
+                    configRepository = appModule.configRepository,
+                    presetDao = appModule.presetDao,
+                    applicationScope = appModule.applicationScope
+                )
+            )
+
+            MemoryRoute(
+                viewModel = viewModel,
                 onBack = { navController.popBackStack() }
             )
         }

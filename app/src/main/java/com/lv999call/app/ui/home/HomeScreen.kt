@@ -35,7 +35,10 @@ fun HomeScreen(
     onNavigateToPreset: (Long) -> Unit,
     onNavigateToNewPreset: () -> Unit,
     onDeletePreset: (Long) -> Unit,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    /** 记忆库当前条数（plan4 §6.1 的「🧠 记忆库（N 条）」入口要显示它） */
+    memoryCount: Int,
+    onNavigateToMemory: () -> Unit
 ) {
     val colors = MaterialTheme.colorScheme
     var showDeleteDialog by remember { mutableStateOf<Long?>(null) }
@@ -88,15 +91,28 @@ fun HomeScreen(
                 }
 
                 item {
-                    // 新建预设按钮
-                    OutlinedButton(
-                        onClick = onNavigateToNewPreset,
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("新建自定义方案")
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // 新建预设按钮
+                        OutlinedButton(
+                            onClick = onNavigateToNewPreset,
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("新建自定义方案")
+                        }
+
+                        // 记忆库入口（plan4 §6.1）。选独立页面而不是弹窗：记忆可能几十条，
+                        // 需要真正的列表区域；设置页也已经很长，往里塞不划算。
+                        // 条数直接写在按钮上，用户不点进去也知道 App 记了多少东西。
+                        OutlinedButton(
+                            onClick = onNavigateToMemory,
+                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text("🧠 记忆库（$memoryCount 条）")
+                        }
                     }
                 }
             }
