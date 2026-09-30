@@ -37,12 +37,8 @@ class ConfigRepository(private val context: Context) {
         val ASR_LANGUAGE = stringPreferencesKey("asr_language")
         val ASR_VOSK_MODEL_ID = stringPreferencesKey("asr_vosk_model_id")
 
-        val TTS_PROVIDER = stringPreferencesKey("tts_provider")
-        val TTS_BASE_URL = stringPreferencesKey("tts_base_url")
         val TTS_API_KEY = stringPreferencesKey("tts_api_key")
         val TTS_MODEL = stringPreferencesKey("tts_model")
-        val TTS_VOICE_ID = stringPreferencesKey("tts_voice_id")
-        val TTS_SPEED = floatPreferencesKey("tts_speed")
         val TTS_PROMPT = stringPreferencesKey("tts_prompt")
 
         /**
@@ -87,12 +83,8 @@ class ConfigRepository(private val context: Context) {
             asrLanguage = AsrApiService.normalizeLanguage(prefs[ASR_LANGUAGE] ?: "zh")
                 .ifEmpty { "auto" },
             asrVoskModelId = prefs[ASR_VOSK_MODEL_ID] ?: "",
-            ttsProvider = prefs[TTS_PROVIDER] ?: "mimo",
-            ttsBaseUrl = prefs[TTS_BASE_URL] ?: "",
             ttsApiKey = prefs[TTS_API_KEY] ?: "",
             ttsModel = prefs[TTS_MODEL] ?: "mimo-v2.5-tts-voiceclone",
-            ttsVoiceId = prefs[TTS_VOICE_ID] ?: "",
-            ttsSpeed = prefs[TTS_SPEED] ?: 1.0f,
             ttsPrompt = prefs[TTS_PROMPT] ?: "",
             characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
@@ -123,12 +115,8 @@ class ConfigRepository(private val context: Context) {
             prefs[ASR_MODEL] = config.asrModel
             prefs[ASR_LANGUAGE] = config.asrLanguage
             prefs[ASR_VOSK_MODEL_ID] = config.asrVoskModelId
-            prefs[TTS_PROVIDER] = config.ttsProvider
-            prefs[TTS_BASE_URL] = config.ttsBaseUrl
             prefs[TTS_API_KEY] = config.ttsApiKey
             prefs[TTS_MODEL] = config.ttsModel
-            prefs[TTS_VOICE_ID] = config.ttsVoiceId
-            prefs[TTS_SPEED] = config.ttsSpeed
             prefs[TTS_PROMPT] = config.ttsPrompt
             prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(config.characterTtsPrompts)
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64

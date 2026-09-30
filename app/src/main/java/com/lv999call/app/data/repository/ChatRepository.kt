@@ -31,6 +31,27 @@ class ChatRepository(
     private val gson = Gson()
 
     /**
+     * LLM 流式输出的事件。
+     *
+     * 为什么不用 `Flow<String>` + 伪文本报错：老实现失败时 `emit("[错误: ${e.message}]")`，
+     * 这串会被当成正常回复送进 TTS 合成（清洗规则剥不掉它），还会落库成一条
+     * 助手消息 —— 用户会听到 AI 一本正经地念报错。错误必须与正文走两个通道。
+     */
+    sealed interface StreamEvent {
+        data class Text(val value: String) : StreamEvent
+        data class Failure(val reason: String) : StreamEvent
+    }
+
+    /**
+     * 最近一次 LLM 流式失败的原因（成功时清空）。
+     *
+     * 供 [com.lv999call.app.domain.usecase.ProcessAudioUseCase] 在收集结束后判断
+     * 「本轮出过错」，从而跳过 TTS 与落库。
+     */
+    private val _lastStreamError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val lastStreamError: kotlinx.coroutines.flow.StateFlow<String?> = _lastStreamError
+
+    /**
      * TTS 流式解码用的后台作用域。
      *
      * 为什么不用调用方的作用域：解码要「边收边喂」给播放器，生命周期跟着音频流走，
@@ -41,8 +62,21 @@ class ChatRepository(
     companion object {
         // 匹配LLM thinking标签
         private val REGEX_THINKING = Regex("<think>[\\s\\S]*?</think>|<thinking>[\\s\\S]*?</thinking>")
-        // 匹配语气/风格标注括号: (温柔), （慵懒）, [笑声] 等
-        private val REGEX_STYLE_ANNOTATION = Regex("[（(][^）)]{1,10}[）)]|\\[[^\\]]{1,10}]")
+
+        /**
+         * LLM 偶尔会在正文里插「（温柔）」这类旁白标注，MiMo 不认会被念出来，
+         * 所以只剥这一份已知白名单。
+         *
+         * 为什么不再一刀切删所有短括号：官方支持的音频标签恰好就是这个形态
+         * （`[笑]` / `（叹气）` / `（语速加快）`），一刀切会把本该增强表现力的标签洗掉。
+         */
+        private val STYLE_WORDS = listOf(
+            "温柔", "高冷", "活泼", "严肃", "慵懒", "俏皮", "深沉", "干练", "凌厉",
+            "磁性", "醇厚", "清亮", "空灵", "稚嫩", "苍老", "甜美", "沙哑", "醇雅",
+            "夹子音", "御姐音", "正太音", "大叔音", "东北话", "四川话", "河南话", "粤语"
+        )
+        private val REGEX_STYLE_ANNOTATION =
+            Regex("[（(]\\s*(?:${STYLE_WORDS.joinToString("|")})\\s*[）)]")
 
         /** 流式播放管道容量：写满即阻塞（背压），64KB ≈ 1.3s @24kHz/mono */
         private const val TTS_PIPE_BUFFER_BYTES = 64 * 1024
@@ -116,13 +150,17 @@ class ChatRepository(
     }
 
     /**
-     * 流式调用LLM，逐字返回文本
+     * 流式调用LLM，逐字返回 [StreamEvent]。
+     *
+     * 正常内容发 [StreamEvent.Text]，失败发 [StreamEvent.Failure]（并写进
+     * [lastStreamError]）—— 错误**不会**伪装成一段可被朗读、可被落库的正文。
      */
     fun streamChatCompletion(
         config: ApiConfig,
         systemPrompt: String?,
         history: List<ChatMessage>
-    ): Flow<String> = flow {
+    ): Flow<StreamEvent> = flow {
+        _lastStreamError.value = null
         val messages = mutableListOf<LlmModels.Message>()
 
         // 添加系统提示词
@@ -170,7 +208,7 @@ class ChatRepository(
                             try {
                                 val chunk = gson.fromJson(data, LlmModels.ChatResponse::class.java)
                                 val content = chunk.choices?.firstOrNull()?.delta?.content
-                                if (!content.isNullOrEmpty()) emit(content)
+                                if (!content.isNullOrEmpty()) emit(StreamEvent.Text(content))
                             } catch (e: Exception) {
                                 android.util.Log.w("ChatRepo", "SSE解析跳过: ${e.message}")
                             }
@@ -183,7 +221,11 @@ class ChatRepository(
                 responseBody.close()
             }
         } catch (e: Exception) {
-            emit("[错误: ${e.message}]")
+            // 失败走独立通道：调用方据此跳过 TTS 与落库，绝不把这串念给用户听
+            val reason = e.message ?: "未知错误"
+            android.util.Log.e("ChatRepo", "LLM 流式失败: $reason")
+            _lastStreamError.value = reason
+            emit(StreamEvent.Failure(reason))
         }
     }.flowOn(Dispatchers.IO)
 
@@ -274,8 +316,13 @@ class ChatRepository(
 
                 val request = TtsModels.TtsChatRequest(
                     model = modelId,
+                    // 风格指令放 user 消息的自然语言 content —— 这是 MiMo 官方支持的两条
+                    // 风格控制路径之一（另一条是把 `[笑]`/`（叹气）` 这类音频标签直接写进
+                    // assistant 正文）。audio 对象里**没有** prompt 字段：官方只认
+                    // format / voice / optimize_text_preview，塞进去服务端不认、也不生效。
+                    // ttsPrompt 为空时传空串，保持旧行为（不带任何风格指令）。
                     messages = listOf(
-                        TtsModels.TtsMessage(role = "user", content = ""),
+                        TtsModels.TtsMessage(role = "user", content = ttsPrompt),
                         TtsModels.TtsMessage(role = "assistant", content = cleanText)
                     ),
                     audio = TtsModels.TtsAudioConfig(
@@ -291,9 +338,7 @@ class ChatRepository(
                         // 官方文档同样要求：流式调用请指定 pcm16 以便拼接成完整音频。
                         // 24kHz / PCM16LE / 单声道，与 AudioPlayer 的默认参数一致。
                         format = "pcm16",
-                        voice = voiceUri,
-                        speed = config.ttsSpeed,
-                        prompt = ttsPrompt.ifEmpty { null }
+                        voice = voiceUri
                     ),
                     stream = true
                 )

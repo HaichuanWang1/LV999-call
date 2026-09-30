@@ -27,15 +27,21 @@ object TtsModels {
     )
 
     data class TtsMessage(
-        val role: String,       // "user" content 为空, "assistant" content 为要合成的文本
+        // "user" 的 content 放**自然语言风格指令**（可为空串）, "assistant" 放要合成的文本
+        val role: String,
         val content: String
     )
 
+    /**
+     * audio 对象只认三个字段：`format` / `voice` / `optimize_text_preview`。
+     *
+     * 历史上这里多塞过 `speed` 与 `prompt` —— 服务端根本没有这两个字段，填了不生效。
+     * 风格控制只有两条官方路径：自然语言指令放 user 消息，音频标签直接写进
+     * assistant 正文（如 `（叹气）` / `[笑]`）。
+     */
     data class TtsAudioConfig(
-        val format: String = "wav",   // 文档支持: wav, mp3
-        val voice: String,            // "data:{MIME};base64,{BASE64_AUDIO}"
-        val speed: Float = 1.0f,
-        val prompt: String? = null    // TTS风格提示词
+        val format: String = "wav",   // 文档支持: wav, mp3, pcm, pcm16（流式必须 pcm16）
+        val voice: String             // 预置音色名（如「冰糖」）或 "data:{MIME};base64,{BASE64_AUDIO}"
     )
 
     /** 流式响应中的音频块 */

@@ -66,10 +66,8 @@ fun SettingsScreen(
     var asrLanguage by remember(config) { mutableStateOf(config.asrLanguage) }
     var asrVoskModelId by remember(config) { mutableStateOf(config.asrVoskModelId) }
 
-    var ttsBaseUrl by remember(config) { mutableStateOf(config.ttsBaseUrl) }
     var ttsApiKey by remember(config) { mutableStateOf(config.ttsApiKey) }
     var ttsModel by remember(config) { mutableStateOf(config.ttsModel) }
-    var ttsSpeed by remember(config) { mutableFloatStateOf(config.ttsSpeed) }
 
     var showApiKey by remember { mutableStateOf(false) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
@@ -359,60 +357,28 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // ===== TTS (MiMo) =====
-                SectionHeader(title = "🔊 TTS 语音合成 (MiMo-VoiceClone)")
-                SettingsTextField("TTS URL", ttsBaseUrl, { ttsBaseUrl = it }, "https://api.xiaomimimo.com")
+                SectionHeader(title = "🔊 TTS 语音合成 (MiMo)")
                 SettingsTextField("API Key", ttsApiKey, { ttsApiKey = it }, isPassword = !showApiKey, placeholder = "your-mimo-api-key")
 
-                // 模型名称 + 获取按钮
+                // 模型名称：端点与请求格式已锁死 MiMo，这里只选"预置音色"还是"克隆音色"
                 Text("模型名称", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = ttsModel, onValueChange = { ttsModel = it }, modifier = Modifier.weight(1f),
-                        placeholder = { Text("mimo-v2.5-tts-voiceclone", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
-                            focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
-                        ),
-                        shape = shapes.small
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    FilledTonalIconButton(
-                        onClick = {
-                            isLoadingModels = true
-                            modelDialogTarget = "tts"
-                            scope.launch {
-                                try {
-                                    val (models, _) = onFetchModels(ttsBaseUrl, ttsApiKey)
-                                    modelList = models
-                                    if (modelList.isNotEmpty()) {
-                                        showModelDialog = true
-                                    } else {
-                                        snackbarHostState.showSnackbar("该接口未返回模型列表")
-                                    }
-                                } catch (e: Exception) {
-                                    fetchError = "获取模型失败: ${e.message?.take(80)}"
-                                    snackbarHostState.showSnackbar(fetchError ?: "未知错误")
-                                } finally {
-                                    isLoadingModels = false
-                                }
-                            }
-                        },
-                        enabled = !isLoadingModels && ttsBaseUrl.isNotBlank() && ttsApiKey.isNotBlank()
-                    ) {
-                        if (isLoadingModels && modelDialogTarget == "tts") {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = colors.primary)
-                        } else {
-                            Icon(Icons.Default.Refresh, "获取模型列表", modifier = Modifier.size(22.dp))
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text("语速: ${"%.1f".format(ttsSpeed)}x", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-                Slider(value = ttsSpeed, onValueChange = { ttsSpeed = it }, valueRange = 0.5f..2.0f, steps = 14,
-                    colors = SliderDefaults.colors(thumbColor = colors.primary, activeTrackColor = colors.primary))
+                OutlinedTextField(
+                    value = ttsModel, onValueChange = { ttsModel = it }, modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("mimo-v2.5-tts-voiceclone", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
+                        focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
+                    ),
+                    shape = shapes.small
+                )
+                Text(
+                    text = "可选 mimo-v2.5-tts-voiceclone（用参考音频克隆音色）/ mimo-v2.5-tts（预置音色）。" +
+                        "内置角色若锁定了发声策略，会无视这里的选项",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -479,7 +445,7 @@ fun SettingsScreen(
                             asrProvider = asrProvider, asrBaseUrl = asrBaseUrl, asrApiKey = asrApiKey,
                             asrModel = asrModel,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
-                            ttsBaseUrl = ttsBaseUrl, ttsApiKey = ttsApiKey, ttsModel = ttsModel, ttsSpeed = ttsSpeed,
+                            ttsApiKey = ttsApiKey, ttsModel = ttsModel,
                             live2dEnabled = live2dEnabled,
                             live2dTransformEnabled = live2dTransformEnabled
                         ))

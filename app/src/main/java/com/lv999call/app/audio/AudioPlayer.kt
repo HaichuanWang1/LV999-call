@@ -186,6 +186,7 @@ class AudioPlayer {
                     }
                 }
 
+                // 这 100ms 不能删：playbackJob 因此比「实际放完」多活一小会儿，awaitPlaybackEnd（靠 join 判定）才敢确信音频已放完
                 delay(100)
             } catch (e: Exception) {
                 Log.e(TAG, "播放错误: ${e.message}")

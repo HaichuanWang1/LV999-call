@@ -55,13 +55,11 @@ data class ApiConfig(
     val asrLanguage: String = "zh",
     val asrVoskModelId: String = "",  // Vosk离线模型ID
 
-    // TTS配置 (MiMo-V2.5-TTS-VoiceClone)
-    val ttsProvider: String = "mimo",
-    val ttsBaseUrl: String = "",
+    // TTS配置 (MiMo-V2.5-TTS 系列)
+    // provider / baseUrl / voiceId / speed 曾经也在这里，但请求体里从来没有真正生效过
+    // （端点与格式由 ChatRepository 锁死 MiMo），留着只会让人以为改得动，故撤掉。
     val ttsApiKey: String = "",
     val ttsModel: String = "mimo-v2.5-tts-voiceclone",
-    val ttsVoiceId: String = "",
-    val ttsSpeed: Float = 1.0f,
 
     /**
      * 全局 TTS 风格提示词（自定义预设 / 快速模式用）。

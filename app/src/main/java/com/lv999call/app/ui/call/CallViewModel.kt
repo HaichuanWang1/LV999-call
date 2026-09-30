@@ -548,44 +548,41 @@ class CallViewModel(
     private fun processUserAudio(pcmData: ByteArray) {
         viewModelScope.launch {
             try {
-                // 整体超时保护（60秒），防止ASR/LLM/TTS任一步骤卡死
-                val result = kotlinx.coroutines.withTimeoutOrNull(60_000L) {
-                    processAudioUseCase.processAudio(
-                        pcmData = pcmData,
-                        systemPrompt = systemPrompt,
-                        history = _messages.value,
-                        mode = currentMode,
-                        // 预设音频优先级最高；内置角色音色作为兜底
-                        overrideRefAudioBase64 = presetRefAudio,
-                        overrideRefAudioMime = presetRefAudioMimeValue,
-                        fallbackRefAudioBase64 = characterRefAudio,
-                        fallbackRefAudioMime = characterRefAudioMime,
-                        ttsPrompt = currentTtsPrompt,
-                        expressions = currentExpressions,
-                        ttsPolicy = currentTtsPolicy,
-                        onStateChange = { state -> onState(state) },
-                        onUserMessage = ::appendUserMessage,
-                        onPartialResponse = { partial -> onPartial(partial) },
-                        onExpression = ::cueExpression
-                    )
+                // 这里刻意不再用 withTimeoutOrNull 包住整轮：
+                // 整轮耗时由各组成部分自己的超时兜底（ASR / HTTP 走 OkHttp 超时，
+                // TTS 播放走 ProcessAudioUseCase.TTS_PLAYBACK_TIMEOUT_MS）。外层再套一个
+                // 更短的整体超时只会在超时点取消协程，而播放跑在 AudioPlayer 自己的
+                // scope 里不会随之停下 —— 结果就是麦克风开着去录 AI 还在播的声音
+                // （自听自说，AI 会回应自己刚说的话）。
+                val (userMessage, assistantMessage) = processAudioUseCase.processAudio(
+                    pcmData = pcmData,
+                    systemPrompt = systemPrompt,
+                    history = _messages.value,
+                    mode = currentMode,
+                    // 预设音频优先级最高；内置角色音色作为兜底
+                    overrideRefAudioBase64 = presetRefAudio,
+                    overrideRefAudioMime = presetRefAudioMimeValue,
+                    fallbackRefAudioBase64 = characterRefAudio,
+                    fallbackRefAudioMime = characterRefAudioMime,
+                    ttsPrompt = currentTtsPrompt,
+                    expressions = currentExpressions,
+                    ttsPolicy = currentTtsPolicy,
+                    onStateChange = { state -> onState(state) },
+                    onUserMessage = ::appendUserMessage,
+                    onPartialResponse = { partial -> onPartial(partial) },
+                    onExpression = ::cueExpression
+                )
+                // userMessage 在 ASR 出来时就已上屏（见 appendUserMessage），
+                // 这里只补助手回复；用时间戳去重，防止重复气泡。
+                val newMessages = mutableListOf<ChatMessage>()
+                if (_messages.value.none { it.timestamp == userMessage.timestamp && it.role == userMessage.role }) {
+                    newMessages.add(userMessage)
                 }
-                if (result != null) {
-                    val (userMessage, assistantMessage) = result
-                    // userMessage 在 ASR 出来时就已上屏（见 appendUserMessage），
-                    // 这里只补助手回复；用时间戳去重，防止重复气泡。
-                    val newMessages = mutableListOf<ChatMessage>()
-                    if (_messages.value.none { it.timestamp == userMessage.timestamp && it.role == userMessage.role }) {
-                        newMessages.add(userMessage)
-                    }
-                    if (assistantMessage != null) newMessages.add(assistantMessage)
-                    if (newMessages.isNotEmpty()) _messages.value = _messages.value + newMessages
-                    endResponseTurn()
-                    currentSession?.let { session ->
-                        manageSessionUseCase.saveCallMessages(session.id, _messages.value)
-                    }
-                } else {
-                    android.util.Log.w("CallVM", "处理音频超时")
-                    endResponseTurn()
+                if (assistantMessage != null) newMessages.add(assistantMessage)
+                if (newMessages.isNotEmpty()) _messages.value = _messages.value + newMessages
+                endResponseTurn()
+                currentSession?.let { session ->
+                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
                 }
             } catch (e: AsrEmptyException) {
                 // 没听清：不写任何消息（否则历史里会多一条假发言），
@@ -669,6 +666,22 @@ class CallViewModel(
                 }
             }
         }
+    }
+
+    /**
+     * 用户摸了 Live2D 形象的头（触摸层回调）。
+     *
+     * 只打一个「待处理」标记，**不当场发请求**：摸头是即兴的轻互动，
+     * 为它跑一整轮 LLM+TTS 会打断对话节奏，还会给聊天记录塞进一轮
+     * 莫名其妙的对话。标记由 [ProcessAudioUseCase] 在下一轮的提示词里
+     * 读一次就清，让她正常回话时自然带一句反应。
+     *
+     * 通话已结束时忽略：那时既不会有"下一轮"，标记也只会变成脏数据
+     * 挂到下次通话里。
+     */
+    fun onHeadPat() {
+        if (_callState.value == CallState.ENDED) return
+        appModule.headPatPending.set(true)
     }
 
     fun toggleMute() {
