@@ -61,5 +61,8 @@ _tmp_ds/
 __pycache__/
 *.pyc
 
+# 迁移校验脚本的运行产物（tools/memory_migration_check.py 会建一个临时库）
+tools/migration_check/
+
 # Agent 工作流中间产物（阶段规格/审查提词，随会话生成，不属于项目源码）
 .dsh/
