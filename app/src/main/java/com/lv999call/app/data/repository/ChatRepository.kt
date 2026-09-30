@@ -43,15 +43,6 @@ class ChatRepository(
     }
 
     /**
-     * 最近一次 LLM 流式失败的原因（成功时清空）。
-     *
-     * 供 [com.lv999call.app.domain.usecase.ProcessAudioUseCase] 在收集结束后判断
-     * 「本轮出过错」，从而跳过 TTS 与落库。
-     */
-    private val _lastStreamError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val lastStreamError: kotlinx.coroutines.flow.StateFlow<String?> = _lastStreamError
-
-    /**
      * TTS 流式解码用的后台作用域。
      *
      * 为什么不用调用方的作用域：解码要「边收边喂」给播放器，生命周期跟着音频流走，
@@ -152,15 +143,19 @@ class ChatRepository(
     /**
      * 流式调用LLM，逐字返回 [StreamEvent]。
      *
-     * 正常内容发 [StreamEvent.Text]，失败发 [StreamEvent.Failure]（并写进
-     * [lastStreamError]）—— 错误**不会**伪装成一段可被朗读、可被落库的正文。
+     * 正常内容发 [StreamEvent.Text]，失败发 [StreamEvent.Failure] —— 错误**不会**伪装成
+     * 一段可被朗读、可被落库的正文。
+     *
+     * ⚠️ 失败原因**只走流内事件**，本仓库上不再存任何"最近一次失败"的共享状态
+     * （plan4 §3.2 Step 5a / P5）：ChatRepository 是 AppModule 里的单例，通话与记忆总结会
+     * 并发调用它，共享字段会被两边互相覆盖 —— 总结流开始收集时清空它，对话侧就会以为
+     * 本轮没出错，继续拿残缺回复去 TTS 并落库。每个调用方在自己的 `collect` 里记局部变量。
      */
     fun streamChatCompletion(
         config: ApiConfig,
         systemPrompt: String?,
         history: List<ChatMessage>
     ): Flow<StreamEvent> = flow {
-        _lastStreamError.value = null
         val messages = mutableListOf<LlmModels.Message>()
 
         // 添加系统提示词
@@ -224,7 +219,6 @@ class ChatRepository(
             // 失败走独立通道：调用方据此跳过 TTS 与落库，绝不把这串念给用户听
             val reason = e.message ?: "未知错误"
             android.util.Log.e("ChatRepo", "LLM 流式失败: $reason")
-            _lastStreamError.value = reason
             emit(StreamEvent.Failure(reason))
         }
     }.flowOn(Dispatchers.IO)

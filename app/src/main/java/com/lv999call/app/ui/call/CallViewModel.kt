@@ -10,10 +10,15 @@ import com.lv999call.app.domain.model.*
 import com.lv999call.app.domain.usecase.ManageSessionUseCase
 import com.lv999call.app.domain.usecase.ProcessAudioUseCase
 import com.lv999call.app.domain.usecase.StartCallUseCase
+import com.lv999call.app.domain.usecase.SummarizeMemoryUseCase
 import com.lv999call.app.preset.BuiltInCharacters
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 一次 LLM 触发的表情指令。
@@ -130,6 +135,19 @@ class CallViewModel(
         get() = _character.value
         set(value) { _character.value = value }
     private var systemPrompt: String? = null
+
+    /**
+     * 本通电话的【长期记忆】提示词块（plan4 §4.2）；null / 空串 = 没有可注入的记忆。
+     *
+     * 两条纪律写在这里，免得以后又被"顺手优化"掉：
+     * 1. **绝不写回数据库**。它只拼进本次请求的 systemPrompt；一旦落进
+     *    `sessions.systemPrompt`，续聊时 `continueSession()` 会把它当成角色设定读回来，
+     *    再叠加新的一份 —— 越续越长，最终把上下文吃光（§4.1 的明确要求）。
+     * 2. **开场问候轮不用它**。`isAutoGreeting = true` 那一轮只是打招呼，塞进几百字记忆
+     *    会让首字延迟变长、还容易让模型一上来就翻旧账；从第二轮起才带（§4.1）。
+     *    注意它与 [isOpeningTurn] 不是一回事，后者在续聊场景恒为 false（见那里的注释）。
+     */
+    private var memoryPromptBlock: String? = null
     @Volatile
     private var isProcessing = false
     // 监听超时Job，防止VAD卡死导致UI永久停在"聆听"
@@ -139,6 +157,27 @@ class CallViewModel(
     private var presetRefAudioMime: String? = null
     // 当前通话使用的TTS提示词（内置角色用角色默认，自定义预设用preset）
     private var currentTtsPrompt: String = ""
+
+    /**
+     * 本通电话的**记忆角色隔离键**（plan4 §2.3 / P1）。
+     *
+     * 与 `sessions.characterKey` 是同一个值，这里留一份内存副本是为了挂断时
+     * 不必回头读库：三处入口都显式赋值，续聊从会话那一列读回 —— 自定义预设的
+     * presetId 只在 [startPresetCall] 里存在，靠提示词反查永远推不出来。
+     *
+     * ⚠️ 读它的地方（挂断触发的总结）跑在 viewModelScope 之外的线程上，所以标 @Volatile。
+     */
+    @Volatile
+    private var memoryCharacterKey: String = Session.CHARACTER_KEY_DEFAULT
+
+    /**
+     * 总结请求闸门（plan4 §5.3 第一级 · 页面去抖）。
+     *
+     * 挂断按钮与 NavGraph 的 ENDED 跳转可能连着触发两次总结；一个会话只放行一次。
+     * 与新起的「续聊同一 ViewModel 实例」无关：每次通话都是一个新的 CallViewModel。
+     */
+    @Volatile
+    private var summaryRequested = false
 
     /**
      * 当前通话的表情集。
@@ -268,12 +307,58 @@ class CallViewModel(
     private fun isOpeningTurn(): Boolean =
         _messages.value.none { it.role == "assistant" }
 
+    /**
+     * 开聊前装配记忆块（plan4 §4.1：`createSession()` 之后、`beginResponseTurn()` 之前）。
+     *
+     * 顺序不是随意的：记忆块必须在第一次 [beginResponseTurn] 之前就位，否则开场轮
+     * 之后的那一轮（`processUserAudio` 读 [systemPrompt]）会拿到一个空的记忆块 ——
+     * 表现为"第一通电话永远不带记忆"。
+     *
+     * 失败一律当作"没有记忆"：装配异常绝不该影响一通话能不能打起来。
+     */
+    private suspend fun loadMemoryPromptBlock(characterKey: String) {
+        val injection = try {
+            appModule.loadMemoryUseCase.loadForInjection(characterKey)
+        } catch (e: Exception) {
+            android.util.Log.e("CallVM", "装配长期记忆失败，本次不注入: ${e.message}")
+            null
+        }
+        memoryPromptBlock = injection?.promptBlock
+        if (injection == null) {
+            android.util.Log.d("CallVM", "开聊: 无长期记忆可注入 character=$characterKey")
+        }
+    }
+
+    /**
+     * 实际下发给 LLM 的 system prompt = 角色提示词 + 记忆块。
+     *
+     * 只有这里会把两者拼起来：**数据库里的 `systemPrompt` 始终是干净的原始提示词**
+     * （见 [memoryPromptBlock] 第 1 条纪律）。没记忆时原样返回，连多余的空行都没有。
+     */
+    private val effectiveSystemPrompt: String?
+        get() {
+            val base = systemPrompt
+            val block = memoryPromptBlock
+            if (block.isNullOrEmpty()) return base
+            if (base.isNullOrEmpty()) return block
+            return base + "\n" + block
+        }
+
     fun startCall(mode: DialogMode) {
         viewModelScope.launch {
             currentMode = mode
             currentCharacter = null
-            currentSession = startCallUseCase.createSession(mode, null)
+            // 快速模式/无角色：固定字面量 default（plan4 §2.3 的第三档）
+            memoryCharacterKey = Session.CHARACTER_KEY_DEFAULT
+            currentSession = startCallUseCase.createSession(
+                mode,
+                null,
+                memoryCharacterKey
+            )
             systemPrompt = currentSession?.systemPrompt
+            // 装配记忆：必须在 beginResponseTurn 之前（plan4 §4.1 的时机）。
+            // ⚠️ 追加的是 effectiveSystemPrompt，不写回 currentSession / 数据库。
+            loadMemoryPromptBlock(memoryCharacterKey)
             _messages.value = emptyList()
 
             // 如果使用 Vosk，初始化模型
@@ -294,6 +379,7 @@ class CallViewModel(
             try {
                 val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
                     pcmData = greetingPcm,
+                    // 开场问候轮用**原始**提示词：记忆从第二轮起才带（plan4 §4.1）
                     systemPrompt = systemPrompt,
                     history = emptyList(),
                     mode = currentMode,
@@ -325,6 +411,8 @@ class CallViewModel(
             // 进入监听状态
             _callState.value = CallState.LISTENING
             startListening()
+            // 开聊即补总结（不阻塞通话）：上一通若是断网/被杀挂断，记忆在这里被捡回来
+            requestMemoryCatchUp(memoryCharacterKey)
         }
     }
 
@@ -335,13 +423,22 @@ class CallViewModel(
                 currentMode = session.mode
                 currentSession = session
                 systemPrompt = session.systemPrompt
+                // 记忆角色键只能从会话那一列读回来：续聊手里只有 sessionId，
+                // 自定义预设靠提示词反查推不出来（plan4 §2.3 / P1）
+                memoryCharacterKey = session.characterKey
                 // 续聊要恢复原角色的形象与发声策略。
                 // 判据是提示词内容与内置角色的提示词一致 —— 会话表里没存角色 id
                 // （加字段要走 Room 迁移，收益不抵成本），而提示词是角色的决定性特征。
                 currentCharacter = matchCharacterByPrompt(session.systemPrompt)
+                // 续聊同样要带记忆（plan4 §4.1）。这里只是**追加**到本次请求，
+                // 绝不写回 session —— 写回去就是每续一次长一截，越续越长。
+                // 续聊没有"开场问候轮"（列表非空），所以这里装好就直接生效。
+                loadMemoryPromptBlock(memoryCharacterKey)
                 _messages.value = session.messages
                 _callState.value = CallState.LISTENING
                 startListening()
+                // 这个角色的历史会话里可能还有没总结的（上通断网/被杀），后台补掉
+                requestMemoryCatchUp(memoryCharacterKey)
             } else {
                 android.util.Log.e("CallVM", "会话不存在: $sessionId")
                 _callState.value = CallState.ENDED
@@ -382,8 +479,12 @@ class CallViewModel(
             // 自定义预设的残留要清掉，否则会串到内置角色上
             presetRefAudioBase64 = null
             presetRefAudioMime = null
-            currentSession = startCallUseCase.createSession(DialogMode.LONG, character)
+            // 内置角色的记忆桶 = 角色 id（plan4 §2.3 第一档）
+            memoryCharacterKey = character.id
+            currentSession = startCallUseCase.createSession(DialogMode.LONG, character, memoryCharacterKey)
             systemPrompt = currentSession?.systemPrompt
+            // 记忆块就位后再开轮（plan4 §4.1）；开场问候轮仍然用原始 systemPrompt
+            loadMemoryPromptBlock(memoryCharacterKey)
             _messages.value = emptyList()
 
             val currentConfig = configRepository.configFlow.first()
@@ -434,6 +535,7 @@ class CallViewModel(
 
             _callState.value = CallState.LISTENING
             startListening()
+            requestMemoryCatchUp(memoryCharacterKey)
         }
     }
 
@@ -447,7 +549,16 @@ class CallViewModel(
                 // 使用预设的提示词和音频
                 systemPrompt = preset.prompt.ifEmpty { null }
                 currentMode = DialogMode.CUSTOM
-                currentSession = startCallUseCase.createSession(DialogMode.CUSTOM, null)
+                // 自定义预设的记忆隔离键：只有这条路径知道 presetId，
+                // 续聊时靠 session 上那一列读回来（plan4 §2.3 / P1）
+                memoryCharacterKey = Session.presetCharacterKey(presetId)
+                currentSession = startCallUseCase.createSession(
+                    DialogMode.CUSTOM,
+                    null,
+                    memoryCharacterKey
+                )
+                // 预设桶的记忆在开轮前就位（plan4 §4.1）；开场问候轮用原始 systemPrompt
+                loadMemoryPromptBlock(memoryCharacterKey)
                 _messages.value = emptyList()
 
                 // 保存预设音频到ViewModel本地字段，不污染全局配置
@@ -501,6 +612,7 @@ class CallViewModel(
 
                 _callState.value = CallState.LISTENING
                 startListening()
+                requestMemoryCatchUp(memoryCharacterKey)
             } else {
                 android.util.Log.e("CallVM", "预设不存在: $presetId")
                 _callState.value = CallState.ENDED
@@ -556,7 +668,9 @@ class CallViewModel(
                 // （自听自说，AI 会回应自己刚说的话）。
                 val (userMessage, assistantMessage) = processAudioUseCase.processAudio(
                     pcmData = pcmData,
-                    systemPrompt = systemPrompt,
+                    // 从第二轮起才带记忆（plan4 §4.1）：开场问候轮走的是 systemPrompt 本体，
+                    // 这里读的是"提示词 + 记忆块"的合成体。
+                    systemPrompt = effectiveSystemPrompt,
                     history = _messages.value,
                     mode = currentMode,
                     // 预设音频优先级最高；内置角色音色作为兜底
@@ -614,7 +728,9 @@ class CallViewModel(
             try {
                 val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
                     pcmData = ByteArray(0),
-                    systemPrompt = systemPrompt,
+                    // 文字输入不是"开场问候"（isAutoGreeting 在这里只是"跳过 ASR、直接用这段文字"
+                    // 的开关），所以照常带记忆（plan4 §4.1 只豁免问候轮）
+                    systemPrompt = effectiveSystemPrompt,
                     history = _messages.value,
                     mode = currentMode,
                     isAutoGreeting = true,
@@ -659,13 +775,142 @@ class CallViewModel(
         audioRecorder.stopRecording()
         audioPlayer.stopCurrentPlayback()
 
-        viewModelScope.launch {
-            currentSession?.let { session ->
-                if (_messages.value.isNotEmpty()) {
-                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
+        // 挂断这一刻把"这通电话"的快照钉死：
+        // · messages 传值（不是等协程里去读 _messages.value）—— 它们本来就是挂断时刻的完整列表，
+        //   而总结任务真正跑起来时 ViewModel 可能早就没了；
+        // · P3 的判据也必须在**此刻**取：等进了协程 isProcessing 可能已经被 finally 复位成 false，
+        //   那就变成"给一段被打断的对话写记忆"了。
+        val session = currentSession
+        val messages = _messages.value
+        val characterKey = memoryCharacterKey
+        val interrupted = isProcessing
+
+        // 不能再用 viewModelScope：挂断后 NavGraph 立刻跳历史页 → onCleared() 会把这个协程连根取消，
+        // 最后一轮消息就永远不落库（既有 bug，也是 plan4 §5.2(b) 的顺序坑）。改挂 Application 级 scope。
+        appModule.applicationScope.launch {
+            val sessionId = session?.id
+            // 落库回传的真实 rowId，与 messages 同序 —— 总结的游标必须是真实 messages.id，
+            // 用列表下标会与补总结查询的坐标系错位（见 MessageDao.insertMessages 的说明）。
+            var messageIds: List<Long> = emptyList()
+            if (sessionId != null && messages.isNotEmpty()) {
+                // NonCancellable：Application scope 虽然在 ViewModel 之外，
+                // 但落库这一步仍然不该被任何取消打断 —— 它是"先落库、再总结"里的前半句。
+                withContext(NonCancellable) {
+                    messageIds = manageSessionUseCase.saveCallMessages(sessionId, messages)
+                }
+            }
+            if (sessionId == null || interrupted) {
+                android.util.Log.d(
+                    "CallVM",
+                    "挂断: 跳过总结 session=${sessionId?.take(8)} interrupted=$interrupted" +
+                        "（消息已落库，交给下次开聊的补总结）"
+                )
+                return@launch
+            }
+            requestMemorySummary(sessionId, characterKey, messages, messageIds)
+        }
+    }
+
+    /**
+     * 挂断时触发一次记忆总结（plan4 §5.2 / §5.3）。
+     *
+     * 三条实现约束都在这里落地：
+     * 1. **直接用内存里的消息**（§5.2(b) 的推荐做法）：挂断那一刻这个列表已经是完整的，
+     *    不必等数据库写完再读回来。"先落库、再总结"的竞态（读到旧消息 → 写出一条残缺记忆
+     *    并把游标推到底 → 这段对话永久总结不全）就此彻底绕开。补总结那条路径才需要读库。
+     * 2. 闸门只放行一次（§5.3 第一级）：重复调用直接跳过。
+     * 3. 总开关关掉时**连写都不写**（§5.7）：不读不写，已有记忆原样保留。
+     */
+    private suspend fun requestMemorySummary(
+        sessionId: String,
+        characterKey: String,
+        messages: List<ChatMessage>,
+        messageIds: List<Long>
+    ) {
+        if (summaryRequested) {
+            android.util.Log.d("CallVM", "挂断: 总结闸门已放行过，跳过重复请求 session=${sessionId.take(8)}")
+            return
+        }
+        if (!isMemoryEnabled()) {
+            android.util.Log.d("CallVM", "挂断: 长期记忆总开关关闭 → 不总结 session=${sessionId.take(8)}")
+            return
+        }
+        summaryRequested = true
+        android.util.Log.d(
+            "CallVM",
+            "挂断: 触发总结 session=${sessionId.take(8)} character=$characterKey " +
+                "内存消息=${messages.size} rowId=${messageIds.size}"
+        )
+        // 超时 = 失败 = 游标不动，内容会在下次开聊的补总结里被捡回来。
+        val result = withTimeoutOrNull(AUTO_SUMMARY_TIMEOUT_MS) {
+            appModule.summarizeMemoryUseCase.summarizeFromMemory(
+                sessionId = sessionId,
+                characterId = characterKey,
+                messages = messages,
+                messageIds = messageIds
+            )
+        }
+        android.util.Log.d("CallVM", "挂断总结结果: ${result ?: "等待超时(Mutex 未获取)"}")
+    }
+
+    /**
+     * 开聊时后台补总结（plan4 §5.5，必做项）。
+     *
+     * 三个丢记忆的场景都由它兜底：挂断时断网、进程被杀/崩溃、通话卡死被回收 ——
+     * 那些通话的消息已经落库（每轮成功路径都存过），只是没被总结。
+     *
+     * 三道闸缺一不可：
+     * · 总开关关掉 → 完全不补（§5.7「不读不写」）；
+     * · 跳过 createdAt 距今 < [CATCHUP_MIN_SESSION_AGE_MS] 的会话 —— 它很可能就是**当前这一通**
+     *   （会话是开聊时刚建的），不排除的话就是"自己总结自己"；
+     * · 只取最近 [MAX_CATCHUP_SESSIONS] 通（DAO 已按 createdAt 倒序），补的时候按时间正序串行。
+     *
+     * 必须用 applicationScope：这个任务是"顺手补作业"，不该因为用户立刻挂断/离开而半途被取消。
+     * 串行与幂等由 [SummarizeMemoryUseCase] 内部的 Mutex 保证；失败就停在那一条，下次继续。
+     */
+    private fun requestMemoryCatchUp(characterKey: String) {
+        appModule.applicationScope.launch {
+            if (!isMemoryEnabled()) {
+                android.util.Log.d("CallVM", "补总结: 长期记忆总开关关闭 → 跳过 character=$characterKey")
+                return@launch
+            }
+            val pending = appModule.sessionRepository.getSessionsWithPendingMemory(characterKey)
+            val now = System.currentTimeMillis()
+            val backlog = pending
+                .filter { now - it.createdAt >= CATCHUP_MIN_SESSION_AGE_MS }
+                .take(MAX_CATCHUP_SESSIONS)
+                .asReversed() // 倒序取、正序补：时间顺序不能反，否则后一条记忆会缺上下文
+            if (backlog.isEmpty()) {
+                android.util.Log.d("CallVM", "补总结: 无待整理会话 character=$characterKey（候选=${pending.size}）")
+                return@launch
+            }
+            android.util.Log.d(
+                "CallVM",
+                "补总结: 待整理=${backlog.size} character=$characterKey（候选=${pending.size}，最多补 $MAX_CATCHUP_SESSIONS 通）"
+            )
+            for (session in backlog) {
+                // 失败（网络/超时/输出非法）就停在这里 —— 继续往下补只会把后面的也一起打挂
+                if (!isActive) return@launch
+                val result = appModule.summarizeMemoryUseCase.summarize(sessionId = session.id)
+                android.util.Log.d("CallVM", "补总结: session=${session.id.take(8)} → $result")
+                if (result is SummarizeMemoryUseCase.SummarizeResult.Failed) {
+                    android.util.Log.w("CallVM", "补总结: 失败即停（游标未动，下次开聊继续）")
+                    return@launch
                 }
             }
         }
+    }
+
+    /**
+     * 长期记忆总开关（§5.7）。
+     *
+     * 读配置失败时按**关闭**处理：拿不准的状态下"不写用户画像"比"悄悄写一条"更安全。
+     */
+    private suspend fun isMemoryEnabled(): Boolean = try {
+        configRepository.configFlow.first().memoryAutoSummarizeEnabled
+    } catch (e: Exception) {
+        android.util.Log.e("CallVM", "读取长期记忆开关失败，按关闭处理: ${e.message}")
+        false
     }
 
     /**
@@ -712,5 +957,21 @@ class CallViewModel(
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             return CallViewModel(appModule, application) as T
         }
+    }
+
+    private companion object {
+        /** 挂断总结的等待上限：比用例内部的 30s 略宽，只防 Mutex 长时间抢不到 */
+        const val AUTO_SUMMARY_TIMEOUT_MS = 35_000L
+
+        /**
+         * 补总结跳过「太新」的会话（plan4 §5.5）。
+         *
+         * 会话是在**开聊那一刻**建好的，所以当前这通电话必然落在 1 分钟以内 ——
+         * 不排除它就是"自己总结自己"，而那时助手连开场问候都还没说完。
+         */
+        const val CATCHUP_MIN_SESSION_AGE_MS = 60_000L
+
+        /** 一次开聊最多补几通（plan4 §5.5）；配合迁移里"存量游标初始化到末尾"才是完整的闸 */
+        const val MAX_CATCHUP_SESSIONS = 3
     }
 }

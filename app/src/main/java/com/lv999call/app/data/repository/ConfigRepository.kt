@@ -62,6 +62,18 @@ class ConfigRepository(private val context: Context) {
         val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
         val LIVE2D_ENABLED = stringPreferencesKey("live2d_enabled")
         val LIVE2D_TRANSFORM_ENABLED = stringPreferencesKey("live2d_transform_enabled")
+
+        /**
+         * 短通话也总结的开关（plan4 §5.7 / D4，默认关）。
+         *
+         * 与项目里其他 boolean 配置一样用 `stringPreferencesKey` + `toString()` /
+         * `toBooleanStrictOrNull()`：再引入一套 `booleanPreferencesKey` 只会让
+         * 读配置的人多一次"这里为什么不一样"的犹豫。
+         */
+        val MEMORY_SUMMARIZE_SHORT_CALLS = stringPreferencesKey("memory_summarize_short_calls")
+
+        /** 长期记忆总开关（plan4 §5.7，默认开）。关掉 = 不读不写，但已有记忆保留 */
+        val MEMORY_AUTO_SUMMARIZE_ENABLED = stringPreferencesKey("memory_auto_summarize_enabled")
     }
 
     val configFlow: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -95,7 +107,9 @@ class ConfigRepository(private val context: Context) {
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             customPrompt = prefs[CUSTOM_PROMPT] ?: "",
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
-            live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true
+            live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true,
+            memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
+            memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false
         )
     }
 
@@ -128,6 +142,8 @@ class ConfigRepository(private val context: Context) {
             prefs[CUSTOM_PROMPT] = config.customPrompt
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()
             prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
+            prefs[MEMORY_AUTO_SUMMARIZE_ENABLED] = config.memoryAutoSummarizeEnabled.toString()
+            prefs[MEMORY_SUMMARIZE_SHORT_CALLS] = config.memorySummarizeShortCalls.toString()
         }
     }
 

@@ -97,7 +97,27 @@ data class ApiConfig(
 
     // 接通/挂断时播放"变身"过场（模型自带的划卡变身，约 2.3s+2.3s）
     // 纯演出，关掉不影响待机动作与表情/口型
-    val live2dTransformEnabled: Boolean = true
+    val live2dTransformEnabled: Boolean = true,
+
+    // ---------- 长期记忆（plan4 §5.7） ----------
+
+    /**
+     * 长期记忆总开关（默认**开**）。
+     *
+     * 关掉后：挂断不总结、开聊不注入、也不补总结 —— 但**已有记忆原样保留**（只是不读不写）。
+     * 想要真正清空请走记忆库页面，这样"停用"与"删除"是两个互不牵连的动作。
+     */
+    val memoryAutoSummarizeEnabled: Boolean = true,
+
+    /**
+     * 短通话也总结（默认关）。
+     *
+     * 关：只有一轮真实发言的通话不进记忆库，避免记忆被"用户打了个招呼"刷屏；
+     * 开：门槛整体降一档（真实用户发言 ≥ 1 轮 / 用户文本合计 ≥ 8 字）——
+     * 打开它的用户要的就是"一句不落"，降档要真的明显，见
+     * [com.lv999call.app.domain.usecase.SummarizeMemoryUseCase] 的门槛判据。
+     */
+    val memorySummarizeShortCalls: Boolean = false
 ) {
     /** 根据对话模式获取对应的参考音频 */
     fun getRefAudioForMode(mode: DialogMode): String {

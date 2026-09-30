@@ -1,6 +1,7 @@
 package com.lv999call.app.ui.call
 
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.*
@@ -185,6 +186,20 @@ fun CallScreen(
     var inputText by remember { mutableStateOf("") }
     // 记住哪些气泡已经播过入场动画（列表回收重建时不重播）
     val entranceTracker = rememberBubbleEntranceTracker()
+
+    // ===================== 返回键 = 挂断（plan4 §5.2(0) / P0）=====================
+    // 加之前：系统返回手势会直接把通话页 pop 掉，hangUp() 根本不被调用 ——
+    // 记忆总结永不触发，而且是**既有 bug**：hangUp() 里那次 saveCallMessages 也不会发生，
+    // 最后一轮消息压根没落库（补总结只能补到库里有的，救不了它）。所以"返回"必须
+    // 在 UI 层被拦成"挂断"，与「挂断是这个 App 唯一的正常离场路径」重新对齐。
+    //
+    // 只在**未结束**时拦截是有意的：
+    // · 非 ENDED：走 onHangUp()，与挂断按钮完全同一条路径（含过场、落库、总结）；
+    // · ENDED：通话已经结束，挂断按钮此时本来也是禁用/无效的，再拦就是"按了没反应"。
+    //   这一态下放行，交给 NavGraph 里 `callState == ENDED → 跳历史页` 那条既有导航
+    //   （它会先等完挂断过场），返回键于是退化成"跳过过场立刻离场"，
+    //   既不会重复挂断（hangUp 幂等安全，但没有必要再调），也不会让返回键失灵。
+    BackHandler(enabled = callState != CallState.ENDED) { onHangUp() }
 
     // 「没听清」提示：计数变化时短暂顶替状态胶囊文案，之后自动恢复
     var showAsrRetryHint by remember { mutableStateOf(false) }

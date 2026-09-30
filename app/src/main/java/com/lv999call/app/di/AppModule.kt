@@ -11,11 +11,17 @@ import com.lv999call.app.data.remote.NetworkClient
 import com.lv999call.app.data.remote.TtsApiService
 import com.lv999call.app.data.repository.ChatRepository
 import com.lv999call.app.data.repository.ConfigRepository
+import com.lv999call.app.data.repository.MemoryRepository
 import com.lv999call.app.data.repository.SessionRepository
 import com.lv999call.app.domain.model.TtsPolicy
+import com.lv999call.app.domain.usecase.LoadMemoryUseCase
 import com.lv999call.app.domain.usecase.ManageSessionUseCase
 import com.lv999call.app.domain.usecase.ProcessAudioUseCase
 import com.lv999call.app.domain.usecase.StartCallUseCase
+import com.lv999call.app.domain.usecase.SummarizeMemoryUseCase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class AppModule(private val context: Context) {
 
@@ -24,6 +30,7 @@ class AppModule(private val context: Context) {
     val sessionDao by lazy { database.sessionDao() }
     val messageDao by lazy { database.messageDao() }
     val presetDao by lazy { database.presetDao() }
+    val memoryDao by lazy { database.memoryDao() }
 
     val llmApiService: LlmApiService by lazy { NetworkClient.createService(LlmApiService::class.java) }
     // ASR 不需要在这里建：它走 AsrEngine（要同时支持 Vosk 离线，不能只有 HTTP 一条路），
@@ -33,6 +40,15 @@ class AppModule(private val context: Context) {
 
     val configRepository: ConfigRepository by lazy { ConfigRepository(context) }
     val sessionRepository: SessionRepository by lazy { SessionRepository(sessionDao, messageDao) }
+
+    /**
+     * 长期记忆仓库。
+     *
+     * 这里把 [AppDatabase] 一起传进去是有意的：plan4 §3.2 Step 7/8 要求「写记忆」与
+     * 「推会话游标」落在同一个 Room 事务里，而这两条写操作分属 memories / sessions 两张表，
+     * 只能在仓库层用 `database.withTransaction` 兜住。除此以外仓库不碰 database。
+     */
+    val memoryRepository: MemoryRepository by lazy { MemoryRepository(memoryDao, sessionDao, database) }
     val chatRepository: ChatRepository by lazy { ChatRepository(llmApiService, ttsApiService, modelsApiService) }
 
     val asrEngine: AsrEngine by lazy { AsrEngine(context) }
@@ -101,6 +117,48 @@ class AppModule(private val context: Context) {
             chatRepository, configRepository, asrEngine, audioPlayer,
             // 摸头标记：由触摸回调置位，由用例在下一轮读一次就清
             headPatPending = headPatPending
+        )
+    }
+
+    /**
+     * Application 级作用域 —— 目前只服务「挂断后跑记忆总结」。
+     *
+     * 为什么不能用 `viewModelScope`：用户挂断后立刻回历史页，通话页 ViewModel 随即被
+     * `onCleared()` 清掉，挂在它上面的总结协程会跟着被取消（一次总结要 5~10 秒）。
+     * 用 `SupervisorJob` 是让"某一通总结失败/被取消"不要连带把后续的总结任务一起带走。
+     *
+     * ⚠️ 这个 scope 与 Activity/ViewModel 生命周期无关，所以启动的任务必须自己保证
+     * 不碰任何 UI 与音频资源（总结只走 LLM 文本通道，见 [SummarizeMemoryUseCase]）。
+     */
+    val applicationScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+
+    /**
+     * 对话总结用例（plan4 阶段2）。
+     *
+     * 启动点（挂断、开聊时的补总结）必须落在 [applicationScope] 上，不能用 viewModelScope；
+     * 用例内部自带 Mutex，保证同一时刻只有一个总结在跑（总结之间串行）。
+     */
+    val summarizeMemoryUseCase: SummarizeMemoryUseCase by lazy {
+        SummarizeMemoryUseCase(
+            chatRepository = chatRepository,
+            sessionRepository = sessionRepository,
+            memoryRepository = memoryRepository,
+            configRepository = configRepository,
+            context = context
+        )
+    }
+
+    /**
+     * 记忆加载用例（plan4 阶段4）。
+     *
+     * 与总结用例相反：它在**开聊前**同步跑一次（几十毫秒），把记忆装配成一段提示词块，
+     * 所以不需要 Application 级 scope，也不需要 Mutex —— 它不调 LLM、不写内容，
+     * 只读记忆并把结果回写 `lastUsedAt`。
+     */
+    val loadMemoryUseCase: LoadMemoryUseCase by lazy {
+        LoadMemoryUseCase(
+            memoryRepository = memoryRepository,
+            configRepository = configRepository
         )
     }
 }

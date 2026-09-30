@@ -28,9 +28,12 @@ class ManageSessionUseCase(
 
     /**
      * 保存通话消息到数据库
+     *
+     * @return 与 [messages] 同序的真实 rowId：挂断主路径要拿最后一条的 id 当记忆总结游标
+     *         （用列表下标代替会与补总结查询比较的 `messages.id` 错位）
      */
-    suspend fun saveCallMessages(sessionId: String, messages: List<ChatMessage>) {
-        sessionRepository.saveMessages(sessionId, messages)
+    suspend fun saveCallMessages(sessionId: String, messages: List<ChatMessage>): List<Long> {
+        return sessionRepository.saveMessages(sessionId, messages)
     }
 
     /**

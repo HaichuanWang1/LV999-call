@@ -72,6 +72,9 @@ fun SettingsScreen(
     var showApiKey by remember { mutableStateOf(false) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
     var live2dTransformEnabled by remember(config) { mutableStateOf(config.live2dTransformEnabled) }
+    // 长期记忆两个开关（plan4 §5.7）
+    var memoryAutoSummarizeEnabled by remember(config) { mutableStateOf(config.memoryAutoSummarizeEnabled) }
+    var memorySummarizeShortCalls by remember(config) { mutableStateOf(config.memorySummarizeShortCalls) }
     val scrollState = rememberScrollState()
 
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -434,6 +437,49 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // ===== 长期记忆（plan4 §5.7）=====
+                SectionHeader(title = "🧠 长期记忆")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = memoryAutoSummarizeEnabled,
+                        onCheckedChange = { memoryAutoSummarizeEnabled = it },
+                        colors = SwitchDefaults.colors(checkedTrackColor = colors.primary)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text("长期记忆", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                        Text(
+                            text = "每次通话结束后自动总结成一条备忘，下次开聊时让角色想起。关掉后不再总结、也不会读取，" +
+                                "但已有记忆会原样保留（想删请去记忆库清空）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+                // 子开关：总开关关掉后它没有任何作用，与 Live2D 的子开关同一套处理
+                if (memoryAutoSummarizeEnabled) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(28.dp))
+                        Switch(
+                            checked = memorySummarizeShortCalls,
+                            onCheckedChange = { memorySummarizeShortCalls = it },
+                            colors = SwitchDefaults.colors(checkedTrackColor = colors.primary)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("短通话也总结", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                            Text(
+                                text = "默认只有聊够两轮才记；打开后哪怕只说一句也记下来。想一句不落地留住就开它，代价是记忆库里会多出些零碎条目",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
                 Button(
                     onClick = {
                         onSave(config.copy(
@@ -447,7 +493,9 @@ fun SettingsScreen(
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsApiKey = ttsApiKey, ttsModel = ttsModel,
                             live2dEnabled = live2dEnabled,
-                            live2dTransformEnabled = live2dTransformEnabled
+                            live2dTransformEnabled = live2dTransformEnabled,
+                            memoryAutoSummarizeEnabled = memoryAutoSummarizeEnabled,
+                            memorySummarizeShortCalls = memorySummarizeShortCalls
                         ))
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

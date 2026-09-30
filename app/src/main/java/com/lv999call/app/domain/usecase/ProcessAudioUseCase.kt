@@ -197,6 +197,16 @@ class ProcessAudioUseCase(
         val reasoningStripper = ReasoningStripper()
         /** 是否已经出现过可见正文 —— 它决定 UI 是「思考中转圈」还是「流式打字」 */
         var sawVisible = false
+        /**
+         * 本轮 LLM 的失败原因，**只认流内的 [ChatRepository.StreamEvent.Failure]**。
+         *
+         * 为什么不用仓库上那个共享字段（原实现在下方读 `chatRepository.lastStreamError`）：
+         * ChatRepository 是单例，而 plan4 的记忆总结流**开始收集时会清空**那个共享字段，
+         * 于是「对话侧刚失败、总结流紧接着启动」会把失败记录抹掉，这里就以为本轮没出错，
+         * 继续拿一段残缺回复去 TTS 并落库。错误必须跟着"这一次调用"走，不能挂在单例上
+         * （plan4 §3.2 Step 5a / §7.3 / P5）。
+         */
+        var streamFailure: String? = null
 
         try {
             chatRepository.streamChatCompletion(
@@ -219,8 +229,10 @@ class ProcessAudioUseCase(
                         // 这段等待正是 plan1 要求的「语音识别结束 → 正式回应出现」之间的转圈动画。
                     }
 
-                    is ChatRepository.StreamEvent.Failure ->
+                    is ChatRepository.StreamEvent.Failure -> {
+                        streamFailure = event.reason
                         Log.e(TAG, "LLM 流式失败: ${event.reason}")
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -229,8 +241,9 @@ class ProcessAudioUseCase(
 
         // 本轮 LLM 出过错就到此为止：不合成、不朗读、不写历史。
         // 否则会把一段残缺回复（或干脆是空的）拿去 TTS，听起来像 AI 突然敷衍一句。
-        chatRepository.lastStreamError.value?.let { reason ->
-            Log.w(TAG, "本轮 LLM 失败，跳过 TTS 与落库: $reason")
+        val failureReason = streamFailure
+        if (failureReason != null) {
+            Log.w(TAG, "本轮 LLM 失败，跳过 TTS 与落库: $failureReason")
             return Pair(userMessage, null)
         }
 
