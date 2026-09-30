@@ -1,0 +1,51 @@
+这个plan分为两个部分，debug和新功能
+debug：
+    检查llm的相关参数设置，是否影响到了tts
+    检查tts实现流程有没有错误
+    这些是否修复需要提问我
+新功能
+    想办法为live2d模型添加一个摸头的动作，同样只计划，等我审阅
+
+================================================================
+实施结果（已审阅，用户选择：debug 五项全做 + 撤掉三个死配置；
+摸头走路线 A（程序化反应）+ 轻量版口应）
+================================================================
+
+【结论：LLM 参数对 TTS 的影响】
+  - llmMaxOutputTokens 强相关：它决定一次 TTS 请求要念多长。整段回复
+    一次性送 TTS，而外层曾只有 60s 超时 → 长回复必被腰斩并触发自听自说。
+  - 温度 / topP / 思考开关 / 上下文长度：对 TTS 无直接泄漏
+    （推理内容由 ReasoningStripper 剥掉，不进 TTS）。
+
+【debug 修复】commit df8a913  fix(tts): 修 5 处链路缺陷
+  1. ttsPrompt 塞进了不存在的 audio.prompt → 改到 messages 的 user.content
+     （官方 audio 对象只有 format / voice / optimize_text_preview）
+  2. audio.speed 同样不存在 → 语速滑块撤掉
+  3. 60s 整轮超时 vs 120s 播放上限 → 撤掉外层短超时 +
+     finally 仅在"没正常收尾"时停播（正常收尾时音频尾部还排在
+     AudioTrack 里，无条件停会切掉每句话尾音）
+  4. 异常被 emit 成正文 → StreamEvent.Text / Failure 分流，失败跳过 TTS 与落库
+  5. 文本清洗改白名单，保留 MiMo 的音频标签（[笑] /（叹气））
+  另撤掉 TTS URL / TTS 服务商 / 音色 ID 三个从不被读取的配置
+
+【新功能：摸头】commit a21e99f  feat(live2d): 摸头互动
+  - bridge.js：CFG.pat 叠层（包络 sin(πp)·|sin(πp·waves)|），接在待机层之后、
+    变身复位之前；L2D.patHead({x,y}) + L2D.debugPatHit(on)；version 1.1.0
+  - 命中判定在 JS（复用 layout() 缓存下来的包围盒）；
+    触摸捕获在 Compose（叠在 Live2DView 之上，只认轻点、上 60%）
+  - LLM 情绪表情优先级更高：_cue 非空时只做动作、不抢表情
+  - 轻量口应：摸头只打标记，下一轮提示词捎带一句，不当场发请求
+
+【验证】
+  - node tools/live2d_selftest.cjs：88 / 88 通过（新增第 15 节摸头用例）
+  - gradlew :app:assembleDebug：BUILD SUCCESSFUL
+    → app/build/outputs/apk/debug/app-debug.apk
+  - 发布说明草稿：.release-notes-v1.3.0.md
+
+【待真机确认（只有你能做）】
+  1. 断网时角色不再念「错误…」，历史里也不再出现这条
+  2. 一段超过 60 秒的长回复不会出现「AI 自己接自己的话」
+  3. DeepSeek酱 的语气是否明显变软糯傲娇（第 1 项修复的体感）
+  4. 摸头命中区标定：CDP 执行 window.L2D.debugPatHit(true)，
+     看红框是否盖住头顶；再按角色改 bridge.js 里 CFG.pat.hit 的
+     x0/x1/y0/y1，或直接用 L2D.debug().patLastHit 的 bx/by 反推
