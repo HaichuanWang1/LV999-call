@@ -60,3 +60,6 @@ _tmp_ds/
 # Python 工具的运行产物（tools/ 下有 .py 脚本）
 __pycache__/
 *.pyc
+
+# Agent 工作流中间产物（阶段规格/审查提词，随会话生成，不属于项目源码）
+.dsh/

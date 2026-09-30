@@ -55,13 +55,27 @@ class StartCallUseCase(
         fallbackPrompt
     }
 
-    suspend fun createSession(mode: DialogMode, character: BuiltInCharacter?): Session {
+    /**
+     * 建立一次通话会话。
+     *
+     * @param characterKey 记忆的角色隔离键（plan4 §2.3）。默认由 [character] 推导：
+     *        内置角色 = 角色 id，无角色 = [Session.CHARACTER_KEY_DEFAULT]。
+     *        ⚠️ 自定义预设必须由调用方显式传 [Session.presetCharacterKey]——
+     *        预设不属于任何内置角色，这里推不出来；漏传就是所有预设共用 `default` 一个桶。
+     */
+    suspend fun createSession(
+        mode: DialogMode,
+        character: BuiltInCharacter?,
+        characterKey: String = character?.id ?: Session.CHARACTER_KEY_DEFAULT
+    ): Session {
         val systemPrompt = getSystemPrompt(mode, character)
         val session = Session(
             id = UUID.randomUUID().toString(),
             mode = mode,
             systemPrompt = systemPrompt,
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            // 落库而不是只留在内存：续聊路径只有 sessionId，靠提示词反查推不出自定义预设
+            characterKey = characterKey
         )
         sessionRepository.createSession(session)
         return session
