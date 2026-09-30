@@ -112,6 +112,14 @@ class Live2DController internal constructor() {
     /** 最近一次推送的口型值，避免无意义的重复调用 */
     private var lastMouthValue = -1f
 
+    /**
+     * 摸头表情的复位代次。
+     *
+     * 每次摸头命中都自增并发一个 holdMs 后的复位任务，任务里比对代次 ——
+     * 否则连摸两次时，第一次的定时器会提前把第二次的表情复位掉。
+     */
+    private var patExpressionSeq = 0L
+
     // ------------------------- 对外指令 -------------------------
 
     /** 切换角色状态：idle / listening / thinking / speaking / ended */
@@ -198,6 +206,30 @@ class Live2DController internal constructor() {
         eval("window.L2D && window.L2D.setExpression($arg)")
     }
 
+    /**
+     * 摸头：传入舞台内的**归一化坐标**（0~1，相对 WebView 视口，左上为原点）。
+     *
+     * 命中判定刻意放在 JS 侧：只有那里拿得到模型内容包围盒与 bridge.js 算出的
+     * 真实布局变换，这边硬算必然对不上（坐标原点、锚点、缩放都不在一个体系里）。
+     * 所以这里只负责把坐标递过去。
+     *
+     * @return 无返回值：是否命中由 JS 侧通过 `pat` / `info` 事件回报
+     */
+    fun patHead(x: Float, y: Float) {
+        eval("window.L2D && window.L2D.patHead({x:${x.coerceIn(0f, 1f)},y:${y.coerceIn(0f, 1f)}})")
+    }
+
+    /**
+     * 调试：画出摸头命中区（真机标定用）。
+     *
+     * 打开后舞台上半部分会出现红色虚线框 —— 那就是「点这里会触发摸头」的实际
+     * 区域。真机上标定 CFG.pat.hit 时用它，改完 bridge.js 的对应 profile 即可。
+     * 也可通过 CDP 直接调 `window.L2D.debugPatHit(true)`，效果相同。
+     */
+    fun debugPatHit(enabled: Boolean) {
+        eval("window.L2D && window.L2D.debugPatHit($enabled)")
+    }
+
     // ------------------------- 内部实现 -------------------------
 
     private fun eval(js: String) {
@@ -226,6 +258,8 @@ class Live2DController internal constructor() {
         status = Live2DStatus.LOADING
         lastError = null
         modelInfo = null
+        // JS 侧会随新页面重建，这里无需通知；但宿主侧缓存的模型能力要清掉
+        patExpressionSeq = 0L
         loadGeneration++
         wv.loadUrl(Live2DAssetLoader.indexUrl(modelPath, profileId))
         return true
@@ -258,6 +292,28 @@ class Live2DController internal constructor() {
             "info" -> {
                 modelInfo = runCatching { JSONObject(payload) }.getOrNull()
                 Log.i(TAG, "Live2D 信息: $payload")
+            }
+
+            "pat" -> {
+                // JS 侧判定「摸头命中，且当前没有 LLM 情绪表情」时下发：
+                // 临时套一个脸红表情，holdMs 后自动复位。
+                //
+                // 为什么不经 ViewModel：这是一次 1 秒级的纯演出，与 LLM 那条
+                // expressionCue 链路（保持到本轮说完）语义完全不同，混在一起会
+                // 互相复位。JS 侧已经保证 _cue 非空时不下发这个事件，所以这里
+                // 不需要再判一次 —— 这条约定改 JS 时必须一起维护。
+                val json = runCatching { JSONObject(payload) }.getOrNull()
+                val name = json?.optString("expression", "")?.takeIf { it.isNotEmpty() }
+                if (name == null) return
+                val holdMs = json.optLong("holdMs", 1200L)
+
+                setExpression(name)
+                // 自增代次：连摸两次时，第一次的定时器不能把第二次的表情提前复位
+                patExpressionSeq += 1
+                val seq = patExpressionSeq
+                webView?.postDelayed({
+                    if (seq == patExpressionSeq) setExpression(null)
+                }, holdMs)
             }
         }
     }

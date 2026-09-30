@@ -74,6 +74,67 @@
       thinking:  { expression: null, motion: null, focus: 0.10 },
       speaking:  { expression: null, motion: null, focus: 0.35 },
       ended:     { expression: null, motion: null, focus: 0.0  }
+    },
+
+    // ==================== 摸头反应（程序化，不依赖动作文件）====================
+    //
+    // 用户点舞台上半部分 → 角色做出「被摸头」的反应。两个模型的材质里都没有
+    // 可动的"手"，所以这里只能是**角色的反应**：头部小幅下沉再弹回、眯眼、
+    // 眉毛抬高、嘴角上扬，可选叠一个脸红表情。
+    //
+    // 为什么走参数叠层而不是像变身那样做动作文件：
+    //   1. 两个模型参数命名不同，但「哪些参数可写」已经在各自的 idle.channels
+    //      里摸清了（哪些是物理输出、哪些是物理输入）。复用那张通道表就不必
+    //      逐个模型再做一套动作素材；
+    //   2. 摸头是**用户即兴触发**的短演出，必须能随时插进任意通话状态；
+    //      走动作组会和运行库的 Idle 自动播放抢优先级（变身过场已经踩过这个坑）。
+    //
+    // 与程序化待机层的关系：摸头层写在待机层**之后**（同帧、更晚），只做叠加
+    // 不改基线。所以摸头期间待机层照常工作，不需要互相让位；变身过场让位
+    // （gate=0）时摸头也叠加在归零后的基线上，不会把变身演出顶坏。
+    pat: {
+      enabled: true,
+
+      duration: 0.95,   // 单次演出时长（秒）
+      cooldown: 0.6,    // 冷却：这段时间内的重复触发直接忽略，避免连点叠成乱抖
+      waves: 2.2,       // 一个 duration 内包含几个"上下"周期（= 被揉了几下）
+
+      /**
+       * 命中区。坐标是**模型内容包围盒的归一化值**（0~1，原点在包围盒左上角）。
+       *
+       * 为什么相对包围盒而不是屏幕：包围盒随模型与布局变化，用相对值在
+       * 不同宽高比的舞台上都能用；再配合 L2D.debugPatHit(true) 画框标定即可。
+       * 这里的初值是保守估计（头顶那一带），真机上调一次就够。
+       */
+      hit: { x0: 0.18, x1: 0.82, y0: 0.00, y1: 0.42 },
+
+      // 各通道的演出幅度（0 表示这个通道不动；通道本身不存在也会自动跳过）
+      amp: {
+        tilt:      3.2,   // 头部侧倾（度）：被手掌按下去又弹回
+        brow:      0.18,  // 眉毛抬高（"被摸得很舒服"）
+        smile:     0.22,  // 笑眼
+        squint:    0.20,  // 微眯
+        mouthForm: 0.10,  // 嘴角（绝不碰 ParamMouthOpenY —— 那是口型的通道）
+        sway:      0.0    // 身体左右晃
+      },
+
+      /**
+       * 有 LLM 情绪表情时，把「和表情抢戏」的通道压到这个比例。
+       *
+       * 与待机层 cuePoseScale 同一个理由：不能让「明明在生气，眉毛却在笑」。
+       * tilt / sway 是纯姿势，不压 —— 摸头的动作感要保住。
+       */
+      cueScale: 0.35,
+
+      // 叠层收敛速度（越小越慢）。刻意比 idle.poseRate 快一点：
+      // 摸头是"被碰了一下"的即时反应，比状态切换该更利落。
+      poseRate: 0.16,
+
+      // 可选：摸头时临时套一个表情（null = 不套）。写模型真实 Expressions[].Name，
+      // 找不到就静默跳过。宿主会在 holdMs 之后复位 —— 且只在当前没有 LLM 情绪
+      // 表情时才套，不抢 LLM 的表达。
+      expression: null,
+      holdMs: 1200
     }
   };
 
@@ -204,6 +265,18 @@
           Param214: 0,    // 迈腿
           Param218: 0     // 人物变暗
         }
+      },
+
+      // ==================== 摸头反应 ====================
+      //
+      // 银狼是 Q 版，头相对身体偏大，hit 可以给宽一点（0.18~0.82）。
+      // sway 有效：这个模型的 ParamBodyAngleZ 不是物理输出（与 DeepSeek 酱相反）。
+      // 表情用模型自带的「02 脸红爱心」—— 被摸头脸红是最贴的反应。
+      pat: {
+        hit: { x0: 0.18, x1: 0.82, y0: 0.00, y1: 0.42 },
+        amp: { tilt: 3.2, brow: 0.18, smile: 0.22, squint: 0.20, mouthForm: 0.10, sway: 1.6 },
+        expression: '02 脸红爱心',
+        holdMs: 1200
       }
     },
 
@@ -301,6 +374,21 @@
         outIndex: 1,
         muteIdle: false,
         reset: {}
+      },
+
+      // ==================== 摸头反应 ====================
+      //
+      // 与该档 idle.channels 的差异保持一致：
+      //   - sway 必须留 0：该模型的 ParamBodyAngleZ 是**物理输出**（physics3.json
+      //     会每帧覆写），写进去等于没写（通道表里本来也没有它）；
+      //   - smile / squint 也留 0：该模型没有 ParamEyeLSmile / ParamEyeLSquint
+      //     这些参数，写着不报错但毫无效果，留着只会让调参时困惑。
+      // 所以这档的手感主要靠 tilt（歪头）+ brow + mouthForm，再加上表情「脸红」。
+      pat: {
+        hit: { x0: 0.16, x1: 0.84, y0: 0.00, y1: 0.40 },
+        amp: { tilt: 3.0, brow: 0.16, smile: 0, squint: 0, mouthForm: 0.08, sway: 0 },
+        expression: '脸红',
+        holdMs: 1200
       }
     }
   };
@@ -377,6 +465,19 @@
   var _idleValid = null;          // {参数id: 是否存在} 缓存，避免每帧都查一遍
   var _sequence = null;           // 正在播的一次性动作序列：{queue:[…], pos:0, deadline:秒}
   var _transformResetPending = false;  // 需要把变身参数写回中性值（只写一帧）
+
+  // 摸头反应（见 CFG.pat）
+  var _patUntil = -1;          // 演出结束时间（_idleTime 秒）；-1 表示没在演
+  var _patStart = -1;          // 演出开始时间
+  var _patCooldownUntil = -1;  // 冷却结束时间（连点直接忽略）
+  var _patValue = {};          // 当前摸头层的通道叠加值（与 _idleValue 同构）
+  var _patDebug = false;       // 调试：画出命中区
+  var _patLastHit = null;      // 调试：最近一次命中判定 {ok,nx,ny,bx,by}
+  var _patBoxEl = null;        // 调试用的命中框 DOM（仅 _patDebug 时存在）
+
+  // layout() 算出的布局量缓存（给摸头命中判定用）。
+  // 每次 layout() 覆盖；换模型/销毁时清掉，避免拿上一份模型的数据做判定。
+  var _layoutCache = null;
 
   // ======================= Android 通信 ========================
   function notify(type, payload) {
@@ -543,6 +644,20 @@
 
     model.x = sw * 0.5 + CFG.offsetX * sw - contentCx * scale;
     model.y = sh * 0.5 + CFG.offsetY * sh - contentCy * scale;
+
+    // 缓存这一帧的布局量给摸头命中判定用。
+    //
+    // 为什么不让它自己去调 contentBounds()：那个函数依赖
+    // internalModel.getDrawableBounds()，在部分运行时/时序下会返回 null。
+    // layout() 已经拿到过一份（上面），直接用同一份既准确又便宜，
+    // 也保证"看到的缩放"和"命中的区域"永远一致。
+    _layoutCache = {
+      sw: sw, sh: sh,
+      scale: scale,
+      canvasW: canvasW, canvasH: canvasH,
+      cb: cb || { x: 0, y: 0, width: canvasW, height: canvasH },
+      x: model.x, y: model.y
+    };
   }
 
   // ======================= 口型同步核心 =======================
@@ -715,6 +830,169 @@
     }
   }
 
+  // ======================= 摸头反应（CFG.pat）=======================
+  /**
+   * 把「视口归一化坐标 → 内容包围盒的宽高比」换算出来。
+   *
+   * 为什么要这层换算：宿主（Android 侧）只能给出相对舞台的归一化坐标，
+   * 而命中区是相对**模型内容包围盒**定义的（这样换模型换布局都不用重标）。
+   * layout() 的公式就在这里复算一遍：内容包围盒在包围盒坐标系里恒为
+   * (0,0,w,h)，映射到屏幕后除以视口尺寸即得。
+   *
+   * @returns null 表示当前量不到（模型没就绪 / 包围盒取不到）
+   */
+  function patHitBox() {
+    try {
+      var L = _layoutCache;
+      if (!L || !L.sw || !L.sh) return null;
+
+      // 画布中心 → 内容包围盒左上角的本地偏移（与 layout() 里 contentCx/Cy 同源）
+      var left = L.x + (L.cb.x - L.canvasW / 2) * L.scale;
+      var top = L.y + (L.cb.y - L.canvasH / 2) * L.scale;
+      return {
+        x: left / L.sw,
+        y: top / L.sh,
+        w: (L.cb.width * L.scale) / L.sw,
+        h: (L.cb.height * L.scale) / L.sh
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 命中判定：视口归一化坐标 (nx, ny) 是否落在 CFG.pat.hit 里
+   *
+   * 注意：内容包围盒常常**远大于视口**（fillRatio > 1 就是刻意放大裁切），
+   * 所以命中区经常有一部分在屏幕外 —— 这是正常的，"摸头"本来就只需要
+   * 顶部那一带在屏幕内即可。
+   */
+  function patHitTest(nx, ny) {
+    var box = patHitBox();
+    var hit = CFG.pat.hit;
+    if (!box) return false;
+    if (box.w <= 0 || box.h <= 0) return false;
+    var bx = (nx - box.x) / box.w;
+    var by = (ny - box.y) / box.h;
+    _patLastHit = { nx: nx, ny: ny, bx: bx, by: by, ok: false };
+    if (bx < hit.x0 || bx > hit.x1 || by < hit.y0 || by > hit.y1) return false;
+    _patLastHit.ok = true;
+    return true;
+  }
+
+  /**
+   * 摸头层：算通道叠加值 → 平滑收敛
+   *
+   * 包络 env = sin(π·p) · |sin(π·p·waves)|：
+   *   前一个因子让整段演出自然淡入淡出（不会"啪"地开始、"啪"地结束），
+   *   后一个因子在 duration 内叠出 waves 个快周期，做出"被揉了几下"的节奏。
+   *
+   * 该层只做**叠加**：目标值直接取 envelope × amp，不清零待机层的基线。
+   * 不在演出期时按同一套插值把叠加值衰减回 0（不是硬切），否则演出结束会"咔"一下。
+   */
+  function updatePat(dt) {
+    if (!modelReady || !model || !CFG.pat.enabled) return;
+
+    var cfg = CFG.pat;
+    var active = _patUntil > 0 && _idleTime <= _patUntil;
+    // 上一帧没参与过演出的通道要先补 0，否则 += 会碰到 undefined → NaN
+    if (active) {
+      for (var nm in cfg.amp) {
+        if (Object.prototype.hasOwnProperty.call(cfg.amp, nm) &&
+            typeof _patValue[nm] !== 'number') _patValue[nm] = 0;
+      }
+    }
+
+    var scale = _cue ? cfg.cueScale : 1;
+    var env = 0;
+    if (active) {
+      var p = clamp((_idleTime - _patStart) / cfg.duration, 0, 1);
+      env = Math.sin(p * Math.PI) * Math.abs(Math.sin(p * Math.PI * cfg.waves));
+    }
+
+    var amp = cfg.amp, name;
+    var rate = cfg.poseRate || 0.16;
+    var k = 1 - Math.pow(1 - rate, dt * 60);
+    var idle = 0;
+
+    for (name in amp) {
+      if (!Object.prototype.hasOwnProperty.call(amp, name)) continue;
+      // 这个通道在本模型的待机通道表里不存在 → 跳过多余的数学
+      if (!CFG.idle.channels || !CFG.idle.channels[name]) continue;
+      // 与表情抢戏的通道在情绪表情期间压一点，纯姿势通道不压
+      var sc = (name === 'tilt' || name === 'sway') ? 1 : scale;
+      var want = env * amp[name] * sc;
+      _patValue[name] += ((want || 0) - (_patValue[name] || 0)) * k;
+      if (Math.abs(_patValue[name]) > 1e-4) idle = 1;
+    }
+
+    // 收敛到 0 且已不在演出期：彻底清零，避免每帧写一堆 1e-7 级别的噪声值
+    if (!active && !idle) {
+      for (name in _patValue) {
+        if (Object.prototype.hasOwnProperty.call(_patValue, name)) _patValue[name] = 0;
+      }
+    }
+  }
+
+  /**
+   * 把摸头层的值写进模型参数（与 applyIdle 完全同构）
+   *
+   * 同样挂在 afterMotionUpdate、同样写在待机层之后：同帧更晚写入即为覆盖式叠加。
+   */
+  function applyPat() {
+    if (!modelReady || !model || !CFG.pat.enabled) return;
+    var core = model.internalModel && model.internalModel.coreModel;
+    if (!core || typeof core.setParameterValueById !== 'function') return;
+
+    var ch = CFG.idle.channels, name, ids, i, id;
+    for (name in ch) {
+      if (!Object.prototype.hasOwnProperty.call(ch, name)) continue;
+      var v = _patValue[name] || 0;
+      if (v === 0) continue;   // 没在演出：一个参数都不写，避免干扰待机层
+      ids = ch[name];
+      for (i = 0; i < ids.length; i++) {
+        id = ids[i];
+        try {
+          if (!paramOK(core, id)) continue;
+          core.setParameterValueById(id, v);
+        } catch (e) { /* 单个参数失败不影响其他 */ }
+      }
+    }
+  }
+
+  /**
+   * 调试：画出摸头命中区（真机标定用）
+   *
+   * 用 fixed 定位的 div 画框，坐标与 [patHitTest] 用同一套换算，
+   * 所以框住的就是"点这里会触发"的实际区域。标完把 CFG.pat.hit 的四个
+   * 数值填到对应 profile 里即可。
+   */
+  function drawPatBox(show) {
+    try {
+      if (!show) {
+        if (_patBoxEl && _patBoxEl.parentNode) _patBoxEl.parentNode.removeChild(_patBoxEl);
+        _patBoxEl = null;
+        return;
+      }
+      var box = patHitBox();
+      if (!box || !document.body) return;
+      if (!_patBoxEl) {
+        _patBoxEl = document.createElement('div');
+        _patBoxEl.style.position = 'fixed';
+        _patBoxEl.style.border = '2px dashed rgba(255,64,64,0.9)';
+        _patBoxEl.style.background = 'rgba(255,64,64,0.12)';
+        _patBoxEl.style.pointerEvents = 'none';
+        _patBoxEl.style.zIndex = '9999';
+        document.body.appendChild(_patBoxEl);
+      }
+      // 用视口百分比表达，窗口尺寸变化时不需要重算
+      _patBoxEl.style.left = (box.x * 100) + '%';
+      _patBoxEl.style.top = (box.y * 100) + '%';
+      _patBoxEl.style.width = (box.w * 100) + '%';
+      _patBoxEl.style.height = (box.h * 100) + '%';
+    } catch (e) { /* 调试功能，失败不影响主流程 */ }
+  }
+
   /**
    * 接管运行库内置呼吸的幅度
    *
@@ -864,6 +1142,12 @@
     // 不碰 ParamMouthOpenY（那是口型的通道）
     updateIdle(dt);
     applyIdle();
+
+    // 摸头层写在待机层**之后**（同帧更晚 → 覆盖式叠加），
+    // 但仍在 applyTransformReset 之前（变身收尾的复位值优先级最高）。
+    updatePat(dt);
+    applyPat();
+
     applyTransformReset();
   }
 
@@ -947,7 +1231,7 @@
   // ==================== 对外 API（window.L2D）====================
   var L2D = {
     /** 桥接版本，便于 Android 侧探测 */
-    version: '1.0.0',
+    version: '1.1.0',
 
     get ready() { return modelReady; },
     get state() { return currentState; },
@@ -1076,6 +1360,67 @@
     },
 
     /**
+     * 摸头：{x, y} 是**舞台归一化坐标**（0~1，相对整个 WebView 视口，左上为原点）。
+     *
+     * 命中判定放在这里而不是 Android 侧：只有 JS 侧拿得到模型内容包围盒与
+     * layout() 算出的真实变换，Kotlin 侧硬算必然对不上。
+     *
+     * @returns 是否真的触发了演出。冷却中 / 没命中 / 未就绪都返回 false，
+     *          并通过 info 事件把原因回给宿主，便于真机排查"点了没反应"。
+     */
+    patHead: function (opts) {
+      try {
+        if (!modelReady || !model || !CFG.pat.enabled) return false;
+        var o = typeof opts === 'string' ? JSON.parse(opts) : (opts || {});
+        var nx = Number(o.x), ny = Number(o.y);
+        if (!isFinite(nx) || !isFinite(ny)) return false;
+
+        // 冷却：连点只播一次，不叠成一团乱抖
+        if (_idleTime < _patCooldownUntil) {
+          notify('info', JSON.stringify({ pat: 'cooldown' }));
+          return false;
+        }
+
+        if (!patHitTest(nx, ny)) {
+          if (_patDebug) drawPatBox(true);
+          notify('info', JSON.stringify({ pat: 'miss', x: nx, y: ny }));
+          return false;
+        }
+
+        _patStart = _idleTime;
+        _patUntil = _idleTime + CFG.pat.duration;
+        _patCooldownUntil = _idleTime + CFG.pat.cooldown + CFG.pat.duration;
+
+        // 表情只在「当前没有 LLM 情绪表情」时才套 —— _cue 优先级更高，
+        // 否则一次摸头会把 LLM 刚触发的情绪脸冲掉，而且复位后回不到那张脸。
+        if (CFG.pat.expression && !_cue) {
+          notify('pat', JSON.stringify({
+            expression: CFG.pat.expression,
+            holdMs: CFG.pat.holdMs || 1200
+          }));
+        }
+        if (_patDebug) drawPatBox(true);
+        return true;
+      } catch (e) {
+        console.warn('[L2D] patHead 失败: ' + (e && e.message ? e.message : e));
+        return false;
+      }
+    },
+
+    /**
+     * 调试：画出摸头命中区并回报最近一次判定（真机标定用）
+     *
+     * 打开后：红色虚线框 = 实际会触发的区域（换算与命中判定共用同一套）。
+     * 想看数值时用 `L2D.debug().patLastHit`，其中 bx/by 就是点击位置
+     * 换算到内容包围盒后的归一化坐标 —— 照着它改 CFG.pat.hit 即可。
+     */
+    debugPatHit: function (on) {
+      _patDebug = !!on;
+      drawPatBox(_patDebug);
+      return JSON.stringify({ on: _patDebug, hit: CFG.pat.hit, last: _patLastHit });
+    },
+
+    /**
      * 调试：每帧强制写入参数值（忽略状态与音量），用于验证某个参数
      * 是否真的驱动了模型部件。传 null / 不传则清空。
      * 例：L2D.debugForce('ParamMouthOpenY', 1)
@@ -1134,6 +1479,13 @@
         };
         out.sequence = _sequence ? { pos: _sequence.pos, queue: _sequence.queue } : null;
         out.transformResetPending = _transformResetPending;
+        out.pat = {
+          enabled: CFG.pat.enabled,
+          active: _patUntil > 0 && _idleTime <= _patUntil,
+          values: _patValue,
+          debug: _patDebug,
+          lastHit: _patLastHit
+        };
       } catch (e) { out.error = String(e); }
       return JSON.stringify(out);
     },
@@ -1153,6 +1505,8 @@
     var info = { modelUrl: CFG.modelUrl, motions: [], expressions: [], lipSync: [] };
     // 待机层由 bridge.js 自己提供，不依赖模型文件；宿主侧可据此决定是否还需别的兜底
     info.idle = true;
+    // 摸头同理：程序化演出，不需要模型自带对应动作组
+    info.pat = { enabled: CFG.pat.enabled, hit: CFG.pat.hit, duration: CFG.pat.duration };
     try {
       var im = model.internalModel;
       info.size = im.originalWidth + 'x' + im.originalHeight;

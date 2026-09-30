@@ -611,6 +611,95 @@ function check(name, cond, extra = '') {
   check('?model= 能覆盖档位内的模型路径',
         !!overrideInfo && /haru/.test(overrideInfo.modelUrl), overrideInfo && overrideInfo.modelUrl);
 
+  // ========================================================================
+  console.log('\n[15] 摸头反应（程序化叠加层）');
+
+  rec.events.length = 0;
+  const swInfo = await bootWith('?profile=silverwolf');
+  check('银狼档位加载成功并上报 ready', !!swInfo, JSON.stringify(rec.events.map(([t]) => t)));
+  check('ready 信息里带上摸头能力（宿主据此决定是否装触摸层）',
+        !!swInfo && !!swInfo.pat && swInfo.pat.enabled === true,
+        swInfo && JSON.stringify(swInfo.pat));
+
+  // 命中框的换算：视口坐标必须能对到「相对内容包围盒」的归一化坐标上。
+  // 这里刻意用 info.pat.hit 里的边界值反推一个必定命中的点，
+  // 这样换模型、换布局都不会让用例失效（不写死任何像素值）。
+  function viewportPointFor(bx, by, hit) {
+    // 与 bridge.js 的 patHitTest 相反方向的换算：
+    //   屏幕像素 = 视口尺寸 × (包围盒在视口里的位置 + 包围盒归一化坐标 × 尺寸)
+    // 视口尺寸与包围盒尺寸拿不到，就用「缩放后的画布」近似 —— 本用例只要求
+    // 点落在同一个判定体系内，不要求像素级精确。
+    return { bx, by, hit };
+  }
+  void viewportPointFor;
+
+  const dbg = JSON.parse(win.L2D.debugPatHit(true));
+  check('debugPatHit 返回命中区与开关状态',
+        dbg.on === true && !!dbg.hit && typeof dbg.hit.y1 === 'number',
+        JSON.stringify(dbg));
+
+  // 找到一个必定命中的视口点：命中区中心。
+  // bridge.js 里包围盒 = 画布（mock 的 contentBounds 不可用 → autoFit 回落画布），
+  // 所以包围盒中心恰好落在屏幕中心，直接按屏幕中心比例构造即可。
+  // 用 debug().pat 里的 lastHit 反查更稳：先点中心试探，再按结果校正。
+  let okPoint = null;
+  for (const ty of [0.10, 0.14, 0.18, 0.22, 0.26, 0.30]) {
+    if (win.L2D.patHead({ x: 0.5, y: ty })) { okPoint = { x: 0.5, y: ty }; break; }
+    win.L2D.debugPatHit(true);
+  }
+  check('摸头：命中上半部分时触发（返回 true）', !!okPoint, JSON.stringify(okPoint));
+
+  if (okPoint) {
+    tick(20);
+    const dbg2 = JSON.parse(win.L2D.debug());
+    check('摸头期间 pat.active 为真', !!(dbg2.pat && dbg2.pat.active), JSON.stringify(dbg2.pat && dbg2.pat.active));
+    check('摸头确实写入了头部侧倾参数（ParamAngleZ）',
+          'ParamAngleZ' in rec.params, JSON.stringify(Object.keys(rec.params)));
+    check('摸头确实写入了眉毛参数（ParamBrowLY）',
+          'ParamBrowLY' in rec.params, JSON.stringify(Object.keys(rec.params)));
+    // 表情只在没有 LLM 情绪表情时才套 —— 这是「不抢 LLM 表达」的硬约定
+    const patEvents = rec.events.filter(([t]) => t === 'pat');
+    check('摸头在无情绪表情时下发了脸红表情', patEvents.length === 1,
+          JSON.stringify(patEvents));
+    check('摸头绝不会碰口型通道（ParamMouthOpenY 不参与）',
+          !('ParamMouthOpenY' in rec.params) || rec.params.ParamMouthOpenY === 0,
+          String(rec.params.ParamMouthOpenY));
+  }
+
+  // 冷却：紧接着再点一次必须被忽略
+  if (okPoint) {
+    check('摸头冷却：连点第二次被忽略（返回 false）',
+          win.L2D.patHead({ x: okPoint.x, y: okPoint.y }) === false);
+  }
+
+  // 没命中（点最底部）不该触发
+  win.L2D.debugPatHit(false);
+  tick(120);
+  check('摸头：点底部不触发（返回 false）',
+        win.L2D.patHead({ x: 0.5, y: 0.99 }) === false);
+
+  tick(120);
+  check('摸头演出结束后叠加值归零',
+        (() => {
+          const p = JSON.parse(win.L2D.debug()).pat;
+          return p && !p.active && Object.values(p.values || {}).every((v) => Math.abs(v) < 1e-3);
+        })());
+
+  // LLM 情绪表情在场时不许抢戏
+  win.L2D.setExpression('03 生气');
+  rec.events.length = 0;
+  let okPoint2 = null;
+  for (const ty of [0.10, 0.14, 0.18, 0.22, 0.26, 0.30]) {
+    if (win.L2D.patHead({ x: 0.5, y: ty })) { okPoint2 = true; break; }
+    tick(90);   // 每次试探都要等过冷却
+  }
+  check('有 LLM 情绪表情时摸头仍然出动作（姿势不抢戏、但动作要有）',
+        okPoint2 === true, String(okPoint2));
+  check('有 LLM 情绪表情时摸头不下发自己的表情（不覆盖 _cue）',
+        !rec.events.some(([t]) => t === 'pat'),
+        JSON.stringify(rec.events.filter(([t]) => t === 'pat')));
+  win.L2D.setExpression(null);
+
   console.log(`\n${'='.repeat(46)}`);
   console.log(`通过 ${pass} / 失败 ${fail}`);
   process.exit(fail === 0 ? 0 : 1);
