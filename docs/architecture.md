@@ -100,3 +100,24 @@ tools/
 | Models | `GET /v1/models` | 获取可用模型列表 |
 
 支持的服务商：Groq、OpenAI、MiMo、以及任何 OpenAI 兼容 API。
+
+---
+
+## 交互式架构图
+
+[`architecture-call-pipeline.html`](architecture-call-pipeline.html) 是 Archify 生成的可交互通话链路图
+（离线单文件，浏览器直接打开）：主链路 `用户 → CallScreen → CallViewModel → AudioRecorder → AsrEngine → ChatRepository → AudioPlayer`，
+外加 Live2D、长期记忆、Room 与三个远程 AI 端点，共 14 个组件、15 条关系，每条都带源码位置。
+
+Skill 本体在 `.agents/skills/archify/`（MIT，v3.0.1），dsh 以 `project-agents` 优先级自动发现，无需安装。
+改了通话链路后重跑：
+
+```bash
+node .agents/skills/archify/bin/archify.mjs finalize architecture \
+  .archify/architecture-<slug>/candidate.json \
+  .archify/architecture-<slug>/<slug>.html \
+  --repo-root . --quality showcase
+```
+
+> 浏览器门禁需要 Chromium；本机没装 Chrome 时指向 Edge：
+> `$env:ARCHIFY_CHROME = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'`

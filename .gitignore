@@ -66,3 +66,6 @@ tools/migration_check/
 
 # Agent 工作流中间产物（阶段规格/审查提词，随会话生成，不属于项目源码）
 .dsh/
+
+# Archify 出图的中间产物（候选 JSON / 浏览器证据 / 截图，可随时重跑）
+.archify/

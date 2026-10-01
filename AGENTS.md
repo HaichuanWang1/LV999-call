@@ -11,4 +11,6 @@
 - 实现新功能，修复功能后及时commit
 - 不要做过多的验证，需要复杂操作的直接告诉我就好
 - 每次添加功能使用新的app权限的时候记得加上权限的请求
+- 出架构图/流程图用 `.agents/skills/archify`（dsh 自动发现，无需安装）；
+  用法与重跑方式见 `docs/architecture.md` 末尾，产物 HTML 放 `docs/`
 *每次执行非bug调整的任务时，必须使用goal和task
