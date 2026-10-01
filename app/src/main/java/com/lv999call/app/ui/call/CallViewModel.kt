@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.lv999call.app.audio.AudioPlayer
 import com.lv999call.app.audio.AudioRecorder
+import com.lv999call.app.data.local.entity.PresetEntity
 import com.lv999call.app.di.AppModule
 import com.lv999call.app.domain.model.*
 import com.lv999call.app.domain.usecase.ManageSessionUseCase
@@ -84,6 +85,19 @@ class CallViewModel(
     val character: StateFlow<BuiltInCharacter?> = _character.asStateFlow()
 
     /**
+     * 自定义方案通话的形象信息（头像 / 背景），供 UI 在**续聊**时也能恢复方案的样子。
+     *
+     * 为什么必须由 ViewModel 提供：`CALL_CONTINUE/{sessionId}` 路由手里只有 sessionId，
+     * 拿不到 presetId，而续聊时角色是异步反查出来的（自定义会话恒为 null）——
+     * UI 没有别的渠道知道"这通属于哪个方案"。null 表示**不是**自定义方案通话
+     * （内置角色 / 无角色），空串表示方案没配那一项。
+     */
+    data class PresetVisuals(val avatarUri: String = "", val backgroundUri: String = "")
+
+    private val _presetVisuals = MutableStateFlow<PresetVisuals?>(null)
+    val presetVisuals: StateFlow<PresetVisuals?> = _presetVisuals.asStateFlow()
+
+    /**
      * 实时音量（0f ~ 1f），用于驱动 Live2D 口型同步。
      *
      * - SPEAKING：取 TTS 播放音量（口型跟着合成语音张合）
@@ -121,7 +135,6 @@ class CallViewModel(
     }
 
     private var currentSession: Session? = null
-    private var currentMode: DialogMode = DialogMode.QUICK
 
     /**
      * 当前通话的内置角色（自定义预设通话时为 null）。
@@ -344,92 +357,37 @@ class CallViewModel(
             return base + "\n" + block
         }
 
-    fun startCall(mode: DialogMode) {
-        viewModelScope.launch {
-            currentMode = mode
-            currentCharacter = null
-            // 快速模式/无角色：固定字面量 default（plan4 §2.3 的第三档）
-            memoryCharacterKey = Session.CHARACTER_KEY_DEFAULT
-            currentSession = startCallUseCase.createSession(
-                mode,
-                null,
-                memoryCharacterKey
-            )
-            systemPrompt = currentSession?.systemPrompt
-            // 装配记忆：必须在 beginResponseTurn 之前（plan4 §4.1 的时机）。
-            // ⚠️ 追加的是 effectiveSystemPrompt，不写回 currentSession / 数据库。
-            loadMemoryPromptBlock(memoryCharacterKey)
-            _messages.value = emptyList()
-
-            // 如果使用 Vosk，初始化模型
-            val currentConfig = configRepository.configFlow.first()
-            if (currentConfig.asrProvider == "vosk") {
-                val asrEngine = appModule.asrEngine
-                val modelId = currentConfig.asrVoskModelId.ifEmpty { "vosk-model-small-cn-0.22" }
-                if (!asrEngine.initVoskModel(modelId)) {
-                    _callState.value = CallState.ENDED
-                    return@launch
-                }
-            }
-
-            // 自动发送"你好"发起对话
-            currentTtsPrompt = currentConfig.ttsPrompt
-            beginResponseTurn()
-            val greetingPcm = ByteArray(0) // 空音频，跳过ASR
-            try {
-                val (userMsg, assistantMsg) = processAudioUseCase.processAudio(
-                    pcmData = greetingPcm,
-                    // 开场问候轮用**原始**提示词：记忆从第二轮起才带（plan4 §4.1）
-                    systemPrompt = systemPrompt,
-                    history = emptyList(),
-                    mode = currentMode,
-                    isAutoGreeting = true,
-                    autoGreetingText = "你好",
-                    ttsPrompt = currentTtsPrompt,
-                    expressions = currentExpressions,
-                    ttsPolicy = currentTtsPolicy,
-                    onStateChange = { state -> onState(state) },
-                    onUserMessage = ::appendUserMessage,
-                    onPartialResponse = { partial -> onPartial(partial) },
-                    onExpression = ::cueExpression
-                )
-
-                val newMessages = mutableListOf(userMsg)
-                if (assistantMsg != null) newMessages.add(assistantMsg)
-                _messages.value = newMessages
-                endResponseTurn()
-
-                currentSession?.let { session ->
-                    manageSessionUseCase.saveCallMessages(session.id, _messages.value)
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("CallVM", "打招呼失败: ${e.message}")
-                _callState.value = CallState.ENDED
-                return@launch
-            }
-
-            // 进入监听状态
-            _callState.value = CallState.LISTENING
-            startListening()
-            // 开聊即补总结（不阻塞通话）：上一通若是断网/被杀挂断，记忆在这里被捡回来
-            requestMemoryCatchUp(memoryCharacterKey)
-        }
-    }
-
     fun continueSession(sessionId: String) {
         viewModelScope.launch {
             val session = manageSessionUseCase.getSession(sessionId)
             if (session != null) {
-                currentMode = session.mode
                 currentSession = session
-                systemPrompt = session.systemPrompt
                 // 记忆角色键只能从会话那一列读回来：续聊手里只有 sessionId，
                 // 自定义预设靠提示词反查推不出来（plan4 §2.3 / P1）
                 memoryCharacterKey = session.characterKey
-                // 续聊要恢复原角色的形象与发声策略。
-                // 判据是提示词内容与内置角色的提示词一致 —— 会话表里没存角色 id
-                // （加字段要走 Room 迁移，收益不抵成本），而提示词是角色的决定性特征。
-                currentCharacter = matchCharacterByPrompt(session.systemPrompt)
+                val currentConfig = configRepository.configFlow.first()
+                // 续聊要恢复原角色的形象、提示词与发声策略。判据**优先用会话上那一列角色键**：
+                // 它落库时就写明了"这通属于谁"，比拿提示词全文去和 assets 比对可靠 ——
+                // 后者只要方案的提示词与某个内置角色逐字相同就会串味（用错头像/音色）。
+                val preset = Session.presetIdFromCharacterKey(session.characterKey)
+                    ?.let { appModule.presetDao.getPresetById(it) }
+                if (preset != null) {
+                    // 自定义方案：提示词 / 音色 / TTS 语气 / 头像背景全部从 presets 表那一行恢复。
+                    // 缺了这一步，方案通话一续聊就退化成"裸模型 + 全局音色 + 银狼头像"。
+                    restorePresetContext(preset)
+                } else {
+                    // 内置角色（或推不出角色的存量会话）：提示词是角色的决定性特征
+                    // （会话表里没存角色 id，加字段要走 Room 迁移，收益不抵成本）
+                    currentCharacter = matchCharacterByPrompt(session.systemPrompt)
+                    systemPrompt = session.systemPrompt.ifEmpty { null }
+                    // TTS 语气同样要恢复，口径与 startCharacterCall 一致：
+                    // 准备页为该角色单独设的那一格 → 角色自带默认 → 全局兜底
+                    currentTtsPrompt = currentCharacter?.let { c ->
+                        currentConfig.getTtsPromptForCharacter(c.id, c.defaultTtsPrompt)
+                            .ifEmpty { currentConfig.ttsPrompt }
+                    } ?: currentConfig.ttsPrompt
+                    _presetVisuals.value = null
+                }
                 // 续聊同样要带记忆（plan4 §4.1）。这里只是**追加**到本次请求，
                 // 绝不写回 session —— 写回去就是每续一次长一截，越续越长。
                 // 续聊没有"开场问候轮"（列表非空），所以这里装好就直接生效。
@@ -444,6 +402,23 @@ class CallViewModel(
                 _callState.value = CallState.ENDED
             }
         }
+    }
+
+    /**
+     * 装配一通**自定义方案**通话的上下文（开聊与续聊共用同一条路径）。
+     *
+     * 全部取自 `presets` 表那一行，而不是会话快照：方案是用户随时可改的数据，
+     * 改了提示词/音色后续聊应当按**最新**的方案说话。（内置角色相反 ——
+     * 它们的提示词是随版本发布的 assets 资产，续聊以库里那份为准，见 [continueSession]。）
+     */
+    private fun restorePresetContext(preset: PresetEntity) {
+        // 自定义方案不属于任何内置角色：形象/表情/发声策略全部跟随设置与方案自身
+        currentCharacter = null
+        systemPrompt = preset.prompt.ifEmpty { null }
+        presetRefAudioBase64 = preset.refAudioBase64
+        presetRefAudioMime = preset.refAudioMime
+        currentTtsPrompt = preset.ttsPrompt
+        _presetVisuals.value = PresetVisuals(preset.avatarUri, preset.backgroundUri)
     }
 
     /** 按会话的系统提示词反查内置角色（匹配不上返回 null，即当作自定义会话） */
@@ -474,11 +449,11 @@ class CallViewModel(
             return
         }
         viewModelScope.launch {
-            currentMode = DialogMode.LONG
             currentCharacter = character
             // 自定义预设的残留要清掉，否则会串到内置角色上
             presetRefAudioBase64 = null
             presetRefAudioMime = null
+            _presetVisuals.value = null
             // 内置角色的记忆桶 = 角色 id（plan4 §2.3 第一档）
             memoryCharacterKey = character.id
             currentSession = startCallUseCase.createSession(DialogMode.LONG, character, memoryCharacterKey)
@@ -497,8 +472,12 @@ class CallViewModel(
                 }
             }
 
-            // TTS 风格提示词：角色有默认值就用角色的，否则跟随全局设置
-            currentTtsPrompt = character.defaultTtsPrompt.ifEmpty { currentConfig.ttsPrompt }
+            // TTS 风格提示词：准备页为该角色单独设的那一格 → 角色自带默认 → 全局兜底。
+            // ⚠️ 中间那一档（characterTtsPrompts）以前漏读了：准备页写进去、通话却只读
+            // defaultTtsPrompt，于是"改了没反应"；银狼（默认语气为空）还会回落到**全局**
+            // ttsPrompt，等于把别的角色的语气串过来。
+            currentTtsPrompt = currentConfig.getTtsPromptForCharacter(character.id, character.defaultTtsPrompt)
+                .ifEmpty { currentConfig.ttsPrompt }
 
             beginResponseTurn()
             try {
@@ -506,7 +485,6 @@ class CallViewModel(
                     pcmData = ByteArray(0),
                     systemPrompt = systemPrompt,
                     history = emptyList(),
-                    mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = "你好",
                     // 角色自带音色只作为兜底：用户在准备页里选的音频优先级更高
@@ -544,27 +522,25 @@ class CallViewModel(
         viewModelScope.launch {
             val preset = appModule.presetDao.getPresetById(presetId)
             if (preset != null) {
-                // 自定义预设不属于任何内置角色：形象/表情/发声全部跟随设置与预设自身
-                currentCharacter = null
-                // 使用预设的提示词和音频
-                systemPrompt = preset.prompt.ifEmpty { null }
-                currentMode = DialogMode.CUSTOM
+                // 提示词 / 音频 / TTS 语气 / 头像背景全部来自方案本身（不污染全局配置）。
+                // 与续聊共用同一条装配路径，保证"开聊"与"续聊"看到的方案完全一致。
+                restorePresetContext(preset)
                 // 自定义预设的记忆隔离键：只有这条路径知道 presetId，
                 // 续聊时靠 session 上那一列读回来（plan4 §2.3 / P1）
                 memoryCharacterKey = Session.presetCharacterKey(presetId)
                 currentSession = startCallUseCase.createSession(
-                    DialogMode.CUSTOM,
-                    null,
-                    memoryCharacterKey
+                    mode = DialogMode.CUSTOM,
+                    character = null,
+                    characterKey = memoryCharacterKey,
+                    // ⚠️ 方案提示词必须真的落进 sessions.systemPrompt。只放内存字段的话，
+                    // 通话中看着正常，一旦「继续对话」从库里读回的就是空串 —— 人设全丢。
+                    systemPromptOverride = preset.prompt
                 )
+                // 以库里那一份为准：保证"本次请求用的"与"续聊读回的"是同一个字符串
+                systemPrompt = currentSession?.systemPrompt?.ifEmpty { null }
                 // 预设桶的记忆在开轮前就位（plan4 §4.1）；开场问候轮用原始 systemPrompt
                 loadMemoryPromptBlock(memoryCharacterKey)
                 _messages.value = emptyList()
-
-                // 保存预设音频到ViewModel本地字段，不污染全局配置
-                presetRefAudioBase64 = preset.refAudioBase64
-                presetRefAudioMime = preset.refAudioMime
-                currentTtsPrompt = preset.ttsPrompt
 
                 // 如果使用 Vosk，初始化模型
                 val currentConfig = configRepository.configFlow.first()
@@ -584,7 +560,6 @@ class CallViewModel(
                         pcmData = ByteArray(0),
                         systemPrompt = systemPrompt,
                         history = emptyList(),
-                        mode = currentMode,
                         isAutoGreeting = true,
                         autoGreetingText = "你好",
                         overrideRefAudioBase64 = preset.refAudioBase64,
@@ -672,7 +647,6 @@ class CallViewModel(
                     // 这里读的是"提示词 + 记忆块"的合成体。
                     systemPrompt = effectiveSystemPrompt,
                     history = _messages.value,
-                    mode = currentMode,
                     // 预设音频优先级最高；内置角色音色作为兜底
                     overrideRefAudioBase64 = presetRefAudio,
                     overrideRefAudioMime = presetRefAudioMimeValue,
@@ -732,7 +706,6 @@ class CallViewModel(
                     // 的开关），所以照常带记忆（plan4 §4.1 只豁免问候轮）
                     systemPrompt = effectiveSystemPrompt,
                     history = _messages.value,
-                    mode = currentMode,
                     isAutoGreeting = true,
                     autoGreetingText = text,
                     // 预设音频优先级最高；内置角色音色作为兜底
@@ -947,6 +920,7 @@ class CallViewModel(
         audioPlayer.stopCurrentPlayback()
         presetRefAudioBase64 = null
         presetRefAudioMime = null
+        _presetVisuals.value = null
     }
 
     class Factory(

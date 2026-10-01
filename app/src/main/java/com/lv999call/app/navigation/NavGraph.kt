@@ -1,6 +1,10 @@
 package com.lv999call.app.navigation
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -243,14 +247,30 @@ fun NavGraph() {
         ) { backStackEntry ->
             val presetId = backStackEntry.arguments?.getLong("presetId") ?: 0L
 
-            // 加载已有预设数据
-            var loadedPreset by remember { mutableStateOf<com.lv999call.app.data.local.entity.PresetEntity?>(null) }
+            // 加载已有预设数据。⚠️ 加载完成前**不渲染编辑页**：编辑页把 current* 当作
+            // 初始值 `remember` 下来，先渲染空表单再回填，会把用户已经敲进去的内容覆盖掉。
+            // 用一个显式的 ready 闸门，比在编辑页里写"外部数据变化就重置本地状态"可靠。
+            var loadedPreset by remember(presetId) { mutableStateOf<com.lv999call.app.data.local.entity.PresetEntity?>(null) }
+            var isPresetLoaded by remember(presetId) { mutableStateOf(presetId <= 0) }
             LaunchedEffect(presetId) {
                 if (presetId > 0) {
                     loadedPreset = presetViewModel.getPreset(presetId)
+                    isPresetLoaded = true
                 }
             }
 
+            // 重名校验用的名字集合：排除当前这一条，否则编辑已有方案时永远"和自己重名"
+            val presets by presetViewModel.presets.collectAsState()
+            val otherPresetNames = remember(presets, presetId) {
+                presets.filter { it.id != presetId }.map { it.name.trim() }.toSet()
+            }
+
+            if (!isPresetLoaded) {
+                Box(modifier = androidx.compose.ui.Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                return@composable
+            }
             CustomEditScreen(
                 presetId = if (presetId > 0) presetId else null,
                 currentName = loadedPreset?.name ?: "",
@@ -260,8 +280,10 @@ fun NavGraph() {
                 currentRefAudioMime = loadedPreset?.refAudioMime ?: "audio/wav",
                 currentAvatarUri = loadedPreset?.avatarUri,
                 currentBackgroundUri = loadedPreset?.backgroundUri,
+                existingNames = otherPresetNames,
                 onSave = { name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
-                    presetViewModel.savePreset(
+                    // 写库完成后再返回：以前是"先 pop 再异步写"，用户手快时可能写库被页面销毁打断
+                    presetViewModel.savePresetAndThen(
                         id = if (presetId > 0) presetId else null,
                         name = name,
                         prompt = prompt,
@@ -270,25 +292,22 @@ fun NavGraph() {
                         refAudioMime = refAudioMime,
                         avatarUri = avatarUri ?: "",
                         backgroundUri = backgroundUri ?: ""
-                    )
-                    navController.popBackStack()
+                    ) { navController.popBackStack() }
                 },
                 onStartCall = { name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri ->
-                    // 先保存预设并获取ID，再导航
-                    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
-                    scope.launch {
-                        val newId = presetViewModel.savePresetAndGetId(
-                            id = if (presetId > 0) presetId else null,
-                            name = name,
-                            prompt = prompt,
-                            ttsPrompt = ttsPrompt,
-                            refAudioBase64 = refAudioBase64,
-                            refAudioMime = refAudioMime,
-                            avatarUri = avatarUri ?: "",
-                            backgroundUri = backgroundUri ?: ""
-                        )
-                        navController.navigate("preset_call/$newId")
-                    }
+                    // 先保存预设并拿到 id，再导航。整条链跑在 PresetViewModel 的
+                    // viewModelScope 上 —— 不再手搓 CoroutineScope（那种 scope 不随页面取消，
+                    // 页面离开后仍会写库并对已销毁的 NavController 触发导航）。
+                    presetViewModel.savePresetAndThen(
+                        id = if (presetId > 0) presetId else null,
+                        name = name,
+                        prompt = prompt,
+                        ttsPrompt = ttsPrompt,
+                        refAudioBase64 = refAudioBase64,
+                        refAudioMime = refAudioMime,
+                        avatarUri = avatarUri ?: "",
+                        backgroundUri = backgroundUri ?: ""
+                    ) { newId -> navController.navigate("preset_call/$newId") }
                 },
                 onBack = { navController.popBackStack() }
             )
@@ -381,6 +400,7 @@ fun NavGraph() {
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
             val activeCharacter by viewModel.character.collectAsState()
+            val presetVisuals by viewModel.presetVisuals.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
@@ -409,9 +429,19 @@ fun NavGraph() {
                 audioLevel = audioLevel, live2dEnabled = config.live2dEnabled,
                 transformEnabled = config.live2dTransformEnabled,
                 character = activeCharacter,
-                avatarUri = config.characterAvatarUri,
-                avatarResId = activeCharacter?.avatarResId ?: com.lv999call.app.R.drawable.touxiang,
+                // 自定义方案（presetVisuals != null）：头像/背景从方案那一行恢复，
+                // 与「开始通话」那条路由同一套口径；内置角色才用角色自带的那两张。
+                // 以前这里一律用全局头像 + activeCharacter 的背景 —— 方案续聊会
+                // 显示银狼头像、还丢掉方案自己的背景。
+                avatarUri = presetVisuals?.avatarUri?.ifEmpty { config.characterAvatarUri }
+                    ?: config.characterAvatarUri,
+                avatarResId = if (presetVisuals != null) {
+                    com.lv999call.app.R.drawable.default_avatar
+                } else {
+                    activeCharacter?.avatarResId ?: com.lv999call.app.R.drawable.touxiang
+                },
                 backgroundResId = activeCharacter?.backgroundResId,
+                backgroundUri = presetVisuals?.backgroundUri?.ifEmpty { null },
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted,

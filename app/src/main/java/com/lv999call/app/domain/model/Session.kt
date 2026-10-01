@@ -37,5 +37,19 @@ data class Session(
          * 极难定位。
          */
         fun presetCharacterKey(presetId: Long): String = "$CHARACTER_KEY_PRESET_PREFIX$presetId"
+
+        /**
+         * [presetCharacterKey] 的逆运算：从角色键反查 presetId；不是预设桶就返回 null。
+         *
+         * 续聊路径（`CALL_CONTINUE/{sessionId}`）只有 sessionId，而 `characterKey` 是会话表里
+         * **唯一**记录「这通属于哪个自定义方案」的列。续聊要恢复方案的提示词 / 音色 / 语气 /
+         * 头像背景，就得靠它反查回 `presets` 那一行 —— 否则方案通话一续聊就退化成裸模型。
+         *
+         * 与写入侧共用同一套前缀，避免"写入用 preset:、读取按别的格式解析"这种静默失配。
+         */
+        fun presetIdFromCharacterKey(characterKey: String): Long? {
+            if (!characterKey.startsWith(CHARACTER_KEY_PRESET_PREFIX)) return null
+            return characterKey.removePrefix(CHARACTER_KEY_PRESET_PREFIX).toLongOrNull()
+        }
     }
 }

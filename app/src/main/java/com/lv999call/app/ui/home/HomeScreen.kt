@@ -145,7 +145,9 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { showDeleteDialog = null },
             title = { Text("删除方案") },
-            text = { Text("确定要删除这个自定义方案吗？") },
+            // 说清楚"删方案 ≠ 删记忆"：记忆行只挂在会话上（外键），不会随方案一起消失，
+            // 不写这句用户会以为删了方案记忆就没了（或反过来，以为记忆被悄悄删了）
+            text = { Text("确定要删除这个自定义方案吗？\n它留下的记忆仍会保留在「🧠 记忆库」里，可在那里单独删除。") },
             confirmButton = {
                 TextButton(onClick = { onDeletePreset(presetId); showDeleteDialog = null }) {
                     Text("删除", color = colors.error)

@@ -62,10 +62,12 @@ data class ApiConfig(
     val ttsModel: String = "mimo-v2.5-tts-voiceclone",
 
     /**
-     * 全局 TTS 风格提示词（自定义预设 / 快速模式用）。
+     * 全局 TTS 风格提示词 —— **兜底**用。
      *
-     * 内置角色**不用**这一项：每个角色有自己的 [characterTtsPrompts]，
-     * 否则在 DeepSeek酱 页面改一句语气，会连带把银狼的语气也改掉 ——
+     * 取值优先级：`characterTtsPrompts[角色 id]`（准备页里为该角色单独设置的那一格）
+     * → [BuiltInCharacter.defaultTtsPrompt] → 这一份（如银狼：它没有自带默认语气）。
+     * 自定义方案有自己的一份（`PresetEntity.ttsPrompt`，编辑页里配），不走这里 ——
+     * 否则在 DeepSeek酱 页面改一句语气会连带把银狼的语气也改掉，
      * 这正是"并列预设"要避免的互相污染。
      */
     val ttsPrompt: String = "",
@@ -77,20 +79,20 @@ data class ApiConfig(
      */
     val characterTtsPrompts: Map<String, String> = emptyMap(),
 
-    // 全局默认参考音频（设置页管理，快速/长提示词模式使用）
+    /**
+     * 全局默认参考音频（设置页管理）。
+     *
+     * 优先级（见 ProcessAudioUseCase 的发声来源说明）：
+     * 角色锁定策略 > 自定义方案自带音频 > 这一份 > 角色自带兜底音色。
+     * 早期还有一份 `customTtsReferenceAudioBase64`（"自定义模式专用"），但那条模式入口
+     * 已不存在、也没有任何 UI 能写它，属于死配置，已撤掉。
+     */
     val ttsReferenceAudioBase64: String = "",
     val ttsReferenceAudioMime: String = "audio/wav",
-
-    // 自定义模式专用参考音频（自定义编辑页管理，仅自定义模式使用）
-    val customTtsReferenceAudioBase64: String = "",
-    val customTtsReferenceAudioMime: String = "audio/wav",
 
     // 角色配置
     val characterAvatarUri: String = "",
     val backgroundUri: String = "",
-
-    // 自定义模式提示词
-    val customPrompt: String = "",
 
     // 通话界面使用 Live2D 动态形象（关闭后回退到静态头像）
     val live2dEnabled: Boolean = true,
@@ -119,24 +121,6 @@ data class ApiConfig(
      */
     val memorySummarizeShortCalls: Boolean = false
 ) {
-    /** 根据对话模式获取对应的参考音频 */
-    fun getRefAudioForMode(mode: DialogMode): String {
-        return if (mode == DialogMode.CUSTOM && customTtsReferenceAudioBase64.isNotEmpty()) {
-            customTtsReferenceAudioBase64
-        } else {
-            ttsReferenceAudioBase64
-        }
-    }
-
-    /** 根据对话模式获取对应的参考音频MIME */
-    fun getRefAudioMimeForMode(mode: DialogMode): String {
-        return if (mode == DialogMode.CUSTOM && customTtsReferenceAudioBase64.isNotEmpty()) {
-            customTtsReferenceAudioMime
-        } else {
-            ttsReferenceAudioMime
-        }
-    }
-
     /**
      * 取某内置角色的 TTS 风格提示词。
      *

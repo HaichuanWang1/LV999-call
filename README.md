@@ -227,6 +227,28 @@ bash tools/setup_live2d_assets.sh
 2. `NavGraph` 的内置角色路由**优先用路由参数里同步已知的角色**，而不是等
    ViewModel 的异步状态 —— 否则首帧仍会按银狼建一次再重载，白闪一下。
 
+### 自定义方案的「继续对话」怎么恢复上下文
+
+自定义方案（`presets` 表）与内置角色有两点本质区别，续聊的处理因此不能共用一条路径：
+
+| | 提示词来源 | 形象 / 音色 | 续聊的判据 |
+|---|---|---|---|
+| 内置角色 | assets 资产，随版本发布 | 角色自带（头像/背景/音色/表情集） | `matchCharacterByPrompt`：提示词全文比对 assets |
+| 自定义方案 | `presets.prompt`，用户随时可改 | 方案自带（头像/背景/参考音频/TTS 语气） | `sessions.characterKey` = `preset:<id>`，反查回那一行 |
+
+- **方案提示词必须真的落库**：`startPresetCall` 通过
+  `StartCallUseCase.createSession(systemPromptOverride = preset.prompt)` 把它写进
+  `sessions.systemPrompt`。只放在 ViewModel 内存里的话，通话中看着一切正常，
+  一旦续聊（`continueSession` 从库里读回）人设就整个消失 —— 这是「自定义板块
+  续聊即裸聊」的根因。
+- **续聊按 `characterKey` 反查方案**（`Session.presetIdFromCharacterKey`），
+  恢复提示词、参考音频、TTS 语气、头像与背景，与「开始通话」共用
+  `CallViewModel.restorePresetContext`，保证两条路径看到的方案完全一致。
+- 因此**不**用"拿提示词去和 assets 比对"来认自定义方案：方案提示词只要与某个
+  内置角色逐字相同，就会用错头像/背景/发声策略（`characterKey` 才是可靠判据）。
+- 方案被删除后，历史会话仍保留它当初的提示词（`sessions.systemPrompt` 是快照），
+  但音色/头像/背景会退回默认 —— 记忆仍留在 `preset:<id>` 桶里可看可删。
+
 ## Live2D 形象
 
 ### 工作原理

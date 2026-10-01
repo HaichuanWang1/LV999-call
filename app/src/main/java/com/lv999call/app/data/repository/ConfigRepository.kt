@@ -53,13 +53,13 @@ class ConfigRepository(private val context: Context) {
         val TTS_REF_AUDIO_BASE64 = stringPreferencesKey("tts_ref_audio_base64")
         val TTS_REF_AUDIO_MIME = stringPreferencesKey("tts_ref_audio_mime")
 
-        // 自定义模式专用参考音频
-        val CUSTOM_TTS_REF_AUDIO_BASE64 = stringPreferencesKey("custom_tts_ref_audio_base64")
-        val CUSTOM_TTS_REF_AUDIO_MIME = stringPreferencesKey("custom_tts_ref_audio_mime")
+        // 曾经还有 `custom_tts_ref_audio_base64/mime` 与 `custom_prompt` 三个键
+        // （"自定义模式"专用）。那条模式入口已不存在、也没有任何 UI 能写它们，
+        // 属于死配置，已连同 ApiConfig 的对应字段一起撤掉 ——
+        // 留下的旧值不会被读取，也不影响其他配置。
 
         val CHARACTER_AVATAR_URI = stringPreferencesKey("character_avatar_uri")
         val BACKGROUND_URI = stringPreferencesKey("background_uri")
-        val CUSTOM_PROMPT = stringPreferencesKey("custom_prompt")
         val LIVE2D_ENABLED = stringPreferencesKey("live2d_enabled")
         val LIVE2D_TRANSFORM_ENABLED = stringPreferencesKey("live2d_transform_enabled")
 
@@ -101,11 +101,8 @@ class ConfigRepository(private val context: Context) {
             characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
             ttsReferenceAudioMime = prefs[TTS_REF_AUDIO_MIME] ?: "audio/wav",
-            customTtsReferenceAudioBase64 = prefs[CUSTOM_TTS_REF_AUDIO_BASE64] ?: "",
-            customTtsReferenceAudioMime = prefs[CUSTOM_TTS_REF_AUDIO_MIME] ?: "audio/wav",
             characterAvatarUri = prefs[CHARACTER_AVATAR_URI] ?: "",
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
-            customPrompt = prefs[CUSTOM_PROMPT] ?: "",
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
             live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
@@ -135,21 +132,12 @@ class ConfigRepository(private val context: Context) {
             prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(config.characterTtsPrompts)
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64
             prefs[TTS_REF_AUDIO_MIME] = config.ttsReferenceAudioMime
-            prefs[CUSTOM_TTS_REF_AUDIO_BASE64] = config.customTtsReferenceAudioBase64
-            prefs[CUSTOM_TTS_REF_AUDIO_MIME] = config.customTtsReferenceAudioMime
             prefs[CHARACTER_AVATAR_URI] = config.characterAvatarUri
             prefs[BACKGROUND_URI] = config.backgroundUri
-            prefs[CUSTOM_PROMPT] = config.customPrompt
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()
             prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
             prefs[MEMORY_AUTO_SUMMARIZE_ENABLED] = config.memoryAutoSummarizeEnabled.toString()
             prefs[MEMORY_SUMMARIZE_SHORT_CALLS] = config.memorySummarizeShortCalls.toString()
-        }
-    }
-
-    suspend fun updateCustomPrompt(prompt: String) {
-        context.dataStore.edit { prefs ->
-            prefs[CUSTOM_PROMPT] = prompt
         }
     }
 

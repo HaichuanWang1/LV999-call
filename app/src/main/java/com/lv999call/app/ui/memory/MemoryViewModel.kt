@@ -313,7 +313,9 @@ class MemoryViewModel(
     private fun roleNameOf(characterKey: String, presetNames: Map<Long, String>): String = when {
         characterKey == Session.CHARACTER_KEY_DEFAULT -> DEFAULT_ROLE_NAME
         characterKey.startsWith(Session.CHARACTER_KEY_PRESET_PREFIX) -> {
-            val presetId = characterKey.removePrefix(Session.CHARACTER_KEY_PRESET_PREFIX).toLongOrNull()
+            // 解析口径与写入侧共用 Session.presetIdFromCharacterKey：两处各写一份
+            // "去掉 preset: 前缀再 toLong" 的话，将来改前缀就会静默失配
+            val presetId = Session.presetIdFromCharacterKey(characterKey)
             (presetId?.let { presetNames[it] }) ?: PRESET_FALLBACK_NAME
         }
         else -> BuiltInCharacters.byId(characterKey)?.displayName ?: characterKey

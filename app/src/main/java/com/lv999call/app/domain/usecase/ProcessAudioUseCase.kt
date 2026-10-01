@@ -9,7 +9,6 @@ import com.lv999call.app.domain.model.ApiConfig
 import com.lv999call.app.domain.model.AsrEmptyException
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
-import com.lv999call.app.domain.model.DialogMode
 import com.lv999call.app.domain.model.ExpressionSet
 import com.lv999call.app.domain.model.Live2DExpression
 import com.lv999call.app.domain.model.TtsPolicy
@@ -97,7 +96,6 @@ class ProcessAudioUseCase(
         pcmData: ByteArray,
         systemPrompt: String?,
         history: List<ChatMessage>,
-        mode: DialogMode,
         isAutoGreeting: Boolean = false,
         autoGreetingText: String = "",
         overrideRefAudioBase64: String? = null,
@@ -278,12 +276,16 @@ class ProcessAudioUseCase(
             //   3. 用户在设置/准备页里主动选的参考音频；
             //   4. 角色自带的参考音频（如银狼内置音色）作为兜底 ——
             //      放在最后是为了让用户的主动选择始终生效。
+            //
+            // ⚠️ 第 3 档曾经按对话模式分成"自定义模式专用音频 / 全局音频"两份
+            // （`getRefAudioForMode`）。那条模式入口已不存在、专用那份也没有 UI 能写，
+            // 于是分支只剩"读全局"，徒增一个可能读错配置的口子，已收敛成一份。
             val refAudio: String = overrideRefAudioBase64?.takeIf { it.isNotEmpty() }
-                ?: config.getRefAudioForMode(mode).takeIf { it.isNotEmpty() }
+                ?: config.ttsReferenceAudioBase64.takeIf { it.isNotEmpty() }
                 ?: fallbackRefAudioBase64?.takeIf { it.isNotEmpty() }
                 ?: ""
             val refMime: String = overrideRefAudioMime?.takeIf { overrideRefAudioBase64?.isNotEmpty() == true }
-                ?: config.getRefAudioMimeForMode(mode).takeIf { config.getRefAudioForMode(mode).isNotEmpty() }
+                ?: config.ttsReferenceAudioMime.takeIf { config.ttsReferenceAudioBase64.isNotEmpty() }
                 ?: fallbackRefAudioMime?.takeIf { fallbackRefAudioBase64?.isNotEmpty() == true }
                 ?: "audio/wav"
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime, policy=${ttsPolicy ?: "inherit"}")

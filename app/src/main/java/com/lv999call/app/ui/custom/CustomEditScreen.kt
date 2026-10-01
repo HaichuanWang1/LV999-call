@@ -43,6 +43,13 @@ fun CustomEditScreen(
     currentRefAudioMime: String,
     currentAvatarUri: String?,
     currentBackgroundUri: String?,
+    /**
+     * 已存在的其他方案名（**不含**当前正在编辑的这个）。
+     *
+     * 用来拦住重名：首页卡片、记忆库的「自定义」筛选都只显示方案名，
+     * 两个同名方案在那里完全无法区分；顺带避免用户以为自己改的是另一个方案。
+     */
+    existingNames: Set<String> = emptySet(),
     onSave: (name: String, prompt: String, ttsPrompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
     onStartCall: (name: String, prompt: String, ttsPrompt: String, refAudioBase64: String, refAudioMime: String, avatarUri: String?, backgroundUri: String?) -> Unit,
     onBack: () -> Unit
@@ -63,6 +70,15 @@ fun CustomEditScreen(
     var isExtractingAudio by remember { mutableStateOf(false) }
     var showSourceDialog by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+
+    // 名称校验：空名会让首页出现一张没有标题的卡片；重名则在首页/记忆库里无法区分。
+    // 只在**提交时**不该报错，所以这里做实时校验并直接把两个提交按钮禁掉。
+    val trimmedName = name.trim()
+    val nameError: String? = when {
+        trimmedName.isEmpty() -> "方案名称不能为空"
+        trimmedName in existingNames -> "已有同名方案，换一个名字"
+        else -> null
+    }
 
     // 当加载的预设数据变化时，同步到本地状态
     LaunchedEffect(currentName, currentPrompt, currentTtsPrompt, currentRefAudioBase64, currentAvatarUri, currentBackgroundUri) {
@@ -139,6 +155,10 @@ fun CustomEditScreen(
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("给方案起个名字...", color = colors.onSurfaceVariant.copy(alpha = 0.4f)) },
                     singleLine = true,
+                    isError = nameError != null,
+                    supportingText = if (nameError != null) {
+                        { Text(nameError, color = colors.error) }
+                    } else null,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = colors.primary, unfocusedBorderColor = colors.outline,
                         focusedTextColor = colors.onSurface, unfocusedTextColor = colors.onSurface, cursorColor = colors.tertiary
@@ -226,18 +246,20 @@ fun CustomEditScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
-                    onClick = { onSave(name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
+                    onClick = { onSave(trimmedName, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
                     modifier = Modifier.weight(1f).height(48.dp),
-                    shape = shapes.medium
+                    shape = shapes.medium,
+                    enabled = nameError == null
                 ) {
                     Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("保存")
                 }
                 Button(
-                    onClick = { onStartCall(name, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
+                    onClick = { onStartCall(trimmedName, prompt, ttsPrompt, refAudioBase64, refAudioMime, avatarUri, backgroundUri) },
                     modifier = Modifier.weight(1f).height(48.dp),
                     shape = shapes.medium,
+                    enabled = nameError == null,
                     colors = ButtonDefaults.buttonColors(containerColor = colors.primary)
                 ) {
                     Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp))

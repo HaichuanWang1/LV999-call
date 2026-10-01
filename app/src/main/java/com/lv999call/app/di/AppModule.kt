@@ -110,7 +110,7 @@ class AppModule(private val context: Context) {
         return if (p is TtsPolicy.CloneVoice) p.refAudioMime else null
     }
 
-    val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, configRepository, context) }
+    val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, context) }
     val manageSessionUseCase: ManageSessionUseCase by lazy { ManageSessionUseCase(sessionRepository) }
     val processAudioUseCase: ProcessAudioUseCase by lazy {
         ProcessAudioUseCase(
