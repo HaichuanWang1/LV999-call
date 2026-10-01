@@ -100,11 +100,26 @@
       waves: 2.2,       // 一个 duration 内包含几个"上下"周期（= 被揉了几下）
 
       /**
-       * 命中区。坐标是**模型内容包围盒的归一化值**（0~1，原点在包围盒左上角）。
+       * 命中区 = **头部部件的顶点包围盒**（不再手调矩形）。
        *
-       * 为什么相对包围盒而不是屏幕：包围盒随模型与布局变化，用相对值在
-       * 不同宽高比的舞台上都能用；再配合 L2D.debugPatHit(true) 画框标定即可。
-       * 这里的初值是保守估计（头顶那一带），真机上调一次就够。
+       * 为什么换掉矩形：Q 版银狼与半身立绘 DeepSeek 酱的头，位置与大小完全不同，
+       * 同一个"内容包围盒上 42%"不可能同时对；而且矩形是**静态**的，模型呼吸、
+       * 转头、换布局之后"看到的头"就偏了 —— 旧实现因此经常点了没反应。
+       *
+       * 现在的判定：在点击那一刻，取这些部件下所有 drawable 的顶点求 AABB，
+       * 按 layout() 的变换换算到视口，再外扩 padRatio。天然贴合、天然跟随姿态。
+       *
+       * 列表由 `tools/live2d_dump_parts.py` 从模型的 cdi3.json（部件显示名）
+       * 生成 —— 换模型/换版本时重跑脚本，**不要手写 id**。
+       */
+      headParts: [],
+      padRatio: 0.08,
+
+      /**
+       * 兜底矩形（归一化到模型内容包围盒，0~1，左上为原点）。
+       *
+       * 只在拿不到 Core 的部件/顶点数据时启用（老运行时、模型异常）。
+       * 正常情况下不该参与判定 —— 它正是旧实现"点了没反应"的根源。
        */
       hit: { x0: 0.18, x1: 0.82, y0: 0.00, y1: 0.42 },
 
@@ -269,11 +284,19 @@
 
       // ==================== 摸头反应 ====================
       //
-      // 银狼是 Q 版，头相对身体偏大，hit 可以给宽一点（0.18~0.82）。
+      // 银狼是 Q 版，头相对身体偏大；命中盒由部件顶点算，不写矩形。
       // sway 有效：这个模型的 ParamBodyAngleZ 不是物理输出（与 DeepSeek 酱相反）。
       // 表情用模型自带的「02 脸红爱心」—— 被摸头脸红是最贴的反应。
+      //
+      // headParts 由 tools/live2d_dump_parts.py 生成（15 个）：
+      //   头饰 / 前发 / 五官 / 脸 / 头饰后 / 后发 / 闭眼 / 眼泪 / 眉毛 /
+      //   眼睛 / 嘴巴 / 耳朵 / 闭嘴 / 张嘴 / 生气嘴
+      // 刻意不含「脖子」（在头下面，含进去会让"摸头"下探到肩膀）与
+      // 三个眼镜部件（贴片；其中两个还是变身特效）。
       pat: {
-        hit: { x0: 0.18, x1: 0.82, y0: 0.00, y1: 0.42 },
+        headParts: ['Part78', 'Part89', 'Part94', 'Part127', 'Part158', 'Part159',
+                    'Part95', 'Part102', 'Part112', 'Part113', 'Part120', 'Part128',
+                    'Part121', 'Part125', 'Part126'],
         amp: { tilt: 3.2, brow: 0.18, smile: 0.22, squint: 0.20, mouthForm: 0.10, sway: 1.6 },
         expression: '02 脸红爱心',
         holdMs: 1200
@@ -384,8 +407,18 @@
       //   - smile / squint 也留 0：该模型没有 ParamEyeLSmile / ParamEyeLSquint
       //     这些参数，写着不报错但毫无效果，留着只会让调参时困惑。
       // 所以这档的手感主要靠 tilt（歪头）+ brow + mouthForm，再加上表情「脸红」。
+      //
+      // headParts 由 tools/live2d_dump_parts.py 生成（19 个）：
+      //   发型1 / 恶魔角 / 眉型 / 眼睛L / 眼睛R / 发型F2 / 动物耳朵L / 头发 /
+      //   动物耳朵R / 嘴巴 / 耳朵L / 脸蛋 / 耳朵R / 发型D2 / 发型蛋筒D2 /
+      //   猫猫耳 / 兔兔耳 / 后发短 / R耳
+      // 这个模型有一堆"发型/耳朵预设"替换件：这里全留着，靠运行时的
+      // opacity 过滤把没启用的那几套剔掉（它们被切换时部件不透明度会归零）。
       pat: {
-        hit: { x0: 0.16, x1: 0.84, y0: 0.00, y1: 0.40 },
+        headParts: ['Part92', 'Part48', 'Part101', 'Part57', 'Part58', 'Part19',
+                    'Part44', 'Part14', 'Part47', 'Part69', 'Part68', 'Part46',
+                    'Part45', 'Part160', 'Part161', 'Part98', 'Part95', 'hair_d',
+                    'Part96'],
         amp: { tilt: 3.0, brow: 0.16, smile: 0, squint: 0, mouthForm: 0.08, sway: 0 },
         expression: '脸红',
         holdMs: 1200
@@ -472,8 +505,12 @@
   var _patCooldownUntil = -1;  // 冷却结束时间（连点直接忽略）
   var _patValue = {};          // 当前摸头层的通道叠加值（与 _idleValue 同构）
   var _patDebug = false;       // 调试：画出命中区
-  var _patLastHit = null;      // 调试：最近一次命中判定 {ok,nx,ny,bx,by}
+  var _patLastHit = null;      // 调试：最近一次命中判定 {ok,nx,ny,src,box}
   var _patBoxEl = null;        // 调试用的命中框 DOM（仅 _patDebug 时存在）
+  var _headPartIdx = null;     // 头部部件索引集合（换模型时清）
+  var _patDownAt = -1;         // 手势：按下时刻（performance.now()，毫秒）
+  var _patDownX = 0;           // 手势：按下位置（clientX/Y，用于判"划走了"）
+  var _patDownY = 0;
 
   // layout() 算出的布局量缓存（给摸头命中判定用）。
   // 每次 layout() 覆盖；换模型/销毁时清掉，避免拿上一份模型的数据做判定。
@@ -832,51 +869,250 @@
 
   // ======================= 摸头反应（CFG.pat）=======================
   /**
-   * 把「视口归一化坐标 → 内容包围盒的宽高比」换算出来。
+   * 取 Cubism Core 的原始模型对象。
    *
-   * 为什么要这层换算：宿主（Android 侧）只能给出相对舞台的归一化坐标，
-   * 而命中区是相对**模型内容包围盒**定义的（这样换模型换布局都不用重标）。
-   * layout() 的公式就在这里复算一遍：内容包围盒在包围盒坐标系里恒为
-   * (0,0,w,h)，映射到屏幕后除以视口尺寸即得。
+   * 为什么要绕到 `_model`：框架层（CubismModel）只给了"顶点"和"部件"各自的取值，
+   * 唯独没有"这个 drawable 属于哪个部件"的映射（`getDrawableParentPartIndex`
+   * 不在包里，已逐条核对 cubism4.min.js）。而 Core 的
+   * `Drawables.parentPartIndices` / `Parts.parentIndices` 正好就是这张映射表 ——
+   * 头部包围盒全靠它。
    *
-   * @returns null 表示当前量不到（模型没就绪 / 包围盒取不到）
+   * 属性名未被混淆（已核对 live2dcubismcore.min.js），但它毕竟是框架内部字段：
+   * 取不到就返回 null，由调用方回落到 CFG.pat.hit 矩形。
    */
-  function patHitBox() {
+  function coreRaw() {
     try {
-      var L = _layoutCache;
-      if (!L || !L.sw || !L.sh) return null;
-
-      // 画布中心 → 内容包围盒左上角的本地偏移（与 layout() 里 contentCx/Cy 同源）
-      var left = L.x + (L.cb.x - L.canvasW / 2) * L.scale;
-      var top = L.y + (L.cb.y - L.canvasH / 2) * L.scale;
-      return {
-        x: left / L.sw,
-        y: top / L.sh,
-        w: (L.cb.width * L.scale) / L.sw,
-        h: (L.cb.height * L.scale) / L.sh
-      };
-    } catch (e) {
-      return null;
-    }
+      var core = model && model.internalModel && model.internalModel.coreModel;
+      return (core && core._model) || null;
+    } catch (e) { return null; }
   }
 
   /**
-   * 命中判定：视口归一化坐标 (nx, ny) 是否落在 CFG.pat.hit 里
+   * 头部部件索引集合（带缓存，换模型时清）。
    *
-   * 注意：内容包围盒常常**远大于视口**（fillRatio > 1 就是刻意放大裁切），
-   * 所以命中区经常有一部分在屏幕外 —— 这是正常的，"摸头"本来就只需要
-   * 顶部那一带在屏幕内即可。
+   * 集合不只是 headParts 里那几个部件本身：模型里网格常常挂在**子部件**上
+   * （"眼睛"挂在"脸"下面这种），所以对每个部件向上溯祖先链 ——
+   * 链上任意一级命中 headParts，这个部件就属于头部。
+   * guard 是防呆：部件层级理论上无环，但数据坏了不能把渲染线程转死。
+   */
+  function headPartIndexSet(raw) {
+    if (_headPartIdx) return _headPartIdx;
+    var ids = CFG.pat.headParts || [];
+    var p = raw && raw.parts;
+    if (!ids.length || !p || !p.ids || !p.parentIndices) return null;
+
+    var want = {}, i;
+    for (i = 0; i < ids.length; i++) want[String(ids[i])] = true;
+
+    var all = p.ids, par = p.parentIndices, n = all.length, set = {};
+    for (i = 0; i < n; i++) {
+      var j = i, guard = 0;
+      while (j >= 0 && j < n && guard++ < 64) {
+        if (want[String(all[j])]) { set[i] = true; break; }
+        j = par[j];
+      }
+    }
+    _headPartIdx = set;
+    return set;
+  }
+
+  /**
+   * 头部包围盒，**模型坐标**（与 drawable 顶点、contentBounds 同一套空间）。
+   *
+   * 单独抽出来有两个用处：一是 [patHeadBox] 的换算基础，二是调试/自测可以
+   * 直接断言"盒子到底框住了哪些顶点" —— 屏幕坐标会把结论糊掉。
+   *
+   * @returns {minX,minY,maxX,maxY}；null 表示算不出来
+   */
+  function patHeadModelBox() {
+    var raw = coreRaw();
+    if (!raw) return null;
+    var set = headPartIndexSet(raw);
+    if (!set) return null;
+
+    var d = raw.drawables, p = raw.parts;
+    if (!d || !d.parentPartIndices || !d.vertexPositions) return null;
+
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, used = 0;
+    for (var i = 0; i < d.parentPartIndices.length; i++) {
+      var pi = d.parentPartIndices[i];
+      if (!set[pi]) continue;
+      // 关掉的替换件（发型 / 耳朵 / 贴纸预设）不参与，否则盒子会被没启用的那套撑歪
+      if (p.opacities && p.opacities[pi] <= 0.01) continue;
+      if (d.opacities && d.opacities[i] <= 0.01) continue;
+      var v = d.vertexPositions[i];
+      if (!v || v.length < 2) continue;
+      used++;
+      for (var k = 0; k < v.length; k += 2) {
+        var vx = v[k], vy = v[k + 1];
+        if (!isFinite(vx) || !isFinite(vy)) continue;
+        if (vx < minX) minX = vx;
+        if (vx > maxX) maxX = vx;
+        if (vy < minY) minY = vy;
+        if (vy > maxY) maxY = vy;
+      }
+    }
+    if (!used || !(maxX > minX) || !(maxY > minY)) return null;
+
+    // 外扩：顶点盒偏紧（头发丝之类的细长件容易被判在边缘），
+    // 而且呼吸/转头会让轮廓在帧间轻微移动
+    var pad = CFG.pat.padRatio || 0;
+    var w = maxX - minX, h = maxY - minY;
+    return {
+      minX: minX - w * pad, maxX: maxX + w * pad,
+      minY: minY - h * pad, maxY: maxY + h * pad
+    };
+  }
+
+  /**
+   * 头部包围盒（**视口归一化**，0~1，左上为原点）。
+   *
+   * 每次点击现算，不缓存：模型在呼吸、会转头、布局也可能变，静态盒子必然偏 ——
+   * 这正是旧实现"看着在头上却判定不到"的原因。代价是几万次 min/max（亚毫秒级），
+   * 而点击是低频事件，不值得为它做缓存失效。
+   *
+   * @returns null 表示算不出来（老运行时 / headParts 为空 / 顶点全无效），
+   *          调用方应回落到 [patFallbackBox]
+   */
+  function patHeadBox() {
+    var mb = patHeadModelBox();
+    var L = _layoutCache;
+    if (!mb || !L || !L.sw || !L.sh) return null;
+
+    // 模型坐标 → 视口归一化：与 layout() 同一套变换。
+    // anchor 在画布中心，所以 model.x/y 就是"画布中心"的屏幕位置，
+    // 于是任意模型坐标 (mx,my) 落在 model.x + (mx - canvasW/2) * scale。
+    var x0 = (L.x + (mb.minX - L.canvasW / 2) * L.scale) / L.sw;
+    var x1 = (L.x + (mb.maxX - L.canvasW / 2) * L.scale) / L.sw;
+    var y0 = (L.y + (mb.minY - L.canvasH / 2) * L.scale) / L.sh;
+    var y1 = (L.y + (mb.maxY - L.canvasH / 2) * L.scale) / L.sh;
+    return {
+      x: Math.min(x0, x1), y: Math.min(y0, y1),
+      w: Math.abs(x1 - x0), h: Math.abs(y1 - y0)
+    };
+  }
+
+  /**
+   * 兜底矩形：把 CFG.pat.hit（内容包围盒归一化）换算成视口归一化。
+   *
+   * 只在 [patHeadBox] 算不出来时用 —— 宁可退回一个粗糙但能用的区域，
+   * 也不要让"点了没反应"变成常态。
+   */
+  function patFallbackBox() {
+    var L = _layoutCache, hit = CFG.pat.hit;
+    if (!L || !L.sw || !L.sh || !hit) return null;
+    var cb = L.cb;
+    if (!cb || !cb.width || !cb.height) return null;
+    var left = L.x + (cb.x - L.canvasW / 2) * L.scale;
+    var top = L.y + (cb.y - L.canvasH / 2) * L.scale;
+    return {
+      x: (left + cb.width * L.scale * hit.x0) / L.sw,
+      y: (top + cb.height * L.scale * hit.y0) / L.sh,
+      w: (cb.width * L.scale * (hit.x1 - hit.x0)) / L.sw,
+      h: (cb.height * L.scale * (hit.y1 - hit.y0)) / L.sh
+    };
+  }
+
+  /**
+   * 命中判定：视口归一化坐标 (nx, ny) 是否落在头部盒里。
+   *
+   * @returns {ok, box, src}；src = 'parts'（部件盒）/ 'fallback'（兜底矩形）/ 'none'
    */
   function patHitTest(nx, ny) {
-    var box = patHitBox();
-    var hit = CFG.pat.hit;
-    if (!box) return false;
-    if (box.w <= 0 || box.h <= 0) return false;
-    var bx = (nx - box.x) / box.w;
-    var by = (ny - box.y) / box.h;
-    _patLastHit = { nx: nx, ny: ny, bx: bx, by: by, ok: false };
-    if (bx < hit.x0 || bx > hit.x1 || by < hit.y0 || by > hit.y1) return false;
-    _patLastHit.ok = true;
+    var box = patHeadBox(), src = 'parts';
+    if (!box) { box = patFallbackBox(); src = box ? 'fallback' : 'none'; }
+    _patLastHit = { nx: nx, ny: ny, ok: false, src: src, box: box };
+    if (!box || box.w <= 0 || box.h <= 0) return { ok: false, box: null, src: 'none' };
+    var ok = nx >= box.x && nx <= box.x + box.w && ny >= box.y && ny <= box.y + box.h;
+    _patLastHit.ok = ok;
+    return { ok: ok, box: box, src: src };
+  }
+
+  // ======================= 摸头手势（在页面内捕获）=======================
+  //
+  // 为什么在页面里而不是宿主（Compose）：WebView 是真实 View，绘制与触摸派发
+  // 都在 Compose 画布之上 —— 宿主在 Compose 里叠一层触摸层**收不到点击**
+  // （旧实现就是这么做的，现象就是"点了没反应"）。放在这里还顺带干掉了
+  // 两套坐标系：手势与命中判定用的是同一个视口、同一套归一化。
+  //
+  // 只认"轻点"：按下与抬起间隔够短、位移够小。滑动与长按不触发，
+  // 避免与将来的交互（拖动、缩放）抢手势。
+  var PAT_TAP_MAX_MS = 400;
+  var PAT_TAP_MAX_PX = 24;
+
+  /** 视口归一化坐标（与 patHeadBox 同一套单位） */
+  function patPointerNorm(e) {
+    var sw = (_layoutCache && _layoutCache.sw) || window.innerWidth || 1;
+    var sh = (_layoutCache && _layoutCache.sh) || window.innerHeight || 1;
+    return { x: (e ? e.clientX : 0) / sw, y: (e ? e.clientY : 0) / sh };
+  }
+
+  function onPatPointerDown(e) {
+    if (!CFG.pat.enabled || !modelReady) return;
+    if (e && e.isPrimary === false) return;   // 多指：只认第一根
+    _patDownAt = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    _patDownX = e ? e.clientX : 0;
+    _patDownY = e ? e.clientY : 0;
+  }
+
+  function onPatPointerUp(e) {
+    if (!CFG.pat.enabled || !modelReady) return;
+    if (_patDownAt < 0) return;
+    var now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    var held = now - _patDownAt;
+    var dx = (e ? e.clientX : 0) - _patDownX;
+    var dy = (e ? e.clientY : 0) - _patDownY;
+    _patDownAt = -1;
+    if (held > PAT_TAP_MAX_MS) return;                              // 长按不算点
+    if (Math.sqrt(dx * dx + dy * dy) > PAT_TAP_MAX_PX) return;      // 划走了不算点
+    triggerPat(patPointerNorm(e), 'tap');
+  }
+
+  function onPatPointerCancel() { _patDownAt = -1; }
+
+  /**
+   * 触发一次摸头（手势与调试入口共用同一条路径）。
+   *
+   * @param norm {x,y} 视口归一化坐标；传 null = 不看位置、强制触发（调试用）
+   * @param source 'tap' / 'api' —— 进日志，便于区分"用户点的"和"调试叫的"
+   * @returns 是否真的播了演出
+   */
+  function triggerPat(norm, source) {
+    if (!modelReady || !model || !CFG.pat.enabled) return false;
+
+    if (norm) {
+      var res = patHitTest(norm.x, norm.y);
+      if (!res.ok) {
+        // 没命中**也要回报**：旧实现把命中信息丢在 info 事件里，
+        // 结果"点了没反应"在日志里完全看不到原因
+        notify('pat', {
+          hit: false, src: res.src, source: source,
+          x: norm.x, y: norm.y, box: res.box
+        });
+        if (_patDebug) drawPatBox(true);
+        return false;
+      }
+    }
+
+    if (_idleTime < _patCooldownUntil) {
+      notify('pat', { hit: true, playing: false, reason: 'cooldown', source: source });
+      return false;
+    }
+
+    _patStart = _idleTime;
+    _patUntil = _idleTime + CFG.pat.duration;
+    _patCooldownUntil = _idleTime + CFG.pat.cooldown + CFG.pat.duration;
+
+    // 表情只在「当前没有 LLM 情绪表情」时才套 —— _cue 优先级更高，
+    // 否则一次摸头会把 LLM 刚触发的情绪脸冲掉，而且复位后回不到那张脸。
+    var expr = (CFG.pat.expression && !_cue) ? CFG.pat.expression : null;
+    notify('pat', {
+      hit: true, playing: true, source: source,
+      expression: expr, holdMs: CFG.pat.holdMs || 1200
+    });
+    if (_patDebug) drawPatBox(true);
     return true;
   }
 
@@ -961,11 +1197,11 @@
   }
 
   /**
-   * 调试：画出摸头命中区（真机标定用）
+   * 调试：画出**实际参与判定**的头部框
    *
-   * 用 fixed 定位的 div 画框，坐标与 [patHitTest] 用同一套换算，
-   * 所以框住的就是"点这里会触发"的实际区域。标完把 CFG.pat.hit 的四个
-   * 数值填到对应 profile 里即可。
+   * 用 fixed 定位的 div 画框，坐标与 [patHitTest] 用同一个盒子，
+   * 所以框住的就是"点这里会触发"的真实区域 —— 真机上瞄一眼就知道对不对，
+   * 不需要再去调任何数值。框是虚线红框；若是兜底矩形会额外标一行字。
    */
   function drawPatBox(show) {
     try {
@@ -974,7 +1210,8 @@
         _patBoxEl = null;
         return;
       }
-      var box = patHitBox();
+      var box = patHeadBox(), fallback = false;
+      if (!box) { box = patFallbackBox(); fallback = true; }
       if (!box || !document.body) return;
       if (!_patBoxEl) {
         _patBoxEl = document.createElement('div');
@@ -983,6 +1220,8 @@
         _patBoxEl.style.background = 'rgba(255,64,64,0.12)';
         _patBoxEl.style.pointerEvents = 'none';
         _patBoxEl.style.zIndex = '9999';
+        _patBoxEl.style.color = 'rgba(255,64,64,0.95)';
+        _patBoxEl.style.font = '11px/1.2 monospace';
         document.body.appendChild(_patBoxEl);
       }
       // 用视口百分比表达，窗口尺寸变化时不需要重算
@@ -990,6 +1229,7 @@
       _patBoxEl.style.top = (box.y * 100) + '%';
       _patBoxEl.style.width = (box.w * 100) + '%';
       _patBoxEl.style.height = (box.h * 100) + '%';
+      _patBoxEl.textContent = fallback ? 'fallback' : '';
     } catch (e) { /* 调试功能，失败不影响主流程 */ }
   }
 
@@ -1230,8 +1470,13 @@
 
   // ==================== 对外 API（window.L2D）====================
   var L2D = {
-    /** 桥接版本，便于 Android 侧探测 */
-    version: '1.1.0',
+    /**
+     * 桥接版本，便于 Android 侧探测。
+     *
+     * 1.2.0：摸头命中区改为按部件顶点现算、手势改为页面内捕获，
+     *        `patHead({x,y})` 降级为调试入口（宿主不再调用）。
+     */
+    version: '1.2.0',
 
     get ready() { return modelReady; },
     get state() { return currentState; },
@@ -1360,47 +1605,25 @@
     },
 
     /**
-     * 摸头：{x, y} 是**舞台归一化坐标**（0~1，相对整个 WebView 视口，左上为原点）。
+     * 摸头：{x, y} 是**视口归一化坐标**（0~1，相对整个 WebView 视口，左上为原点）。
      *
-     * 命中判定放在这里而不是 Android 侧：只有 JS 侧拿得到模型内容包围盒与
-     * layout() 算出的真实变换，Kotlin 侧硬算必然对不上。
+     * ⚠️ 手势已经改在**页面内**捕获（见 onPatPointerDown/Up），宿主不再需要传坐标 ——
+     * 这个方法现在只剩两个用途：CDP 调试手测，以及自测脚本驱动。
+     * 不传坐标 = 不看位置、强制触发一次。
+     *
+     * 命中判定放在这里而不是 Android 侧：只有 JS 侧拿得到模型部件与顶点，
+     * Kotlin 侧硬算必然对不上。
      *
      * @returns 是否真的触发了演出。冷却中 / 没命中 / 未就绪都返回 false，
-     *          并通过 info 事件把原因回给宿主，便于真机排查"点了没反应"。
+     *          并通过 pat 事件把原因回给宿主，便于排查"点了没反应"。
      */
     patHead: function (opts) {
       try {
         if (!modelReady || !model || !CFG.pat.enabled) return false;
         var o = typeof opts === 'string' ? JSON.parse(opts) : (opts || {});
         var nx = Number(o.x), ny = Number(o.y);
-        if (!isFinite(nx) || !isFinite(ny)) return false;
-
-        // 冷却：连点只播一次，不叠成一团乱抖
-        if (_idleTime < _patCooldownUntil) {
-          notify('info', JSON.stringify({ pat: 'cooldown' }));
-          return false;
-        }
-
-        if (!patHitTest(nx, ny)) {
-          if (_patDebug) drawPatBox(true);
-          notify('info', JSON.stringify({ pat: 'miss', x: nx, y: ny }));
-          return false;
-        }
-
-        _patStart = _idleTime;
-        _patUntil = _idleTime + CFG.pat.duration;
-        _patCooldownUntil = _idleTime + CFG.pat.cooldown + CFG.pat.duration;
-
-        // 表情只在「当前没有 LLM 情绪表情」时才套 —— _cue 优先级更高，
-        // 否则一次摸头会把 LLM 刚触发的情绪脸冲掉，而且复位后回不到那张脸。
-        if (CFG.pat.expression && !_cue) {
-          notify('pat', JSON.stringify({
-            expression: CFG.pat.expression,
-            holdMs: CFG.pat.holdMs || 1200
-          }));
-        }
-        if (_patDebug) drawPatBox(true);
-        return true;
+        var norm = (isFinite(nx) && isFinite(ny)) ? { x: nx, y: ny } : null;
+        return triggerPat(norm, 'api');
       } catch (e) {
         console.warn('[L2D] patHead 失败: ' + (e && e.message ? e.message : e));
         return false;
@@ -1408,16 +1631,24 @@
     },
 
     /**
-     * 调试：画出摸头命中区并回报最近一次判定（真机标定用）
+     * 调试：画出摸头命中区并回报最近一次判定
      *
-     * 打开后：红色虚线框 = 实际会触发的区域（换算与命中判定共用同一套）。
-     * 想看数值时用 `L2D.debug().patLastHit`，其中 bx/by 就是点击位置
-     * 换算到内容包围盒后的归一化坐标 —— 照着它改 CFG.pat.hit 即可。
+     * 打开后：红色虚线框 = **实际参与判定**的头部区域（部件顶点算出来的，
+     * 与命中判定共用同一个盒子）。若框里写着 fallback，说明部件数据没取到、
+     * 正在用兜底矩形 —— 那种情况该去查 Core 是否可用。
+     * 想看数值时用 `L2D.debug().patLastHit`。
      */
     debugPatHit: function (on) {
       _patDebug = !!on;
       drawPatBox(_patDebug);
-      return JSON.stringify({ on: _patDebug, hit: CFG.pat.hit, last: _patLastHit });
+      return JSON.stringify({
+        on: _patDebug,
+        headParts: (CFG.pat.headParts || []).length,
+        modelBox: patHeadModelBox(),
+        box: patHeadBox(),
+        fallback: patFallbackBox(),
+        last: _patLastHit
+      });
     },
 
     /**
@@ -1484,6 +1715,10 @@
           active: _patUntil > 0 && _idleTime <= _patUntil,
           values: _patValue,
           debug: _patDebug,
+          headParts: (CFG.pat.headParts || []).length,
+          modelBox: patHeadModelBox(),
+          box: patHeadBox(),
+          fallbackBox: patFallbackBox(),
           lastHit: _patLastHit
         };
       } catch (e) { out.error = String(e); }
@@ -1505,8 +1740,15 @@
     var info = { modelUrl: CFG.modelUrl, motions: [], expressions: [], lipSync: [] };
     // 待机层由 bridge.js 自己提供，不依赖模型文件；宿主侧可据此决定是否还需别的兜底
     info.idle = true;
-    // 摸头同理：程序化演出，不需要模型自带对应动作组
-    info.pat = { enabled: CFG.pat.enabled, hit: CFG.pat.hit, duration: CFG.pat.duration };
+    // 摸头同理：程序化演出，不需要模型自带对应动作组。
+    // 命中区改由部件顶点现算之后，宿主不再参与判定（手势也在页面内捕获）——
+    // 这里只回报"部件表在不在、盒子算不算得出来"，供排查"点了没反应"。
+    info.pat = {
+      enabled: CFG.pat.enabled,
+      duration: CFG.pat.duration,
+      headParts: (CFG.pat.headParts || []).length,
+      boxReady: !!patHeadBox()
+    };
     try {
       var im = model.internalModel;
       info.size = im.originalWidth + 'x' + im.originalHeight;
@@ -1566,6 +1808,19 @@
       layout();
     });
 
+    // ---- 摸头手势（必须在页面内捕获）----
+    //
+    // 宿主（Compose）那边叠触摸层是收不到事件的：WebView 是真实 View，
+    // 绘制与触摸派发都在 Compose 画布之上（旧实现就是栽在这里）。
+    // 页面里没有可滚动/可拖拽内容，所以这些监听不会抢走别的手势。
+    window.addEventListener('pointerdown', onPatPointerDown, { passive: true });
+    window.addEventListener('pointerup', onPatPointerUp, { passive: true });
+    window.addEventListener('pointercancel', onPatPointerCancel, { passive: true });
+    // 长按选中 / 系统上下文菜单在舞台上没有意义，挡掉（否则按住会弹菜单）
+    window.addEventListener('contextmenu', function (e) {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    });
+
     // 页面不可见时暂停，省电
     document.addEventListener('visibilitychange', function () {
       if (!app) return;
@@ -1580,6 +1835,10 @@
         app.stage.addChild(model);
 
         modelReady = true;
+        // 换模型后布局与部件表都变了：清掉上一份缓存再重算，
+        // 否则命中判定会拿旧模型的部件索引去比对（换角色时尤其明显）
+        _layoutCache = null;
+        _headPartIdx = null;
         layout();
 
         // 关键：口型注入点

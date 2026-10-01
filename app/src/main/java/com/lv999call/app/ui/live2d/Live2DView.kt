@@ -207,23 +207,12 @@ class Live2DController internal constructor() {
     }
 
     /**
-     * 摸头：传入舞台内的**归一化坐标**（0~1，相对 WebView 视口，左上为原点）。
+     * 调试：画出**实际参与判定**的摸头命中区。
      *
-     * 命中判定刻意放在 JS 侧：只有那里拿得到模型内容包围盒与 bridge.js 算出的
-     * 真实布局变换，这边硬算必然对不上（坐标原点、锚点、缩放都不在一个体系里）。
-     * 所以这里只负责把坐标递过去。
+     * 打开后舞台里会出现红色虚线框 —— 那就是"点这里会触发摸头"的真实区域，
+     * 由 bridge.js 按模型部件顶点现算（不再手调数值）。框里若写着 fallback，
+     * 说明部件数据没取到、正在用兜底矩形。
      *
-     * @return 无返回值：是否命中由 JS 侧通过 `pat` / `info` 事件回报
-     */
-    fun patHead(x: Float, y: Float) {
-        eval("window.L2D && window.L2D.patHead({x:${x.coerceIn(0f, 1f)},y:${y.coerceIn(0f, 1f)}})")
-    }
-
-    /**
-     * 调试：画出摸头命中区（真机标定用）。
-     *
-     * 打开后舞台上半部分会出现红色虚线框 —— 那就是「点这里会触发摸头」的实际
-     * 区域。真机上标定 CFG.pat.hit 时用它，改完 bridge.js 的对应 profile 即可。
      * 也可通过 CDP 直接调 `window.L2D.debugPatHit(true)`，效果相同。
      */
     fun debugPatHit(enabled: Boolean) {
@@ -295,15 +284,27 @@ class Live2DController internal constructor() {
             }
 
             "pat" -> {
-                // JS 侧判定「摸头命中，且当前没有 LLM 情绪表情」时下发：
-                // 临时套一个脸红表情，holdMs 后自动复位。
+                // JS 侧摸头手势的状态回报（**每次点击都会来一条**，命中与否都报）：
+                //   {hit:true,  playing:true,  expression, holdMs}  命中且真的播了
+                //   {hit:true,  playing:false, reason:'cooldown'}   命中但在冷却
+                //   {hit:false, src:'parts'|'fallback'|'none', box} 没命中
                 //
-                // 为什么不经 ViewModel：这是一次 1 秒级的纯演出，与 LLM 那条
-                // expressionCue 链路（保持到本轮说完）语义完全不同，混在一起会
-                // 互相复位。JS 侧已经保证 _cue 非空时不下发这个事件，所以这里
-                // 不需要再判一次 —— 这条约定改 JS 时必须一起维护。
+                // 为什么命中信息现在走这里：旧实现把命中判定丢在 Compose 侧、
+                // 拿不到 JS 的判定结果，于是"点在裙子上"也会被当成摸头。
+                //
+                // 表情是**可选**的（有 LLM 情绪表情时 JS 就不套自己的脸），
+                // 所以这里必须容忍 expression 为空 —— 那不代表没命中。
                 val json = runCatching { JSONObject(payload) }.getOrNull()
-                val name = json?.optString("expression", "")?.takeIf { it.isNotEmpty() }
+                val hit = json?.optBoolean("hit", false) ?: false
+                if (!hit) {
+                    Log.d(TAG, "摸头未命中: ${payload.take(200)}")
+                    return
+                }
+                if (json?.optBoolean("playing", false) != true) {
+                    Log.d(TAG, "摸头未演出: ${payload.take(200)}")
+                    return
+                }
+                val name = json.optString("expression", "")?.takeIf { it.isNotEmpty() }
                 if (name == null) return
                 val holdMs = json.optLong("holdMs", 1200L)
 

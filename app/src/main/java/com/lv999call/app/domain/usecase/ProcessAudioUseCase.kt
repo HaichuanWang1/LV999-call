@@ -27,36 +27,10 @@ class ProcessAudioUseCase(
     private val chatRepository: ChatRepository,
     private val configRepository: ConfigRepository,
     private val asrEngine: AsrEngine,
-    private val audioPlayer: AudioPlayer,
-    /**
-     * 「刚被摸过头」标记（见 [com.lv999call.app.di.AppModule.headPatPending]）。
-     *
-     * 由触摸回调置位、由本用例在下一轮**读一次就清** —— 摸头是即兴轻互动，
-     * 当场跑一整轮 LLM+TTS 会打断节奏、还会给历史塞进一轮莫名其妙的好话，
-     * 所以只把它捎带进下一轮的提示词，让角色自然带一句。
-     */
-    private val headPatPending: java.util.concurrent.atomic.AtomicBoolean =
-        java.util.concurrent.atomic.AtomicBoolean(false)
+    private val audioPlayer: AudioPlayer
 ) {
     companion object {
         private const val TAG = "ProcessAudioUseCase"
-
-        /**
-         * 「刚被摸头」捎带进本轮提示词的一段系统说明。
-         *
-         * 刻意写成"可选的反应"，并明确要求不要解释机制、不要只回应这个 ——
-         * 否则用户只是顺手摸一下，角色却会把正题丢在一边只回一句"你摸我干嘛"。
-         *
-         * 用字符串模板拼：`const val` 不允许调用 `trimEnd()` 之类的函数。
-         */
-        private val HEAD_PAT_NOTE = """
-            |
-            |# 临时状态（系统注入，不要向玩家解释这段机制）
-            |玩家刚刚摸了一下你的头。
-            |这不代表任何对话内容，只是一个亲昵的小动作。请在这一轮回复里自然地带上一点反应
-            |（害羞、嘴硬、得意、抗议、或者干脆当作没看见地继续正题都可以，按你的性格来），
-            |但**不要**因此跑题：玩家真正想说的那件事仍然是重点。
-            |""".trimMargin()
     }
 
     private fun estimateTokens(text: String): Int {
@@ -173,19 +147,12 @@ class ProcessAudioUseCase(
             if (config.live2dEnabled && !expressions.isEmpty) it + expressions.promptBlock() else it
         }
 
-        // 摸头：用户点了形象的头（由 CallViewModel.onHeadPat 打的标记）。
+        // 摸头**不进提示词**（plan5 §3.4）：它是一次纯视觉的即兴互动，
+        // 反应全部由 bridge.js 当场演出（部件命中盒 + 连点档位），不产生语音、
+        // 不进历史、也不影响这一轮的对话。旧实现往这里注入过一段"玩家刚刚摸了
+        // 你的头"，那是全局单例标记：挂断不清、跨角色串味，而且"刚刚"可能
+        // 已经是几分钟前 —— 已整条删除。
         //
-        // 刻意**当场不发请求**：摸头是即兴轻互动，为它跑一整轮 LLM+TTS 会打断
-        // 对话节奏、还会给聊天记录塞进一轮莫名其妙的对话。所以只把这件事
-        // 捎带进下一轮的提示词，让她在正常回复里自然带一句。
-        //
-        // 读一次就清（getAndSet）：只影响紧随其后的这一轮，摸两下不会念两次。
-        // 刻意在**这里**清而不是等回复成功：万一这一轮 LLM 失败，宁可丢掉
-        // 这次摸头的口应，也不要让它挂到好几轮之后突然冒出来。
-        if (headPatPending.getAndSet(false)) {
-            effectivePrompt = (effectivePrompt ?: "") + HEAD_PAT_NOTE
-            Log.d(TAG, "本轮捎带摸头提示")
-        }
         // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来
         val tagParser = ExpressionTagParser(expressions, onExpression)
         // 边收边剥离推理块：思考内容既不显示也不朗读（详见 ReasoningStripper）

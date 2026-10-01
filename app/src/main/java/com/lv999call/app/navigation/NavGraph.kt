@@ -234,9 +234,7 @@ fun NavGraph() {
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
                 isMuted = isMuted,
-                asrRetryHint = asrRetryHint,
-                // 摸头：只打标记，由下一轮的提示词捎带一句反应
-                onHeadPat = { viewModel.onHeadPat() }
+                asrRetryHint = asrRetryHint
             )
         }
 
@@ -376,8 +374,7 @@ fun NavGraph() {
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
                 isMuted = isMuted,
-                asrRetryHint = asrRetryHint,
-                onHeadPat = { viewModel.onHeadPat() }
+                asrRetryHint = asrRetryHint
             )
         }
 
@@ -445,8 +442,7 @@ fun NavGraph() {
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted,
-                asrRetryHint = asrRetryHint,
-                onHeadPat = { viewModel.onHeadPat() }
+                asrRetryHint = asrRetryHint
             )
         }
 

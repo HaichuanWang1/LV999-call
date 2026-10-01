@@ -13,7 +13,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,7 +34,6 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -121,13 +119,13 @@ private val STAGE_SHAPE = RoundedCornerShape(28.dp)
 private const val STAGE_FILL_RATIO = 0.94f
 
 /**
- * 摸头触摸层的生效范围：舞台高度的上 60%。
+ * 摸头的手势**不在 Compose 这一层**。
  *
- * 为什么不是整个舞台：下半部分更靠近气泡与输入框，整片都吃轻点会增加误触。
- * 60% 之后的判定并不丢 —— 真正的命中区由 bridge.js 的 CFG.pat.hit 决定，
- * 这里只是一道"明显点在气泡那侧就别算摸头"的粗筛。
+ * WebView 是真实 View，绘制与触摸派发都在 Compose 画布之上 —— 在 Compose 里
+ * 叠一层触摸层是收不到点击的（旧实现就是这么写的，现象是"点了没反应"）。
+ * 现在手势与命中判定都在 bridge.js 页面内：监听 pointer 事件 + 按模型部件顶点
+ * 现算头部包围盒（见 plan5 §3），Compose 侧一个触摸目标都不留。
  */
-private const val PAT_HEAD_ZONE_MAX_Y = 0.6f
 
 @Composable
 fun CallScreen(
@@ -170,14 +168,7 @@ fun CallScreen(
      * 这里在状态胶囊上短暂顶一句提示，然后自然回到「聆听中…」。
      * 用自增计数而非布尔：连续两次没听清时 LaunchedEffect 才会重新触发。
      */
-    asrRetryHint: Int = 0,
-    /**
-     * 用户摸了 Live2D 形象的头。
-     *
-     * 只上报事件，不做任何视觉演出 —— 演出本身由 bridge.js 的摸头层负责
-     * （见 CFG.pat），而且那才是用户真正想看的反馈。
-     */
-    onHeadPat: () -> Unit = {}
+    asrRetryHint: Int = 0
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
@@ -463,52 +454,20 @@ fun CallScreen(
                     } else {
                         StaticAvatar(callState, avatarUri, avatarResId)
                     }
+                }
 
-                    // ---- 摸头触摸层 ----
-                    //
-                    // 必须写在 Live2DView **之后**（即叠在它上层）：WebView 是真实
-                    // View，会被绘制在所有 Compose 内容之上，反过来放就收不到触摸。
-                    //
-                    // 为什么触摸捕获在 Compose、命中判定却在 JS：
-                    // 这里只能拿到"点在舞台的哪个比例位置"，而"这个位置是不是头"
-                    // 需要模型内容包围盒与真实布局变换 —— 那些只有 bridge.js 有。
-                    // 所以这里只递两个归一化坐标。
-                    //
-                    // 只认轻点：detectTapGestures 不消费滑动，气泡列表的滚动不受影响；
-                    // 且舞台与对话区是上下分区、互不重叠，不会挡住气泡。
-                    if (live2dActive) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(l2dStatus) {
-                                    if (l2dStatus != Live2DStatus.READY) return@pointerInput
-                                    detectTapGestures { offset ->
-                                        val size = stageSize
-                                        if (size.width <= 0 || size.height <= 0) return@detectTapGestures
-                                        val ny = offset.y / size.height
-                                        // 只认上半区：下半部分离气泡更近，避免误触
-                                        if (ny > PAT_HEAD_ZONE_MAX_Y) return@detectTapGestures
-                                        l2d.patHead(offset.x / size.width, ny)
-                                        onHeadPat()
-                                    }
-                                }
-                        )
-                    }
-
-                    // 模型作者署名：钉在舞台区左下角，点击跳转作者主页。
-                    //
-                    // 必须写在 Live2DView **之后**（即叠在它上层）：WebView 是真实
-                    // View，会被绘制在所有 Compose 内容之上，反过来放就会被完全盖住。
-                    // 舞台区是独立分区、不与下方对话区重叠，所以不会压到气泡。
-                    character?.credit?.let { credit ->
-                        Live2DAuthorCredit(
-                            label = credit.label,
-                            url = credit.url,
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(start = 12.dp, bottom = 8.dp)
-                        )
-                    }
+                // 模型作者署名：**必须放在舞台 Box 之外**。
+                //
+                // 舞台里那块地方被 WebView 完全占住（真实 View 永远压在 Compose
+                // 内容之上），署名放进去就是点不动的死链接 —— 而且它还会和摸头的
+                // 手势抢同一次触摸。所以挪到板块底部、对话区上沿这一行，
+                // 与舞台彻底解耦。
+                character?.credit?.let { credit ->
+                    Live2DAuthorCredit(
+                        label = credit.label,
+                        url = credit.url,
+                        modifier = Modifier.padding(start = 14.dp, top = 6.dp)
+                    )
                 }
 
                 // 分区线：两个区域之间唯一的视觉分隔，比给各自画边框更轻

@@ -886,22 +886,6 @@ class CallViewModel(
         false
     }
 
-    /**
-     * 用户摸了 Live2D 形象的头（触摸层回调）。
-     *
-     * 只打一个「待处理」标记，**不当场发请求**：摸头是即兴的轻互动，
-     * 为它跑一整轮 LLM+TTS 会打断对话节奏，还会给聊天记录塞进一轮
-     * 莫名其妙的对话。标记由 [ProcessAudioUseCase] 在下一轮的提示词里
-     * 读一次就清，让她正常回话时自然带一句反应。
-     *
-     * 通话已结束时忽略：那时既不会有"下一轮"，标记也只会变成脏数据
-     * 挂到下次通话里。
-     */
-    fun onHeadPat() {
-        if (_callState.value == CallState.ENDED) return
-        appModule.headPatPending.set(true)
-    }
-
     fun toggleMute() {
         _isMuted.value = !_isMuted.value
         if (_isMuted.value) {

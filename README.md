@@ -312,7 +312,9 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
   与动作层分工 —— 姿态幅度也刻意比银狼再小一点（动作文件会写大量道具/头发参数，叠大会打架）
 - 表情白名单按「角色情绪 + 干饭萌点」筛（脸红 / 生气 / 吐魂 / 呆呆眼 / 闭眼口水 / 蛋包饭…），
   没把 44 个全丢给 LLM —— 既会乱来，提示词也会膨胀好几倍
-- 署名：模型作者「氵六青 @bilibili」，展示在舞台左下角（`BuiltInCharacter.credit`）
+- 署名：模型作者「氵六青 @bilibili」，展示在**主板块底部**（`BuiltInCharacter.credit`）。
+  刻意放在舞台区**之外**：舞台被 WebView 占满，署名放进去就是点不动的死链接，
+  还会和摸头的手势抢同一次触摸。
 
 ⚠️ **写参数前先查物理表**：moc3 的 358 个参数里有 **185 个是物理输出**，
 物理每帧都会覆盖它们，动作曲线或参数写上去等于没写。可安全驱动的是
@@ -461,6 +463,48 @@ CallScreen 下发 Live2DController.setExpression()，保持到本轮说完再回
 里每个角色的表情集（标签 ↔ 真实表情名 ↔ 情绪说明 ↔ few-shot 示例）、
 `CallScreen.kt` 的 `EXPRESSION_MIN_HOLD_MS` / `EXPRESSION_MAX_HOLD_MS`（保持时长兜底）。
 
+### 摸头互动（按模型部件现算命中盒）
+
+点一下形象的头，角色会做出被摸头的反应。整条链路**全在 WebView 页面内**：
+
+```
+pointerdown / pointerup（页面内监听） → 归一化到视口 → 头部包围盒命中判定 → CFG.pat 叠层演出
+                                                              ↑
+                                            头部部件的 drawable 顶点 AABB（点击那一刻现算）
+```
+
+两个"必须这么做"的原因，都是踩出来的：
+
+- **手势必须在页面内捕获**。WebView 是真实 View，绘制与触摸派发都在 Compose 画布之上 ——
+  宿主在 Compose 里叠一层触摸层**收不到点击**（旧实现就是如此，现象是"点了没反应"）。
+  放在页面内还顺带干掉了两套坐标系：手势与命中判定用的是同一个视口、同一套归一化。
+- **命中盒必须按部件算，不能手调矩形**。Q 版银狼与半身立绘 DeepSeek 酱的头，位置与大小
+  完全不同，同一个"内容包围盒上 42%"不可能同时对；而且静态矩形在模型呼吸、转头、换布局
+  之后必然偏。现在取**头部部件**下所有 drawable 的顶点 AABB，按 `layout()` 的变换换算到
+  视口，再外扩 `padRatio`（8%）：天然贴合、天然跟随姿态，**不需要任何标定**。
+
+部件表从哪来：两个模型都没有 `HitAreas`，而 Core 的 `Drawables.parentPartIndices` /
+`Parts.parentIndices` 是唯一的"网格 → 部件"映射（框架层的 `getDrawableParentPartIndex`
+不在包里）。部件 id 与中文名的对应只存在于 `cdi3.json`，所以这一步放在离线：
+
+```bash
+python tools/live2d_dump_parts.py            # 列出选中/排除的部件，人工核对
+python tools/live2d_dump_parts.py --json     # 输出可粘贴进 bridge.js 的 headParts
+```
+
+换模型或换版本时重跑它，**不要手写 id**。运行时另有两道过滤：部件与网格
+`opacity ≤ 0.01` 的替换件（`猫猫耳` / `发型D2` / `兔兔耳` 这类预设开关）不参与，
+否则没启用的那套会把盒子撑歪。拿不到 Core 数据时（老运行时、模型异常）回落到
+`CFG.pat.hit` 那个兜底矩形 —— 宁可粗糙，也不要"点了没反应"。
+
+调试：`window.L2D.debugPatHit(true)`（CDP 亦可）会在舞台上画出**实际参与判定**的红框，
+框里写着 `fallback` 就说明走的是兜底矩形；`window.L2D.debug().pat` 里同时给出
+`modelBox`（模型坐标）与 `box`（视口归一化）两份数值。
+
+**摸头不产生语音**：不进历史、不进记忆、不影响对话。它是一次纯视觉的即兴互动 ——
+旧实现往下一轮系统提示词里注入过一段"玩家刚刚摸了一下你的头"（全局单例标记，
+挂断不清、跨角色串味、`刚刚`还可能是几分钟前），已整条删除。
+
 ### 资源不入库
 
 `lib/` 与 `models/` 已被 `.gitignore` 排除，原因：
@@ -513,9 +557,10 @@ WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测�
 状态机与口型链路（mock PIXI/DOM 直接驱动 bridge.js）：
 
 ```bash
-node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 容错
+node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 摸头命中盒 / 容错
 node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
 node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
+python tools/live2d_dump_parts.py      # 摸头命中盒用的头部部件表（从 cdi3.json 生成）
 bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形回绕
 python tools/memory_migration_check.py # Room 3→4 迁移：结构/数据存活/游标初始化（23 项）
 ```

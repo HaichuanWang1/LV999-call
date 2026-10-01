@@ -56,15 +56,6 @@ class AppModule(private val context: Context) {
     val audioPlayer: AudioPlayer by lazy { AudioPlayer() }
 
     /**
-     * 「刚被摸过头」的标记（摸头功能用）。
-     *
-     * 放这里而不是 CallViewModel 里：摸头的触摸回调与下一轮的提示词注入分别在
-     * 两个 Composable 生命周期里发生，用一个模块级单例承载最省事。
-     * 读取方（ProcessAudioUseCase）读完就清，保证只影响紧随其后的那一轮。
-     */
-    val headPatPending = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /**
      * 角色自带参考音频的缓存（assets 路径 → base64）。
      *
      * 早期这里叫 `silverWolfRefAudioBase64`，只服务银狼一个角色。加入并列角色后
@@ -113,11 +104,7 @@ class AppModule(private val context: Context) {
     val startCallUseCase: StartCallUseCase by lazy { StartCallUseCase(sessionRepository, context) }
     val manageSessionUseCase: ManageSessionUseCase by lazy { ManageSessionUseCase(sessionRepository) }
     val processAudioUseCase: ProcessAudioUseCase by lazy {
-        ProcessAudioUseCase(
-            chatRepository, configRepository, asrEngine, audioPlayer,
-            // 摸头标记：由触摸回调置位，由用例在下一轮读一次就清
-            headPatPending = headPatPending
-        )
+        ProcessAudioUseCase(chatRepository, configRepository, asrEngine, audioPlayer)
     }
 
     /**
