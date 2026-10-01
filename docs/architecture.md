@@ -105,8 +105,14 @@ tools/
 
 ## 交互式架构图
 
-[`architecture-call-pipeline.html`](architecture-call-pipeline.html) 是 Archify 生成的可交互通话链路图
-（离线单文件，浏览器直接打开）：主链路 `用户 → CallScreen → CallViewModel → AudioRecorder → AsrEngine → ChatRepository → AudioPlayer`，
+**在线看**：<https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html>
+—— 由 [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) 把 `docs/` 发到 GitHub Pages
+（GitHub 的代码页只会把 `.html` 当源码显示，所以必须走 Pages 才能点开）。
+
+**本地看**：[`architecture-call-pipeline.html`](architecture-call-pipeline.html)，离线单文件，双击即开。
+
+图本身是 Archify 生成的可交互通话链路图：
+主链路 `用户 → CallScreen → CallViewModel → AudioRecorder → AsrEngine → ChatRepository → AudioPlayer`，
 外加 Live2D、长期记忆、Room 与三个远程 AI 端点，共 14 个组件、15 条关系，每条都带源码位置。
 
 Skill 本体在 `.agents/skills/archify/`（MIT，v3.0.1），dsh 以 `project-agents` 优先级自动发现，无需安装。

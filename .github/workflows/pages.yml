@@ -1,0 +1,47 @@
+name: Deploy 架构图到 Pages
+
+# 只把 docs/ 发成静态站点，用来让 README 上那颗「架构图」按钮能真的点开
+# （GitHub 的代码页只会把 .html 当源码显示，不会渲染）。
+# 首次运行会自动尝试开启 Pages；若被拒绝，去 Settings → Pages →
+# Source 选「GitHub Actions」再手动重跑一次即可。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同一时间只跑一个部署，但不打断正在进行的发布
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 Pages（未开启则尝试自动开启）
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: 打包 docs/
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: 发布
+        id: deployment
+        uses: actions/deploy-pages@v4

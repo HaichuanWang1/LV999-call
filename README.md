@@ -9,6 +9,7 @@
   <a href="docs/memory.md"><img src="https://img.shields.io/badge/记忆-跨会话-9b59b6?style=for-the-badge" alt="记忆"></a>
   <a href="docs/characters.md"><img src="https://img.shields.io/badge/角色-内置%20·%20自定义-2ecc71?style=for-the-badge" alt="角色"></a>
   <a href="docs/architecture.md"><img src="https://img.shields.io/badge/架构-技术栈%20·%20目录-95a5a6?style=for-the-badge" alt="架构"></a>
+  <a href="https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html"><img src="https://img.shields.io/badge/架构图-交互式%20·%20点开就看-0891b2?style=for-the-badge" alt="交互式架构图"></a>
 </p>
 
 ## 能做什么
@@ -37,6 +38,22 @@ git clone https://github.com/HaichuanWang1/LV999-call.git
 cd LV999-call
 ```
 用 Android Studio 打开项目，Sync Gradle 后运行。
+
+### 发布签名（只打 release 包时需要）
+
+签名凭据**不入库**：`release.jks` 被 `.gitignore` 忽略，密码也不写在 `build.gradle.kts` 里，
+而是从 `local.properties`（同样不入库）或环境变量读取：
+
+```properties
+lv999.storeFile=release.jks      # 相对路径以项目根为基准
+lv999.storePassword=……
+lv999.keyAlias=……
+lv999.keyPassword=……
+```
+
+CI 里改用 `LV999_STORE_FILE` / `LV999_STORE_PASSWORD` / `LV999_KEY_ALIAS` / `LV999_KEY_PASSWORD`
+四个环境变量即可。四项缺任何一项都**不会让构建失败**：release 降级成未签名的
+`app-release-unsigned.apk`，debug 构建完全不受影响。
 
 ### 启用 Live2D（可选）
 
@@ -83,6 +100,7 @@ bash tools/setup_live2d_assets.sh
 | **[长期记忆](docs/memory.md)** | 数据模型、总结时机、三级门槛、写入端校验、加载注入、记忆库、按角色隔离、排查日志 |
 | **[角色与自定义](docs/characters.md)** | 内置角色注册表、加角色步骤、自定义方案的续聊恢复、两个踩过的坑 |
 | **[架构与项目结构](docs/architecture.md)** | 技术栈、目录树、API 兼容性 |
+| **[交互式架构图](https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html)** | 点开就看的通话链路图（[仓库内文件](docs/architecture-call-pipeline.html)，用 Archify 生成） |
 
 > 主自述文件只留「能做什么 + 怎么跑起来」；实现细节与踩坑记录都在上面这几册里。
 
