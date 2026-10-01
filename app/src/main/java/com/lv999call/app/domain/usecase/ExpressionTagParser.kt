@@ -22,7 +22,15 @@ import com.lv999call.app.domain.model.Live2DExpression
  */
 class ExpressionTagParser(
     private val expressions: ExpressionSet,
-    private val onExpression: (Live2DExpression) -> Unit
+    /**
+     * 解析到一个表情 / 姿势标签时回调。
+     *
+     * 返回值 = **宿主有没有真的用上它**。首轮（开场问候）`CallViewModel` 会故意忽略标签、
+     * 强制普通脸，那时返回 false；调用方（[ProcessAudioUseCase]）据此决定要不要让
+     * **语气**也跟着这条标签走 —— 否则会出现"脸是普通的、声音却按标签冷淡敷衍"的错位。
+     * 把这个判断交给宿主返回，而不是在解析层再实现一遍"哪些情况不算数"。
+     */
+    private val onExpression: (Live2DExpression) -> Boolean
 ) {
     /** 已经处理过的完整标签数量，用来避免同一条标签被重复触发 */
     private var emitted = 0

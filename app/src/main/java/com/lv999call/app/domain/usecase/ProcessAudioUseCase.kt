@@ -106,8 +106,14 @@ class ProcessAudioUseCase(
          */
         onUserMessage: (ChatMessage) -> Unit = {},
         onPartialResponse: (String) -> Unit,
-        /** LLM 通过 [[e:标签]] 触发表情时回调（Live2D 关闭时不会被触发） */
-        onExpression: (Live2DExpression) -> Unit = {}
+        /**
+         * LLM 通过 [[e:标签]] 触发表情时回调（Live2D 关闭时不会被触发）。
+         *
+         * **返回值 = 宿主有没有真的用上这个表情**：首轮开场问候 CallViewModel 会故意
+         * 忽略标签（强制普通脸）并返回 false，本用例据此决定要不要让**语气**也跟着走。
+         * 详见 [ExpressionTagParser] 的构造参数说明。
+         */
+        onExpression: (Live2DExpression) -> Boolean = { true }
     ): Pair<ChatMessage, ChatMessage?> {
         val config = configRepository.configFlow.first()
 
@@ -162,8 +168,12 @@ class ProcessAudioUseCase(
         // 标签协议规定每轮最多 1 个，所以直接覆盖即可，不需要队列。
         var turnEmotionKey: String? = null
         val tagParser = ExpressionTagParser(expressions) { expression ->
-            turnEmotionKey = expression.key
-            onExpression(expression)
+            val applied = onExpression(expression)
+            // 只有宿主**真的用上了**这个表情，语气才跟着走。首轮开场问候会被
+            // CallViewModel 故意忽略（强制普通脸），那时若仍按标签改语气，就会出现
+            // "脸是普通的、声音却冷淡敷衍"的错位 —— 真机上正是这么暴露的。
+            if (applied) turnEmotionKey = expression.key
+            applied
         }
         // 边收边剥离推理块：思考内容既不显示也不朗读（详见 ReasoningStripper）
         val reasoningStripper = ReasoningStripper()

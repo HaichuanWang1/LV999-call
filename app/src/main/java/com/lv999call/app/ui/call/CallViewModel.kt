@@ -244,20 +244,26 @@ class CallViewModel(
      *
      * 只做记录 + 递增序号，实际下发与保持时长由 UI 层决定
      * （静默音频、页面不可见等情况不该由 ViewModel 猜）。
+     *
+     * @return **这个表情有没有真的被用上**。首轮强制普通脸时返回 false ——
+     *         [ProcessAudioUseCase] 据此决定要不要让这一轮的**语气**也跟着标签走：
+     *         脸被忽略了、声音却按标签演，就会出现"普通脸配冷淡敷衍的语气"的错位。
+     *         把这个判断放在这里返回，而不是让语气那边再实现一遍"哪些情况不算数"。
      */
-    private fun cueExpression(expression: Live2DExpression) {
+    private fun cueExpression(expression: Live2DExpression): Boolean {
         // 首轮（开场问候）强制"普通脸"：
         // 实测 LLM 打招呼时几乎必然挑 `06 0.0`（圆眼圈嘴），而提示词里的招呼示例
         // 恰好就是 0.0 —— 等于我把它教成了每通电话开场都摆这个傻脸。
         // 开场白不需要额外表情演出，直接忽略标签、保持模型默认表情。
         // 标签在解析层已经被剥掉，所以忽略它也绝不会被念出来。
         if (isOpeningTurn()) {
-            android.util.Log.d("CallVM", "首轮表情被忽略（强制普通脸）: ${expression.key}")
-            return
+            android.util.Log.d("CallVM", "首轮表情被忽略（强制普通脸）: ${expression.key}（语气也不跟着走）")
+            return false
         }
         expressionSeq += 1
         _expressionCue.value = ExpressionCue(expression.modelName, expressionSeq)
         android.util.Log.d("CallVM", "LLM 表情: ${expression.key} → ${expression.modelName}")
+        return true
     }
 
     /**

@@ -352,7 +352,9 @@ class SummarizeMemoryUseCase(
         //    未知标签也会被剥掉，截断留下的 `[[e:生` 残片也一并处理）。
         //    ⚠️ 绝不能用 ChatRepository.REGEX_STYLE_ANNOTATION：那已是"（温柔）"这类
         //    风格白名单，剥不掉 `[[e:生气]]`（plan4 §3.2 Step 6）。
-        val tagClean = ExpressionTagParser(ExpressionSet.EMPTY) {}.finish(raw.toString())
+        //    返回值（宿主有没有用上这个表情）在这里无意义：空表情集永远不会命中标签，
+        //    这个 parser 纯粹是拿来剥文本的，所以直接返回 true。
+        val tagClean = ExpressionTagParser(ExpressionSet.EMPTY) { true }.finish(raw.toString())
 
         // 6b 防模型吐 <think>/<reasoning>：走一遍与通话侧同一套剥离器，避免两套口径
         val reasoningStripper = ReasoningStripper()
