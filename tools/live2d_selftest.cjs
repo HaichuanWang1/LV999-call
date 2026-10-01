@@ -93,6 +93,27 @@ const model = {
   internalModel: {
     originalWidth: 2048, originalHeight: 2048,
     coreModel,
+    /**
+     * 命中盒走 im.getDrawableBounds(i) —— 与 layout()/contentBounds() 同源的
+     * "画布像素"空间（Core 的顶点是模型单位，两套坐标差了 PixelsPerUnit，见 bridge.js）。
+     * mock 直接返回该 drawable 的顶点 AABB，于是这个空间就是 mock 顶点所在的空间，
+     * 断言里的期望值不用跟着变。
+     *
+     * 注意只有 3 个 drawable：contentBounds() 要求 ≥4 个有效包围盒，
+     * 所以它照旧返回 null、布局回落到整块画布 —— 与加这个函数之前一致。
+     */
+    getDrawableBounds(i) {
+      const v = MOCK_DRAWABLES[i] && MOCK_DRAWABLES[i].verts;
+      if (!v) return null;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let k = 0; k < v.length; k += 2) {
+        if (v[k] < x0) x0 = v[k];
+        if (v[k] > x1) x1 = v[k];
+        if (v[k + 1] < y0) y0 = v[k + 1];
+        if (v[k + 1] > y1) y1 = v[k + 1];
+      }
+      return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    },
     expressionManager: {
       // 名字刻意与真实模型一致：带编号、空格不统一 —— 正是容易写错的地方
       definitions: [{ Name: '01黑脸' }, { Name: '03 生气' }, { Name: '06 0.0' }, { Name: '月卡' }],
@@ -674,8 +695,8 @@ function check(name, cond, extra = '') {
   check('ready 信息带上摸头能力（宿主不再装触摸层，只看部件盒算不算得出来）',
         !!swInfo && !!swInfo.pat && swInfo.pat.enabled === true && swInfo.pat.boxReady === true,
         swInfo && JSON.stringify(swInfo.pat));
-  check('银狼档位的 headParts 与 dump 脚本一致（15 个）',
-        !!swInfo && swInfo.pat.headParts === 15, swInfo && String(swInfo.pat.headParts));
+  check('银狼档位的 headParts 与 dump 脚本一致（13 个，不含头发）',
+        !!swInfo && swInfo.pat.headParts === 13, swInfo && String(swInfo.pat.headParts));
   check('ready 信息带上动作组与档位表（排查"摸头没什么动静"第一眼看它）',
         !!swInfo && swInfo.pat.motionGroup === true && swInfo.pat.tiers === 4,
         swInfo && JSON.stringify({ g: swInfo.pat.motionGroup, t: swInfo.pat.tiers }));
@@ -685,20 +706,20 @@ function check(name, cond, extra = '') {
   //   头(900~1100, 300~500) ∪ 五官(920~1080, 500~620) = (900~1100, 300~620)
   const PAD = 0.08;
   const expBox = {
-    minX: 900 - 200 * PAD, maxX: 1100 + 200 * PAD,
-    minY: 300 - 320 * PAD, maxY: 620 + 320 * PAD,
+    x: 900 - 200 * PAD, y: 300 - 320 * PAD,
+    width: 200 * (1 + 2 * PAD), height: 320 * (1 + 2 * PAD),
   };
   const near = (a, b) => Math.abs(a - b) < 0.01;
   const dbg = JSON.parse(win.L2D.debugPatHit(true));
-  const mb = dbg.modelBox;
+  const mb = dbg.contentBox;
   check('命中盒由头部部件顶点算出（不是兜底矩形）',
         !!dbg.box && dbg.box.w > 0 && dbg.box.h > 0, JSON.stringify(dbg.box));
   check('命中盒 = 头 ∪ 五官（挂在子部件上的顶点靠祖先链算进来）',
-        !!mb && near(mb.minX, expBox.minX) && near(mb.maxX, expBox.maxX) &&
-        near(mb.minY, expBox.minY) && near(mb.maxY, expBox.maxY),
+        !!mb && near(mb.x, expBox.x) && near(mb.x + mb.width, expBox.x + expBox.width) &&
+        near(mb.y, expBox.y) && near(mb.y + mb.height, expBox.y + expBox.height),
         JSON.stringify(mb) + ' 期望 ' + JSON.stringify(expBox));
   check('身体部件的远端顶点没有漏进命中盒',
-        !!mb && mb.maxX < 2000 && mb.maxY < 2000, JSON.stringify(mb));
+        !!mb && mb.x + mb.width < 2000 && mb.y + mb.height < 2000, JSON.stringify(mb));
 
   // 命中点从**上报的盒子**推出来，而不是写死坐标：换布局、换模型都不会让用例失效
   const hitPt = { x: dbg.box.x + dbg.box.w / 2, y: dbg.box.y + dbg.box.h / 2 };
@@ -743,7 +764,7 @@ function check(name, cond, extra = '') {
   MOCK_PART_OPACITY[1] = 0;
   const dbgOp = JSON.parse(win.L2D.debugPatHit(true));
   check('关掉的替换件不参与命中盒（脸部件 opacity=0 → 盒子收缩到五官那一块）',
-        !!dbgOp.modelBox && dbgOp.modelBox.minX > 900, JSON.stringify(dbgOp.modelBox));
+        !!dbgOp.contentBox && dbgOp.contentBox.x > 900, JSON.stringify(dbgOp.contentBox));
   MOCK_PART_OPACITY[1] = 1;
 
   // 拿不到 Core 数据时回落到兜底矩形 —— 不能因此变成"点了没反应"
@@ -763,42 +784,91 @@ function check(name, cond, extra = '') {
         win.L2D.patHead(fbPt) === true, JSON.stringify(fbPt));
   coreModel._model = savedRaw;
 
-  // ---- 页面内手势：宿主不再参与判定，这里派发真实 pointer 事件 ----
+  // ---- 页面内手势：按住 + 滑动（宿主零参与）----
+  //
+  // 为什么不是轻点：摸头是持续的接触动作。轻点时手指落下就走，
+  // 舞台上任何一次误触都算摸头，还容易连点刷档位。
   const VW = 1080, VH = 1920;
-  tick(120);
-  rec.events.length = 0;
-  fire('pointerdown', hitPt.x * VW, hitPt.y * VH);
-  fire('pointerup', hitPt.x * VW, hitPt.y * VH);
-  check('轻点：页面内 pointer 事件能触发摸头（宿主零参与）',
-        rec.events.some(isPlaying), JSON.stringify(rec.events.filter(([t]) => t === 'pat')));
+  const px = (n) => n * VW;
+  const py = (n) => n * VH;
+  const srcOf = (ev) => JSON.parse(ev[1]).source;
 
-  tick(120);
+  tick(200);   // 先把上一节的连点窗口熬过去
   rec.events.length = 0;
-  fire('pointerdown', hitPt.x * VW, hitPt.y * VH);
-  fire('pointerup', hitPt.x * VW + 60, hitPt.y * VH);   // 划走了
-  check('滑动不算轻点（不触发）', !rec.events.some(isPlaying), JSON.stringify(rec.events));
+  fire('pointerdown', px(hitPt.x), py(hitPt.y));
+  fire('pointerup', px(hitPt.x), py(hitPt.y));
+  check('轻点不触发（摸头是"按住+滑动"，不是戳一下）',
+        !rec.events.some(isPlaying), JSON.stringify(rec.events));
 
-  tick(120);
+  tick(200);
   rec.events.length = 0;
-  fire('pointerdown', hitPt.x * VW, hitPt.y * VH);
-  tick(40);   // 40 帧 ≈ 640ms，超过 400ms 的轻点上限
-  fire('pointerup', hitPt.x * VW, hitPt.y * VH);
-  check('长按不算轻点（不触发）', !rec.events.some(isPlaying), JSON.stringify(rec.events));
+  fire('pointerdown', px(hitPt.x), py(hitPt.y));
+  tick(14);    // 14 帧 ≈ 224ms > pressDelay 180ms
+  const holdEv = rec.events.filter(isPlaying).pop();
+  check('按住 0.18s 触发第一下（source=hold）',
+        !!holdEv && srcOf(holdEv) === 'hold', JSON.stringify(rec.events));
+
+  // 按住期间滑动 → 再揉一下，档位继续涨
+  const tierBefore = holdEv ? JSON.parse(holdEv[1]).tier : -1;
+  tick(14);    // 让冷却(0.2s)与最小间隔(0.14s)都过去
+  rec.events.length = 0;
+  fire('pointermove', px(hitPt.x) + 60, py(hitPt.y));
+  const strokeEv = rec.events.filter(isPlaying).pop();
+  check('按住后滑动 60px 算又揉了一下（source=stroke，档位 +1）',
+        !!strokeEv && srcOf(strokeEv) === 'stroke' &&
+        JSON.parse(strokeEv[1]).tier === tierBefore + 1,
+        JSON.stringify(rec.events));
+
+  // 滑出头部盒：不算（手指滑到她腿上不是摸头）
+  tick(14);
+  rec.events.length = 0;
+  fire('pointermove', px(0.5), py(0.99));
+  check('滑出头部不算摸头', !rec.events.some(isPlaying), JSON.stringify(rec.events));
+
+  // 松手：结束这次接触
+  tick(14);
+  fire('pointerup', px(0.5), py(0.99));
+
+  // 真机踩过：手指一放上去就开始揉，180ms 内已经移动了几十像素 ——
+  // 按位移取消会把这种正常操作误杀成"按了没反应"
+  tick(200);
+  rec.events.length = 0;
+  fire('pointerdown', px(hitPt.x), py(hitPt.y));
+  fire('pointermove', px(hitPt.x) + 20, py(hitPt.y) + 20);   // 还没按够就先滑了
+  tick(14);
+  check('按够时间之前就滑动，不会取消这次接触',
+        rec.events.some(isPlaying), JSON.stringify(rec.events));
+
+  // 松手后移动不再触发
+  fire('pointerup', px(hitPt.x) + 20, py(hitPt.y) + 20);
+  tick(14);
+  rec.events.length = 0;
+  fire('pointermove', px(hitPt.x), py(hitPt.y));
+  check('松手后移动不再触发（摸头只发生在按住期间）',
+        !rec.events.some(isPlaying), JSON.stringify(rec.events));
 
   // 点在头部盒之外（下半身那一片）不该触发
   tick(120);
   check('摸头：点头部盒之外不触发', win.L2D.patHead({ x: 0.5, y: 0.95 }) === false);
 
   // LLM 情绪表情在场时不许抢戏
-  win.L2D.setExpression('03 生气');
-  tick(120);
+  // （先熬过连点窗口，否则自动档位会接着上一节从第 3 档开始，测的就不是"前几档"了）
+  win.L2D.setExpression('01黑脸');
+  tick(400);
   rec.events.length = 0;
   check('有 LLM 情绪表情时摸头仍然出动作（姿势不抢戏、但动作要有）',
         win.L2D.patHead(hitPt) === true);
   const withCue = rec.events.filter(isPlaying);
-  check('有 LLM 情绪表情时不下发自己的表情（不覆盖 _cue）',
+  check('有 LLM 情绪表情时前几档不下发自己的表情（不覆盖 _cue）',
         withCue.length === 1 && JSON.parse(withCue[0][1]).expression === null,
         JSON.stringify(withCue));
+  // 但最后一档"不耐烦"要盖过 LLM 的表情：被摸烦了还挂着笑脸说不通
+  tick(200);
+  rec.events.length = 0;
+  check('最后一档盖过 LLM 的情绪表情（不耐烦优先）',
+        win.L2D.patHead({ x: hitPt.x, y: hitPt.y, tier: 3 }) === true &&
+        rec.events.filter(isPlaying).some((ev) => JSON.parse(ev[1]).expression === '03 生气'),
+        JSON.stringify(rec.events.filter(isPlaying)));
   win.L2D.setExpression(null);
 
   // ========================================================================

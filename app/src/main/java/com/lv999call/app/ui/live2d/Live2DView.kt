@@ -304,8 +304,11 @@ class Live2DController internal constructor() {
                     Log.d(TAG, "摸头未演出: ${payload.take(200)}")
                     return
                 }
-                val name = json.optString("expression", "")?.takeIf { it.isNotEmpty() }
-                if (name == null) return
+                // ⚠️ expression 可能是 JSON null（有 LLM 情绪表情时 JS 就不套自己的脸）。
+                // 这里必须用 isNull 判断：org.json 的 optString 会把 JSON null 变成
+                // **字符串 "null"**，直接下发会被 JS 判成"模型没有这个表情"并刷一条警告。
+                if (json == null || json.isNull("expression")) return
+                val name = json.optString("expression", "").takeIf { it.isNotEmpty() } ?: return
                 val holdMs = json.optLong("holdMs", 1200L)
 
                 setExpression(name)

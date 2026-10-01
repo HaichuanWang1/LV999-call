@@ -99,12 +99,23 @@
       /**
        * 冷却（秒）：这段时间内的重复触发直接忽略。
        *
-       * 刻意很短（0.25s）：它只用来吞掉"一次按压被识别成两下"的抖动，
-       * **不能**拦掉用户真的在连摸 —— 连点计数（CFG.pat.tiers）靠的就是每一下都算数。
+       * 刻意很短（0.2s）：它只用来吞掉"同一次接触被识别成两下"的抖动，
+       * **不能**拦掉用户真的在连摸 —— 连摸计数（CFG.pat.tiers）靠的就是每一下都算数。
        * 旧值是 0.6 + duration（约 1.5s），那样连摸四下根本摸不到第 4 档。
        */
-      cooldown: 0.25,
-      waves: 2.2,       // 一个 duration 内包含几个"上下"周期（= 被揉了几下）
+      cooldown: 0.2,
+      waves: 2.2,
+
+      // ---------------- 手势：按住 + 滑动（不是轻点）----------------
+      //
+      // 轻点的问题：手指落下就走，舞台上任何一次误触都算摸头，还容易连点刷档位。
+      // 摸头本质是"手放上去、揉几下"，所以拆成两个动作：
+      //   按住 pressDelay 秒 → 算手放上去了，摸第一下；
+      //   之后每滑过 strokeDistancePx → 算又揉了一下（档位跟着涨）。
+      // 松手什么都不触发。参数单位：秒 / CSS px。
+      pressDelay: 0.18,
+      strokeDistancePx: 48,
+      strokeMinGap: 0.14,   // 两次"揉"之间的最小间隔，防飞快划一下冲到第 4 档       // 一个 duration 内包含几个"上下"周期（= 被揉了几下）
 
       /**
        * 命中区 = **头部部件的顶点包围盒**（不再手调矩形）。
@@ -335,15 +346,16 @@
       // sway 有效：这个模型的 ParamBodyAngleZ 不是物理输出（与 DeepSeek 酱相反）。
       // 表情用模型自带的「02 脸红爱心」—— 被摸头脸红是最贴的反应。
       //
-      // headParts 由 tools/live2d_dump_parts.py 生成（15 个）：
-      //   头饰 / 前发 / 五官 / 脸 / 头饰后 / 后发 / 闭眼 / 眼泪 / 眉毛 /
-      //   眼睛 / 嘴巴 / 耳朵 / 闭嘴 / 张嘴 / 生气嘴
-      // 刻意不含「脖子」（在头下面，含进去会让"摸头"下探到肩膀）与
-      // 三个眼镜部件（贴片；其中两个还是变身特效）。
+      // headParts 由 tools/live2d_dump_parts.py 生成（13 个，**不含头发**）：
+      //   头饰 / 五官 / 脸 / 头饰后 / 闭眼 / 眼泪 / 眉毛 / 眼睛 / 嘴巴 /
+      //   耳朵 / 闭嘴 / 张嘴 / 生气嘴
+      // 刻意不含「前发 / 后发」：实测后发单件 1673×1686 px、一直垂到脚，
+      // 混进来命中盒会盖住整个角色（连大腿都算摸头）—— 见脚本里 HAIR 那组说明。
+      // 也不含「脖子」（在头下面）与三个眼镜部件（贴片，其中两个还是变身特效）。
       pat: {
-        headParts: ['Part78', 'Part89', 'Part94', 'Part127', 'Part158', 'Part159',
-                    'Part95', 'Part102', 'Part112', 'Part113', 'Part120', 'Part128',
-                    'Part121', 'Part125', 'Part126'],
+        headParts: ['Part78', 'Part94', 'Part127', 'Part158', 'Part95', 'Part102',
+                    'Part112', 'Part113', 'Part120', 'Part128', 'Part121', 'Part125',
+                    'Part126'],
         amp: { tilt: 3.2, brow: 0.18, smile: 0.22, squint: 0.20, mouthForm: 0.10, sway: 1.6 },
         expression: '02 脸红爱心',
         holdMs: 1200,
@@ -462,16 +474,16 @@
       //     这些参数，写着不报错但毫无效果，留着只会让调参时困惑。
       // 所以这档的手感主要靠 tilt（歪头）+ brow + mouthForm，再加上表情「脸红」。
       //
-      // headParts 由 tools/live2d_dump_parts.py 生成（19 个）：
-      //   发型1 / 恶魔角 / 眉型 / 眼睛L / 眼睛R / 发型F2 / 动物耳朵L / 头发 /
-      //   动物耳朵R / 嘴巴 / 耳朵L / 脸蛋 / 耳朵R / 发型D2 / 发型蛋筒D2 /
-      //   猫猫耳 / 兔兔耳 / 后发短 / R耳
-      // 这个模型有一堆"发型/耳朵预设"替换件：这里全留着，靠运行时的
-      // opacity 过滤把没启用的那几套剔掉（它们被切换时部件不透明度会归零）。
+      // headParts 由 tools/live2d_dump_parts.py 生成（13 个，**不含头发**）：
+      //   恶魔角 / 眉型 / 眼睛L / 眼睛R / 动物耳朵L / 动物耳朵R / 嘴巴 /
+      //   耳朵L / 脸蛋 / 耳朵R / 猫猫耳 / 兔兔耳 / R耳
+      // 不含「头发 / 发型1 / 发型F2 / 发型D2 / 发型蛋筒D2 / 后发短」：实测头发
+      // 单件 2378×2790 px，几乎覆盖整个模型（见脚本里 HAIR 那组说明）。
+      // 这档的「脸蛋」本身就是整个头，外扩 8% 足够。
+      // 剩下的替换件（猫猫耳 / 兔兔耳 / 发型预设）靠运行时的 opacity 过滤剔除。
       pat: {
-        headParts: ['Part92', 'Part48', 'Part101', 'Part57', 'Part58', 'Part19',
-                    'Part44', 'Part14', 'Part47', 'Part69', 'Part68', 'Part46',
-                    'Part45', 'Part160', 'Part161', 'Part98', 'Part95', 'hair_d',
+        headParts: ['Part48', 'Part101', 'Part57', 'Part58', 'Part44', 'Part47',
+                    'Part69', 'Part68', 'Part46', 'Part45', 'Part98', 'Part95',
                     'Part96'],
         amp: { tilt: 3.0, brow: 0.16, smile: 0, squint: 0, mouthForm: 0.08, sway: 0 },
         expression: '脸红',
@@ -570,9 +582,13 @@
   var _patLastHit = null;      // 调试：最近一次命中判定 {ok,nx,ny,src,box}
   var _patBoxEl = null;        // 调试用的命中框 DOM（仅 _patDebug 时存在）
   var _headPartIdx = null;     // 头部部件索引集合（换模型时清）
-  var _patDownAt = -1;         // 手势：按下时刻（performance.now()，毫秒）
-  var _patDownX = 0;           // 手势：按下位置（clientX/Y，用于判"划走了"）
-  var _patDownY = 0;
+  // ---- 手势状态（按住 + 滑动，见"摸头手势"那一段）----
+  var _patDownIdle = -1;       // 按下时的 _idleTime（秒）；-1 表示没按住
+  var _patArmed = false;       // 是否已"按够久"（置位后才算手放上去了）
+  var _patMoved = 0;           // 本次按住累计滑动距离（CSS px）
+  var _patStrokeIdle = -1;     // 上一次"又揉一下"的 _idleTime
+  var _patLastX = 0;           // 指针最后位置（clientX/Y）
+  var _patLastY = 0;
   var _patTier = -1;           // 当前/最近一档（0 基），-1 表示还没摸过
   var _patAmpScale = 1;        // 当前档位的叠层幅度倍率
   var _patCount = 0;           // 连点计数（一串里摸了几下）
@@ -984,21 +1000,29 @@
   }
 
   /**
-   * 头部包围盒，**模型坐标**（与 drawable 顶点、contentBounds 同一套空间）。
+   * 头部包围盒，**与 contentBounds() / layout() 同一套空间**（画布像素、左上原点、y 向下）。
    *
-   * 单独抽出来有两个用处：一是 [patHeadBox] 的换算基础，二是调试/自测可以
-   * 直接断言"盒子到底框住了哪些顶点" —— 屏幕坐标会把结论糊掉。
+   * ⚠️ 为什么不用 Core 的 `drawables.vertexPositions` 自己算：
+   * 那是**模型单位**（原点在画布中心、y 向上、每单位 `canvasinfo.PixelsPerUnit` 像素，
+   * 银狼这档是 7000）。拿它去套 layout() 的像素公式会得到一个近乎零尺寸的盒子
+   * （实测 w=0.00009，整块跑到屏幕外）—— 两者根本不是一套坐标。
+   * 所以这里改用与 layout() **同源**的 `im.getDrawableBounds(i)`：它返回的就是
+   * contentBounds() 用的那份像素空间，于是"看到的缩放"与"命中的区域"永远一致。
    *
-   * @returns {minX,minY,maxX,maxY}；null 表示算不出来
+   * drawable 索引两边是一一对齐的（框架只是把 Core 的数组包了一层），
+   * 所以"网格 → 部件"仍然用 Core 的 parentPartIndices 查。
+   *
+   * @returns {x,y,width,height,drawables}（像素空间）；null 表示算不出来
    */
-  function patHeadModelBox() {
+  function patHeadContentBox() {
+    var im = model && model.internalModel;
     var raw = coreRaw();
-    if (!raw) return null;
+    if (!im || typeof im.getDrawableBounds !== 'function' || !raw) return null;
     var set = headPartIndexSet(raw);
     if (!set) return null;
 
     var d = raw.drawables, p = raw.parts;
-    if (!d || !d.parentPartIndices || !d.vertexPositions) return null;
+    if (!d || !d.parentPartIndices) return null;
 
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, used = 0;
     for (var i = 0; i < d.parentPartIndices.length; i++) {
@@ -1007,17 +1031,15 @@
       // 关掉的替换件（发型 / 耳朵 / 贴纸预设）不参与，否则盒子会被没启用的那套撑歪
       if (p.opacities && p.opacities[pi] <= 0.01) continue;
       if (d.opacities && d.opacities[i] <= 0.01) continue;
-      var v = d.vertexPositions[i];
-      if (!v || v.length < 2) continue;
+      var b;
+      try { b = im.getDrawableBounds(i); } catch (e) { b = null; }
+      if (!b || !isFinite(b.x) || !isFinite(b.y) ||
+          !isFinite(b.width) || !isFinite(b.height)) continue;
       used++;
-      for (var k = 0; k < v.length; k += 2) {
-        var vx = v[k], vy = v[k + 1];
-        if (!isFinite(vx) || !isFinite(vy)) continue;
-        if (vx < minX) minX = vx;
-        if (vx > maxX) maxX = vx;
-        if (vy < minY) minY = vy;
-        if (vy > maxY) maxY = vy;
-      }
+      if (b.x < minX) minX = b.x;
+      if (b.x + b.width > maxX) maxX = b.x + b.width;
+      if (b.y < minY) minY = b.y;
+      if (b.y + b.height > maxY) maxY = b.y + b.height;
     }
     if (!used || !(maxX > minX) || !(maxY > minY)) return null;
 
@@ -1026,8 +1048,9 @@
     var pad = CFG.pat.padRatio || 0;
     var w = maxX - minX, h = maxY - minY;
     return {
-      minX: minX - w * pad, maxX: maxX + w * pad,
-      minY: minY - h * pad, maxY: maxY + h * pad
+      x: minX - w * pad, y: minY - h * pad,
+      width: w * (1 + 2 * pad), height: h * (1 + 2 * pad),
+      drawables: used
     };
   }
 
@@ -1035,27 +1058,28 @@
    * 头部包围盒（**视口归一化**，0~1，左上为原点）。
    *
    * 每次点击现算，不缓存：模型在呼吸、会转头、布局也可能变，静态盒子必然偏 ——
-   * 这正是旧实现"看着在头上却判定不到"的原因。代价是几万次 min/max（亚毫秒级），
-   * 而点击是低频事件，不值得为它做缓存失效。
+   * 这正是旧实现"看着在头上却判定不到"的原因。代价是几十次 getDrawableBounds
+   * （点击是低频事件，不值得为它做缓存失效）。
    *
-   * @returns null 表示算不出来（老运行时 / headParts 为空 / 顶点全无效），
+   * 换算与 layout() 里 `contentBounds() → model.x/y` 完全同一套公式，
+   * 所以只要 layout() 是对的，这个盒子就一定对得上画面。
+   *
+   * @returns null 表示算不出来（老运行时 / headParts 为空 / 包围盒取不到），
    *          调用方应回落到 [patFallbackBox]
    */
   function patHeadBox() {
-    var mb = patHeadModelBox();
+    var cb = patHeadContentBox();
     var L = _layoutCache;
-    if (!mb || !L || !L.sw || !L.sh) return null;
+    if (!cb || !L || !L.sw || !L.sh) return null;
 
-    // 模型坐标 → 视口归一化：与 layout() 同一套变换。
-    // anchor 在画布中心，所以 model.x/y 就是"画布中心"的屏幕位置，
-    // 于是任意模型坐标 (mx,my) 落在 model.x + (mx - canvasW/2) * scale。
-    var x0 = (L.x + (mb.minX - L.canvasW / 2) * L.scale) / L.sw;
-    var x1 = (L.x + (mb.maxX - L.canvasW / 2) * L.scale) / L.sw;
-    var y0 = (L.y + (mb.minY - L.canvasH / 2) * L.scale) / L.sh;
-    var y1 = (L.y + (mb.maxY - L.canvasH / 2) * L.scale) / L.sh;
+    // 画布像素 → 屏幕：anchor 在画布中心，model.x/y 就是画布中心的屏幕位置
+    var left = L.x + (cb.x - L.canvasW / 2) * L.scale;
+    var top = L.y + (cb.y - L.canvasH / 2) * L.scale;
     return {
-      x: Math.min(x0, x1), y: Math.min(y0, y1),
-      w: Math.abs(x1 - x0), h: Math.abs(y1 - y0)
+      x: left / L.sw,
+      y: top / L.sh,
+      w: (cb.width * L.scale) / L.sw,
+      h: (cb.height * L.scale) / L.sh
     };
   }
 
@@ -1095,49 +1119,99 @@
     return { ok: ok, box: box, src: src };
   }
 
-  // ======================= 摸头手势（在页面内捕获）=======================
+  // ======================= 摸头手势（按住 + 滑动，在页面内捕获）=======================
   //
   // 为什么在页面里而不是宿主（Compose）：WebView 是真实 View，绘制与触摸派发
   // 都在 Compose 画布之上 —— 宿主在 Compose 里叠一层触摸层**收不到点击**
   // （旧实现就是这么做的，现象就是"点了没反应"）。放在这里还顺带干掉了
   // 两套坐标系：手势与命中判定用的是同一个视口、同一套归一化。
   //
-  // 只认"轻点"：按下与抬起间隔够短、位移够小。滑动与长按不触发，
-  // 避免与将来的交互（拖动、缩放）抢手势。
-  var PAT_TAP_MAX_MS = 400;
-  var PAT_TAP_MAX_PX = 24;
+  // 为什么不是"轻点"：摸头是个**持续的接触动作**，不是戳一下。
+  //   轻点：手指落下就走 → 舞台上任何一次误触都算摸头（还容易连点刷档位）；
+  //   按住：手放上去 0.18s 才算数 —— 既像"把手放她头上"，也天然滤掉误触；
+  //   滑动：按住后每滑过一段距离算"又揉了一下"，档位跟着涨（连摸会不耐烦）。
+  // 松手不触发任何东西：摸头是"按住期间"的事。
+  //
+  // ⚠️ 按够时间之前**不做任何位移取消**（真机踩过）：真人把手指放上去就会开始揉，
+  // 180ms 内移动几十像素太正常了，按位移取消会把正常操作误杀成"按了没反应"。
+  // 误触由"按够 0.18s" + "按够时手指必须在头部盒里"这两条挡，不需要再看位移。
+  //
+  // 计时用 _idleTime（跟渲染帧走）而不是 setTimeout：
+  //   渲染暂停时不该继续计时；自测里也能用 tick() 精确推进，不必真的睡。
 
   /** 视口归一化坐标（与 patHeadBox 同一套单位） */
-  function patPointerNorm(e) {
+  function patPointerNorm(x, y) {
     var sw = (_layoutCache && _layoutCache.sw) || window.innerWidth || 1;
     var sh = (_layoutCache && _layoutCache.sh) || window.innerHeight || 1;
-    return { x: (e ? e.clientX : 0) / sw, y: (e ? e.clientY : 0) / sh };
+    return { x: (x || 0) / sw, y: (y || 0) / sh };
+  }
+
+  /** 松手 / 取消：结束这次按压（摸头是按住期间的事，松手不触发） */
+  function endPatPress() {
+    _patDownIdle = -1;
+    _patArmed = false;
+    _patMoved = 0;
+    _patStrokeIdle = -1;
   }
 
   function onPatPointerDown(e) {
     if (!CFG.pat.enabled || !modelReady) return;
     if (e && e.isPrimary === false) return;   // 多指：只认第一根
-    _patDownAt = (typeof performance !== 'undefined' && performance.now)
-      ? performance.now() : Date.now();
-    _patDownX = e ? e.clientX : 0;
-    _patDownY = e ? e.clientY : 0;
+    _patDownIdle = _idleTime;
+    _patArmed = false;
+    _patMoved = 0;
+    _patStrokeIdle = -1;
+    _patLastX = e ? e.clientX : 0;
+    _patLastY = e ? e.clientY : 0;
   }
 
-  function onPatPointerUp(e) {
-    if (!CFG.pat.enabled || !modelReady) return;
-    if (_patDownAt < 0) return;
-    var now = (typeof performance !== 'undefined' && performance.now)
-      ? performance.now() : Date.now();
-    var held = now - _patDownAt;
-    var dx = (e ? e.clientX : 0) - _patDownX;
-    var dy = (e ? e.clientY : 0) - _patDownY;
-    _patDownAt = -1;
-    if (held > PAT_TAP_MAX_MS) return;                              // 长按不算点
-    if (Math.sqrt(dx * dx + dy * dy) > PAT_TAP_MAX_PX) return;      // 划走了不算点
-    triggerPat(patPointerNorm(e), 'tap');
+  /**
+   * 按住期间：滑过一段距离算"又揉了一下"
+   *
+   * 只在**头部盒里**才算数（滑出去就停，回来重新累计），
+   * 并且两次之间要有最小间隔 —— 飞快划一下不该瞬间冲到"不耐烦"。
+   */
+  function onPatPointerMove(e) {
+    if (_patDownIdle < 0 || !CFG.pat.enabled || !modelReady) return;
+    var x = e ? e.clientX : _patLastX;
+    var y = e ? e.clientY : _patLastY;
+    var dx = x - _patLastX, dy = y - _patLastY;
+    _patLastX = x;
+    _patLastY = y;
+    _patMoved += Math.sqrt(dx * dx + dy * dy);
+
+    // 还没按够时间：只累计位移，**不取消**（见上面那段说明）
+    if (!_patArmed) return;
+    if (_patMoved < (CFG.pat.strokeDistancePx || 48)) return;
+    if (_idleTime - _patStrokeIdle < (CFG.pat.strokeMinGap || 0.14)) return;
+
+    var norm = patPointerNorm(x, y);
+    if (!patHitTest(norm.x, norm.y).ok) {
+      _patMoved = 0;          // 滑出头部：这次不算，回来重新累计
+      return;
+    }
+    _patMoved = 0;
+    _patStrokeIdle = _idleTime;
+    triggerPat(norm, 'stroke');
   }
 
-  function onPatPointerCancel() { _patDownAt = -1; }
+  function onPatPointerUp() { endPatPress(); }
+  function onPatPointerCancel() { endPatPress(); }
+
+  /**
+   * 每帧检查"按住够久了没" —— 够了就当作手放上去了，摸第一下。
+   *
+   * 挂在帧循环里（见 onAfterMotionUpdate）而不是用定时器：
+   * 定时器与渲染状态两套时钟容易打架，而且自测里没法确定性地推进。
+   */
+  function updatePatPress() {
+    if (_patDownIdle < 0 || _patArmed) return;
+    if (_idleTime - _patDownIdle < (CFG.pat.pressDelay || 0.18)) return;
+    _patArmed = true;
+    _patMoved = 0;
+    _patStrokeIdle = _idleTime;
+    triggerPat(patPointerNorm(_patLastX, _patLastY), 'hold');
+  }
 
   /**
    * 模型里有没有摸头动作组（PatOnce）。
@@ -1246,10 +1320,11 @@
 
     var motion = playPatMotion(tcfg ? tcfg.motion : 0);
 
-    // 表情只在「当前没有 LLM 情绪表情」时才套 —— _cue 优先级更高，
-    // 否则一次摸头会把 LLM 刚触发的情绪脸冲掉，而且复位后回不到那张脸。
+    // 表情优先级：前几档让位给 LLM 的情绪表情（不抢戏，见 CFG.pat.cueScale），
+    // 但**最后一档"不耐烦"要盖过去** —— 被摸烦了还挂着一张 LLM 给的笑脸，说不通。
     var expr = (tcfg && tcfg.expression) || CFG.pat.expression || null;
-    if (_cue) expr = null;
+    var isLastTier = !!tiers && idx === tiers.length - 1;
+    if (_cue && !isLastTier) expr = null;
     notify('pat', {
       hit: true, playing: true, source: source, tier: idx,
       motion: motion, expression: expr,
@@ -1550,6 +1625,9 @@
     updateIdle(dt);
     applyIdle();
 
+    // 按住够久 → 摸第一下（见"摸头手势"那一段）
+    updatePatPress();
+
     // 摸头层写在待机层**之后**（同帧更晚 → 覆盖式叠加），
     // 但仍在 applyTransformReset 之前（变身收尾的复位值优先级最高）。
     updatePat(dt);
@@ -1814,7 +1892,7 @@
       return JSON.stringify({
         on: _patDebug,
         headParts: (CFG.pat.headParts || []).length,
-        modelBox: patHeadModelBox(),
+        contentBox: patHeadContentBox(),
         box: patHeadBox(),
         fallback: patFallbackBox(),
         last: _patLastHit
@@ -1891,7 +1969,7 @@
           sulk: _patSulkUntil > 0 && _idleTime <= _patSulkUntil,
           motionGroup: hasPatGroup(),
           headParts: (CFG.pat.headParts || []).length,
-          modelBox: patHeadModelBox(),
+          contentBox: patHeadContentBox(),
           box: patHeadBox(),
           fallbackBox: patFallbackBox(),
           lastHit: _patLastHit
@@ -1991,7 +2069,10 @@
     // 宿主（Compose）那边叠触摸层是收不到事件的：WebView 是真实 View，
     // 绘制与触摸派发都在 Compose 画布之上（旧实现就是栽在这里）。
     // 页面里没有可滚动/可拖拽内容，所以这些监听不会抢走别的手势。
+    //
+    // pointermove 必须一起监听：摸头是"按住 + 滑动"，光有 down/up 只能做轻点。
     window.addEventListener('pointerdown', onPatPointerDown, { passive: true });
+    window.addEventListener('pointermove', onPatPointerMove, { passive: true });
     window.addEventListener('pointerup', onPatPointerUp, { passive: true });
     window.addEventListener('pointercancel', onPatPointerCancel, { passive: true });
     // 长按选中 / 系统上下文菜单在舞台上没有意义，挡掉（否则按住会弹菜单）

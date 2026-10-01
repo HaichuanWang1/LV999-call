@@ -15,6 +15,12 @@
     -webkit-tap-highlight-color: transparent;
     -webkit-user-select: none;
     user-select: none;
+    /*
+     * 摸头是"按住 + 滑动"：交给页面自己处理指针移动，不要让浏览器把它
+     * 解释成滚动/缩放（否则 pointermove 会被浏览器抢走，滑动算不出距离）。
+     */
+    touch-action: none;
+    -webkit-touch-callout: none;
   }
   /*
    * 关键：必须让 canvas 脱离普通文档流并建立自己的层叠/合成层。
