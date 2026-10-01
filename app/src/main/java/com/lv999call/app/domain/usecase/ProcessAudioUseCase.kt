@@ -296,8 +296,20 @@ class ProcessAudioUseCase(
             // 没有表情标签时（提示词里要求"情绪不明显就宁可少加"）[EmotionVoiceStyles.styleFor]
             // 返回 null，拼出来就是原样的 ttsPrompt —— 行为与加这个功能之前完全一致，
             // 所以这条路径对"她本来就不怎么用标签"的角色零影响。
-            val voiceStyle = EmotionVoiceStyles.styleFor(turnEmotionKey)
-            if (turnEmotionKey != null && voiceStyle == null) {
+            //
+            // 开关关掉时同样拼不出情绪段，但**表情照常变** —— 那是 Live2D 那条路径的事，
+            // 与本开关无关。用户要的正是"脸可以变，别连声音一起改"。
+            val voiceStyle = if (config.emotionVoiceEnabled) {
+                EmotionVoiceStyles.styleFor(turnEmotionKey)
+            } else {
+                null
+            }
+            if (!config.emotionVoiceEnabled) {
+                // 只在"本来会有语气"时才吭声，否则每轮都刷一条无意义的日志
+                if (turnEmotionKey != null) {
+                    Log.d(TAG, "语气: 表情=$turnEmotionKey → 开关已关，声音不跟着情绪走")
+                }
+            } else if (turnEmotionKey != null && voiceStyle == null) {
                 // 表里漏了这个键 → 静默退回角色原本的语气。这一条日志是唯一的发现手段
                 // （键名写错不会报错，只会"怎么没效果"）。
                 Log.w(

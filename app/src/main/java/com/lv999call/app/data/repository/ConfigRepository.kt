@@ -71,6 +71,7 @@ class ConfigRepository(private val context: Context) {
         val BACKGROUND_URI = stringPreferencesKey("background_uri")
         val LIVE2D_ENABLED = stringPreferencesKey("live2d_enabled")
         val LIVE2D_TRANSFORM_ENABLED = stringPreferencesKey("live2d_transform_enabled")
+        val EMOTION_VOICE_ENABLED = stringPreferencesKey("emotion_voice_enabled")
 
         /**
          * 短通话也总结的开关（plan4 §5.7 / D4，默认关）。
@@ -135,6 +136,7 @@ class ConfigRepository(private val context: Context) {
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
             live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true,
+            emotionVoiceEnabled = prefs[EMOTION_VOICE_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false,
             memoryReminderEnabled = prefs[MEMORY_REMINDER_ENABLED]?.toBooleanStrictOrNull() ?: false,
@@ -170,6 +172,7 @@ class ConfigRepository(private val context: Context) {
             prefs[BACKGROUND_URI] = config.backgroundUri
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()
             prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
+            prefs[EMOTION_VOICE_ENABLED] = config.emotionVoiceEnabled.toString()
             prefs[MEMORY_AUTO_SUMMARIZE_ENABLED] = config.memoryAutoSummarizeEnabled.toString()
             prefs[MEMORY_SUMMARIZE_SHORT_CALLS] = config.memorySummarizeShortCalls.toString()
             prefs[MEMORY_REMINDER_ENABLED] = config.memoryReminderEnabled.toString()

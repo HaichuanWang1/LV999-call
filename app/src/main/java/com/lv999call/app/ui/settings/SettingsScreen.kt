@@ -78,6 +78,9 @@ fun SettingsScreen(
     var showApiKey by remember { mutableStateOf(false) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
     var live2dTransformEnabled by remember(config) { mutableStateOf(config.live2dTransformEnabled) }
+    // 声音跟着情绪走（默认开）。它是 Live2D 的子开关：表情标签协议只在 Live2D 打开时注入，
+    // 关掉 Live2D 后它无从生效，所以跟着 Live2D 一起隐藏
+    var emotionVoiceEnabled by remember(config) { mutableStateOf(config.emotionVoiceEnabled) }
     // 长期记忆两个开关（plan4 §5.7）
     var memoryAutoSummarizeEnabled by remember(config) { mutableStateOf(config.memoryAutoSummarizeEnabled) }
     var memorySummarizeShortCalls by remember(config) { mutableStateOf(config.memorySummarizeShortCalls) }
@@ -492,6 +495,20 @@ fun SettingsScreen(
                             Text("播模型自带的划卡变身（接通约 4.7s、挂断约 2.3s，挂断会多等这一小段再返回）；关掉不影响待机动作、表情与口型", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
                         }
                     }
+
+                    // 第二个子开关：声音跟着情绪走（v1.6.0 的新能力）。
+                    // 它同样依赖表情标签协议，而协议只在 Live2D 打开时注入 —— 所以放这里，
+                    // 而不是给一个"开着却什么都不做"的独立开关
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(28.dp))
+                        Switch(checked = emotionVoiceEnabled, onCheckedChange = { emotionVoiceEnabled = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("声音跟着情绪走", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                            Text("表情变化时连朗读语气一起变（只调音量、音高、气息，语速始终是角色本来的）；关掉后脸照常变，声音保持她一贯的语气", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant.copy(alpha = 0.6f))
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -605,6 +622,7 @@ fun SettingsScreen(
                             ),
                             live2dEnabled = live2dEnabled,
                             live2dTransformEnabled = live2dTransformEnabled,
+                            emotionVoiceEnabled = emotionVoiceEnabled,
                             memoryAutoSummarizeEnabled = memoryAutoSummarizeEnabled,
                             memorySummarizeShortCalls = memorySummarizeShortCalls,
                             memoryReminderEnabled = memoryReminderEnabled

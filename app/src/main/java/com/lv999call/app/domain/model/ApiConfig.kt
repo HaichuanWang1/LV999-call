@@ -114,6 +114,20 @@ data class ApiConfig(
     // 纯演出，关掉不影响待机动作与表情/口型
     val live2dTransformEnabled: Boolean = true,
 
+    /**
+     * 声音跟着情绪走（默认**开**）：把本轮表情标签对应的语气拼进这一次的 TTS 提示词。
+     *
+     * 关掉后**表情照常变**，只是朗读沿用角色一贯的语气 —— 脸是脸、声音是声音。
+     * 默认开是为了让升级上来的用户行为不变（这个能力在 v1.6.0 本来就是默认生效的，
+     * 若默认关，老用户升上来会发现"语气怎么不跟着走了"，那是静默的行为倒退）。
+     *
+     * 依赖 [live2dEnabled]：表情标签协议只在 Live2D 打开时注入（见
+     * [com.lv999call.app.domain.usecase.ProcessAudioUseCase] 拼提示词处），
+     * 所以 Live2D 关着时本开关**无从生效** —— 设置页因此把它做成 Live2D 的子开关，
+     * 而不是给一个"开着却什么都不做"的独立开关。
+     */
+    val emotionVoiceEnabled: Boolean = true,
+
     // ---------- 长期记忆（plan4 §5.7） ----------
 
     /**
