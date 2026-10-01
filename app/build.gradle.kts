@@ -14,8 +14,8 @@ android {
         applicationId = "com.lv999call.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.4.1"
+        versionCode = 13
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
