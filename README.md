@@ -9,7 +9,16 @@
   <a href="docs/memory.md"><img src="https://img.shields.io/badge/记忆-跨会话-9b59b6?style=for-the-badge" alt="记忆"></a>
   <a href="docs/characters.md"><img src="https://img.shields.io/badge/角色-内置%20·%20自定义-2ecc71?style=for-the-badge" alt="角色"></a>
   <a href="docs/architecture.md"><img src="https://img.shields.io/badge/架构-技术栈%20·%20目录-95a5a6?style=for-the-badge" alt="架构"></a>
-  <a href="https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html"><img src="https://img.shields.io/badge/架构图-交互式%20·%20点开就看-0891b2?style=for-the-badge" alt="交互式架构图"></a>
+</p>
+
+<p align="center">
+  <a href="https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html">
+    <img src="docs/assets/architecture-call-pipeline.png" alt="lv999call 语音通话架构图 —— 点开看可交互版本" width="880">
+  </a>
+  <br><br>
+  <a href="https://haichuanwang1.github.io/LV999-call/architecture-call-pipeline.html">
+    <img src="https://img.shields.io/badge/%F0%9F%94%8D%20点开交互式架构图-通话全链路%20·%20可缩放%20·%20带源码定位-0891b2?style=for-the-badge&labelColor=0b3d4d" alt="点开交互式架构图" height="44">
+  </a>
 </p>
 
 ## 能做什么
