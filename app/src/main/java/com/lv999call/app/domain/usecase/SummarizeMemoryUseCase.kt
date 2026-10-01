@@ -76,11 +76,16 @@ class SummarizeMemoryUseCase(
         data class SkippedRateLimited(val waitMs: Long) : SummarizeResult
 
         /**
-         * 模型成功应答了，但这通对话没什么可记的 —— **游标已推进**。
+         * **确定性地**没什么可记的 —— **游标已推进**。
          *
-         * 覆盖四种输出：提示词规定的「无」、空输出、过短、超长。它们的共同点是
-         * **不可重试**：同样的输入喂进去，下一次只会得到同样的输出。把它们当成 [Failed]
-         * 会让会话永久停在"待整理"，每触发一次就白烧一次 LLM 调用。
+         * 覆盖三类情形，共同点是**不可重试**：同样的输入喂进去，下一次只会得到同样的结果。
+         * 1. 模型成功应答但内容不可用：提示词规定的「无」、空输出、过短、超长；
+         * 2. 本批新消息里没有一句真实用户发言（只有自动开场问候与角色自己的话）；
+         * 3. 门槛没过，但这段对话的最后一条消息已经静默超过 [STALE_PENDING_MS]
+         *    —— 对话结束了，而门槛之下的内容按定义不值得单独成一条记忆。
+         *
+         * 把它们当成 [Failed] 会让会话永久停在"待整理"（每触发一次白烧一次 LLM 调用，
+         * 计数还永远清不掉），这正是「点立即整理没反应」的根因之一。
          *
          * 放弃的只是"派生出来的备忘"，对话原文仍在 `messages` 里、历史页随时能回看。
          */
@@ -231,8 +236,8 @@ class SummarizeMemoryUseCase(
         // ---- Step 3：门槛判断 ----
         // 「真实用户发言」必须排除开场问候：自动发的「你好」是以 role="user" 落库的
         // （CallViewModel 的 isAutoGreeting 路径），
-        // 不排除的话"只聊了一句"的通话也能凑出 1 轮用户发言；
-        // 而真正兜底的字符门槛在短通话开关打开后会被降到 8 字，这条就会漏。
+        // 不排除的话"只聊了一句"的通话也能凑出 1 轮用户发言；而短通话开关打开后
+        // 字符门槛只要求"非空"，这条就会漏得更彻底。
         // 实现取最精确的判据：**会话的第一条消息**若是用户发的「你好」，它才是开场问候
         // （它永远在列表首行，与游标位置无关）。
         val greetingId = all.firstOrNull()
@@ -256,32 +261,45 @@ class SummarizeMemoryUseCase(
                 "用户轮数=${realUsers.size} 字符=$userChars 短通话降档=$shortCalls$greetingNote$sourceNote"
         )
 
+        // 3a 本批里没有任何真实用户发言 —— **确定性地**"没有用户说过的话可记"，直接推进游标。
+        //    必须排在下面的条数门槛**之前**：它跟"新消息够不够"无关，排在后面时会被
+        //    「新消息=2 < 门槛」先挡掉、游标永远不动，于是这通会话永久挂在"待整理"里
+        //    （真机上 19 通积压里有 5 通正是这种：只有自动问候「你好」+ 角色自己的话）。
+        //    推进游标是安全的：开场问候按设计从不参与记忆，角色自己的话也不是"用户事实"；
+        //    之后续聊新增的消息仍在游标之后，照样会被评估。
+        if (realUsers.isEmpty()) {
+            return nothingToRemember(sessionId, fresh, "本批没有真实用户发言（开场问候不算）")
+        }
+
         // 降档只改门槛，不改"能不能总结"这件事本身（D4：打开的用户要的就是一句不落）
         val newMessageThreshold = if (shortCalls) SHORT_CALL_MIN_NEW_MESSAGES else minNewMessages
         if (fresh.size < newMessageThreshold) {
-            return skipped("新消息=${fresh.size} < 门槛$newMessageThreshold")
-        }
-        if (realUsers.isEmpty()) {
-            return skipped("没有任何用户发言（开场问候不算）")
+            return gateSkipped(sessionId, fresh, "新消息=${fresh.size} < 门槛$newMessageThreshold")
         }
         val minTurns = if (shortCalls) SHORT_CALL_MIN_USER_TURNS else MIN_USER_TURNS
         if (realUsers.size < minTurns && hintKeyword == null) {
-            return skipped("真实用户发言=${realUsers.size} 轮 < $minTurns 且未命中个人信息线索")
+            return gateSkipped(sessionId, fresh, "真实用户发言=${realUsers.size} 轮 < $minTurns 且未命中个人信息线索")
         }
         if (hintKeyword != null) {
             Log.d(TAG, "门槛: 命中个人信息线索「$hintKeyword」（该条 ≥ $MIN_HINT_MESSAGE_CHARS 字）")
         }
         val minChars = if (shortCalls) SHORT_CALL_MIN_USER_CHARS else MIN_USER_CHARS
         if (userChars < minChars) {
-            return skipped("用户文本合计=$userChars 字 < $minChars")
+            return gateSkipped(sessionId, fresh, "用户文本合计=$userChars 字 < $minChars")
         }
 
         // 时间闸门按**角色**算，不是按会话：一个会话只会总结一次，按会话算恒成立、等于没闸门；
         // 它真正要拦的是「挂断、隔 3 秒又打过来」这种连击（plan4 §5.3 / P4）。
         // 被它拦下的内容不会丢：游标不动 → 会在下次同角色通话时一并总结进后一条记忆。
-        val lastMemoryAt = memoryRepository.getLatestCreatedAt(key)
+        //
+        // ⚠️ 但它只对**刚发生的对话**生效（本批最新一条消息距今 < MIN_SUMMARY_INTERVAL_MS）。
+        // 批量补整理（「立即整理」/开聊补总结）面对的都是几十分钟前的旧会话，拿闸门拦它们
+        // 只会让一次点击最多写出 1 条记忆、同角色其余全部 SkippedRateLimited —— 用户看到的
+        // 依然是"按钮坏了"。挂断主路径的最新消息就是"现在"，连击保护原样保留。
         val now = System.currentTimeMillis()
-        if (lastMemoryAt != null && now - lastMemoryAt < MIN_SUMMARY_INTERVAL_MS) {
+        val isFreshDialogue = now - fresh.last().timestamp < MIN_SUMMARY_INTERVAL_MS
+        val lastMemoryAt = memoryRepository.getLatestCreatedAt(key)
+        if (isFreshDialogue && lastMemoryAt != null && now - lastMemoryAt < MIN_SUMMARY_INTERVAL_MS) {
             // 走独立的 SkippedRateLimited 而不是 skipped()：调用方要能对用户说
             // "请等 N 秒后再试"，而不是含糊的"还没到值得记录的门槛"（后者会让人以为内容不行）。
             val waitMs = MIN_SUMMARY_INTERVAL_MS - (now - lastMemoryAt)
@@ -426,6 +444,36 @@ class SummarizeMemoryUseCase(
     }
 
     /**
+     * 门槛没过：默认「只延迟不丢弃」（游标不动），但那只在**这段对话还可能长出新消息**时成立。
+     *
+     * 会话最后一条消息已经静默超过 [STALE_PENDING_MS] → 这段对话结束了，而门槛没过的内容
+     * 按定义就是"不值得单独成一条记忆"。继续挂着它只会让记忆库页的「有 N 通对话还没整理」
+     * 永远清不掉：每次点「立即整理」都重新走一遍同样的门槛判断、得到同样的结论，
+     * 用户看到的就是"点了没反应"。这时按"确定性无内容"处理：推进游标、不写记忆、**不调 LLM**。
+     *
+     * 已知代价（写在这里与 docs/memory.md，别当成 bug）：用户在阈值之后**续聊**同一会话时，
+     * 这段被放弃的、门槛之下的内容不再参与总结。它本来也不足以单独成一条记忆，
+     * 而续聊新增的消息仍在游标之后，会照常被评估。
+     */
+    private suspend fun gateSkipped(
+        sessionId: String,
+        fresh: List<CursorMessage>,
+        reason: String
+    ): SummarizeResult {
+        // fresh 必然非空：Step 2 已对空列表提前返回 SkippedAlreadyDone
+        val silentMs = System.currentTimeMillis() - fresh.last().timestamp
+        return if (silentMs >= STALE_PENDING_MS) {
+            nothingToRemember(
+                sessionId = sessionId,
+                fresh = fresh,
+                reason = "$reason；且最后一条消息已静默 ${silentMs / 60_000} 分钟 → 判定对话已结束，放弃"
+            )
+        } else {
+            skipped(reason)
+        }
+    }
+
+    /**
      * 「这通对话处理过了，但没什么可记的」——**游标必须推进**，且不写记忆。
      *
      * 为什么"不记"不等于"丢数据"：对话原文还在 `messages` 表里，历史页随时能回看。
@@ -537,8 +585,20 @@ class SummarizeMemoryUseCase(
         /** 整轮上限（plan4 §5.4）；超时按失败处理，游标不动 */
         private const val TIMEOUT_MS = 30_000L
 
-        /** 同角色两次记忆的最小间隔（plan4 §5.3）；只延迟不丢弃 */
+        /** 同角色两次记忆的最小间隔（plan4 §5.3）；只延迟不丢弃。⚠️ 只对"刚发生的对话"生效，见 Step 3 */
         private const val MIN_SUMMARY_INTERVAL_MS = 30_000L
+
+        /**
+         * 「门槛没过」多久之后就不再当"延迟"、直接放弃（推进游标）。
+         *
+         * 判据是**本批最后一条消息**的静默时长，不是会话创建时间：会话可能被续聊，
+         * 而续聊会让新消息的时间重新变新。
+         *
+         * 为什么是 10 分钟：比 `CallViewModel.CATCHUP_MIN_SESSION_AGE_MS`（1 分钟，
+         * "可能正是当前这一通"）保守得多 —— 宁可让计数多挂一会儿，也不在一个还可能
+         * 继续的会话上推游标。代价见 [gateSkipped]。
+         */
+        private const val STALE_PENDING_MS = 10 * 60 * 1000L
 
         /** 参与总结的最大消息数（plan4 §3.4 的长度护栏） */
         private const val MAX_SUMMARY_INPUT_MESSAGES = 40
@@ -560,7 +620,16 @@ class SummarizeMemoryUseCase(
         // 开关打开时整体降一档（D4）：门槛降下来要真的明显，否则"单轮也总结"根本不生效
         private const val SHORT_CALL_MIN_NEW_MESSAGES = 1
         private const val SHORT_CALL_MIN_USER_TURNS = 1
-        private const val SHORT_CALL_MIN_USER_CHARS = 8
+
+        /**
+         * 短通话降档后，用户文本合计的下限。
+         *
+         * 设置页对这颗开关的承诺是「打开后**哪怕只说一句**也记下来」，所以这里只保留
+         * "非空"这一条兜底：原来的 8 字会把「去吃饭了吗」(5 字)、「我想学编程」(5 字)
+         * 这类单句挡在门外 —— 真机上 19 通积压里有 14 通正是这么卡住的。
+         * 不会因此为纯问候会话白调 LLM：「必须有真实用户发言」由 Step 3a 单独兜底。
+         */
+        private const val SHORT_CALL_MIN_USER_CHARS = 1
 
         /** 门槛 a)：真实用户发言轮数（不含开场问候） */
         private const val MIN_USER_TURNS = 2

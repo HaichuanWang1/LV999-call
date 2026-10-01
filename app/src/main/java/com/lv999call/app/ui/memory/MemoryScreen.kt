@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lv999call.app.domain.model.Memory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -122,12 +123,21 @@ fun MemoryScreen(
     var pendingDelete by remember { mutableStateOf<Long?>(null) }
     var showClearDialog by remember { mutableStateOf(false) }
 
-    // ViewModel 的一次性提示（整理结果）。先消费再展示：showSnackbar 会挂起到用户看完，
-    // 中途离开页面的话协程被取消，消息就不会被清掉、回来还会再弹一次
-    LaunchedEffect(statusMessage) {
-        val message = statusMessage ?: return@LaunchedEffect
-        onStatusConsumed()
-        snackbarHostState.showSnackbar(message)
+    // ViewModel 的一次性提示（整理结果）。
+    // ⚠️ 这里**不能**把 statusMessage 当 LaunchedEffect 的 key：onStatusConsumed() 会把它置空，
+    // key 一变这个协程立刻被取消，而 `SnackbarHostState.showSnackbar` 的实现是
+    // `try { suspendCancellableCoroutine { currentSnackbarData = … } } finally { currentSnackbarData = null }`
+    // —— 取消会在同一帧把 Snackbar 清掉，用户连一句解释都看不到（真机表现就是"点了没反应、
+    // 转一下又恢复原样"）。用 rememberUpdatedState 取最新值、effect 的 key 固定为 Unit，
+    // 既保住"先消费再展示"的原意（中途离开页面不会把消息留着下次再弹），又不会自己取消自己。
+    val latestStatus by rememberUpdatedState(statusMessage)
+    LaunchedEffect(Unit) {
+        snapshotFlow { latestStatus }
+            .filterNotNull()
+            .collect { message ->
+                onStatusConsumed()
+                snackbarHostState.showSnackbar(message)
+            }
     }
 
     /**

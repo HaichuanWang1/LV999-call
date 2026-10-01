@@ -183,8 +183,14 @@ class MemoryViewModel(
      * 与开聊时的自动补总结有三处刻意的不同：
      * · 不限角色：用户点的是"把待整理的都整理掉"，页面本来就是全局视角；
      * · 不排除"刚建的会话"：这一刻没有通话在进行，不存在"自己总结自己"；
-     * · 一次最多 [MAX_MANUAL_SUMMARIES] 通，且从**最老**的开始：每通是一次付费 LLM 调用，
-     *   积压几十通时一次点下去代价太不可控。剩下的下次再点（提示里会报还剩几通）。
+     * · 从**最老**的开始，一次最多**处理掉** [MAX_MANUAL_HANDLED] 通：每通最多一次付费
+     *   LLM 调用，积压几十通时一次点下去代价太不可控。剩下的下次再点（提示里会报还剩几通）。
+     *
+     * ⚠️ 上限卡的是"处理过的通数"（游标动了 = Success / NothingToRemember），**不是"看过的通数"**。
+     * 早先的写法是先把积压 `take(10)` 再逐条试，而门槛没过的会话游标不动、会一直留在待整理里 ——
+     * 于是 19 通积压时每次点击都在原地重试同一批最老的 10 通，**排在后面的会话永远轮不到**
+     * （真机日志里连点三次，10 个 session id 完全一样）。现在纯粹被门槛/限流挡下的不占名额，
+     * 循环会继续往下走。
      */
     fun summarizePending() {
         if (_isSummarizing.value) return
@@ -202,36 +208,42 @@ class MemoryViewModel(
                     // DAO 是 createdAt 倒序；翻成时间正序再补：后一条记忆要靠前一条的上下文，
                     // 顺序反了会让"更早的对话"变得像是刚发生的
                     .asReversed()
-                    .take(MAX_MANUAL_SUMMARIES)
                 if (backlog.isEmpty()) {
                     // 空积压最常见的来源不是"都整理完了"，而是升级前的老对话被迁移
                     // 标成了已整理（plan4 P8）。不说清楚，用户只会以为按钮坏了。
                     _statusMessage.value = "没有需要整理的对话（升级前的历史对话不会自动整理）"
                     return@launch
                 }
-                Log.d(TAG, "立即整理: 待整理=${backlog.size} 通（一次最多 $MAX_MANUAL_SUMMARIES 通，失败即停）")
+                Log.d(TAG, "立即整理: 待整理=${backlog.size} 通（一次最多处理 $MAX_MANUAL_HANDLED 通，失败即停）")
                 var done = 0        // 真正写进记忆的条数
-                var nothing = 0     // 处理过、但模型判定没什么可记的（**游标已推进**）
+                var nothing = 0     // 处理过、但没什么可记的（**游标已推进**）
+                var handled = 0     // = done + nothing，占名额的就是它
                 var maxWaitMs = 0L  // 被同角色时间闸门拦下的最长等待
                 for (session in backlog) {
+                    if (handled >= MAX_MANUAL_HANDLED) break
                     when (val result = summarizeMemoryUseCase.summarize(sessionId = session.id)) {
-                        is SummarizeMemoryUseCase.SummarizeResult.Success -> done++
+                        is SummarizeMemoryUseCase.SummarizeResult.Success -> {
+                            done++
+                            handled++
+                        }
                         // 游标已经推进，这通不会再出现 —— 它是"处理完了"，不是"跳过"
-                        is SummarizeMemoryUseCase.SummarizeResult.NothingToRemember -> nothing++
+                        is SummarizeMemoryUseCase.SummarizeResult.NothingToRemember -> {
+                            nothing++
+                            handled++
+                        }
                         is SummarizeMemoryUseCase.SummarizeResult.SkippedRateLimited ->
                             maxWaitMs = maxOf(maxWaitMs, result.waitMs)
                         is SummarizeMemoryUseCase.SummarizeResult.Failed -> {
                             // 失败即停：继续往下只会把后面的也一起打挂（与自动补总结同一套策略）
                             Log.w(TAG, "立即整理: 失败即停 session=${session.id.take(8)} 原因=${result.reason}")
                             _statusMessage.value =
-                                "整理中断：${result.reason}（已处理 ${done + nothing} 通，可稍后再试）"
+                                "整理中断：${result.reason}（已处理 $handled 通，可稍后再试）"
                             return@launch
                         }
-                        // 门槛没过 / 游标已在末尾：不算失败，接着看下一条
+                        // 门槛没过 / 游标已在末尾：没调 LLM，**不占名额**，接着看下一条
                         else -> Log.d(TAG, "立即整理: 跳过 session=${session.id.take(8)} → $result")
                     }
                 }
-                val handled = done + nothing
                 // 向上取整到秒：显示"还需等 0 秒"比不显示更让人困惑
                 val waitSec = if (maxWaitMs > 0) (maxWaitMs + 999) / 1000 else null
                 val left = sessionRepository.countSessionsWithPendingMemory()
@@ -243,7 +255,7 @@ class MemoryViewModel(
                     handled == 0 -> "这 ${backlog.size} 通还没到值得记录的门槛"
                     waitSec != null -> "已处理 $handled 通，另有 $left 通需等约 $waitSec 秒"
                     left > 0 -> "已处理 $handled 通，还剩 $left 通（可再点一次）"
-                    done == 0 -> "已处理 $handled 通（都没什么可记的）"
+                    done == 0 -> "已处理 $handled 通（内容太少，都没什么可记的）"
                     else -> "已处理 $handled 通（写入 $done 条记忆）"
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -410,8 +422,14 @@ class MemoryViewModel(
         /** 与其它页面的 `stateIn` 保持一致：停止订阅 5 秒后才真的断流，避免转屏时重新查库 */
         private const val SUBSCRIPTION_TIMEOUT_MS = 5_000L
 
-        /** 一次「立即整理」最多补几通：每通都是一次付费 LLM 调用，不能一次点下去没上限 */
-        private const val MAX_MANUAL_SUMMARIES = 10
+        /**
+         * 一次「立即整理」最多**处理掉**几通（游标推进 = Success / NothingToRemember）。
+         *
+         * 每通最多一次付费 LLM 调用，积压几十通时一次点下去没上限代价不可控。
+         * 门槛没过 / 被限流挡下的**不占名额**（它们连 LLM 都没调），否则积压里排在后面的
+         * 会话会被前面那批"永远推不动游标"的卡死。
+         */
+        private const val MAX_MANUAL_HANDLED = 10
 
         private const val DEFAULT_ROLE_NAME = "默认"
         private const val PRESET_FALLBACK_NAME = "自定义方案"
