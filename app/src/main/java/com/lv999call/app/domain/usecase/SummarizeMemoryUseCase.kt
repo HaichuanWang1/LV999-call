@@ -48,21 +48,48 @@ class SummarizeMemoryUseCase(
     /**
      * 总结结果。
      *
-     * [SkippedTooFew] 与 [Failed] 的区别在**游标**：两者都不动游标，但语义不同 ——
-     * 前者是"这段对话还不值得记"（门槛没过），后者是"该记但没记成"（网络/超时/输出非法），
-     * 日志与真机排查要能一眼分开。
+     * 判读这些分支**只看一件事：游标动没动**。游标动了 = 这段对话处理完了，不会再试；
+     * 游标没动 = 下次开聊的补总结或下一次点「立即整理」还会再遇到它。
+     *
+     * 这个区分不是学究气：调用方（[com.lv999call.app.ui.memory.MemoryViewModel] 与
+     * [com.lv999call.app.ui.call.CallViewModel]）都是**失败即停**，把一个"其实已经处理完"的
+     * 结果报成 [Failed]，会让它后面的会话永远轮不到，而它自己每次都被重新总结一遍。
+     *
+     * 命名上刻意让 [NothingToRemember] **不带 `Skipped` 前缀**：本文件里 `Skipped*`
+     * 已经隐含"游标未动"，而它是会推进游标的，沿用同前缀会误导下一个读代码的人。
      */
     sealed interface SummarizeResult {
-        /** 新增消息不够 / 信息量不足 / 距上次记忆太近，什么都没做（游标不动） */
+        /** 门槛没过（新消息不够 / 信息量不足）；游标不动 */
         data object SkippedTooFew : SummarizeResult
 
-        /** 游标已经在末尾，没有新消息可总结 */
+        /** 游标已经在末尾，没有新消息可总结；游标不动 */
         data object SkippedAlreadyDone : SummarizeResult
 
-        /** 写库成功；命中去重时返回**已存在那条**的 id */
+        /**
+         * 被同角色的时间闸门拦下；游标不动。
+         *
+         * 单独成一种而不是混进 [SkippedTooFew]：它不是"内容不够"，而是"**等一会儿就好**"。
+         * 混在一起时调用方只能报"还没到值得记录的门槛"，用户会以为内容不行而永远不再点。
+         *
+         * @param waitMs 还需等待的毫秒数（调用方换算成秒去提示用户）
+         */
+        data class SkippedRateLimited(val waitMs: Long) : SummarizeResult
+
+        /**
+         * 模型成功应答了，但这通对话没什么可记的 —— **游标已推进**。
+         *
+         * 覆盖四种输出：提示词规定的「无」、空输出、过短、超长。它们的共同点是
+         * **不可重试**：同样的输入喂进去，下一次只会得到同样的输出。把它们当成 [Failed]
+         * 会让会话永久停在"待整理"，每触发一次就白烧一次 LLM 调用。
+         *
+         * 放弃的只是"派生出来的备忘"，对话原文仍在 `messages` 里、历史页随时能回看。
+         */
+        data object NothingToRemember : SummarizeResult
+
+        /** 写库成功；命中去重时返回**已存在那条**的 id。游标已推进 */
         data class Success(val memoryId: Long) : SummarizeResult
 
-        /** 网络/超时/输出非法；游标未动，下次还会再试 */
+        /** 传输/超时/DB 失败；游标未动，下次还会再试 */
         data class Failed(val reason: String) : SummarizeResult
     }
 
@@ -255,9 +282,15 @@ class SummarizeMemoryUseCase(
         val lastMemoryAt = memoryRepository.getLatestCreatedAt(key)
         val now = System.currentTimeMillis()
         if (lastMemoryAt != null && now - lastMemoryAt < MIN_SUMMARY_INTERVAL_MS) {
-            return skipped(
-                "距上次记忆=${now - lastMemoryAt}ms < ${MIN_SUMMARY_INTERVAL_MS}ms（按角色 $key 计，只延迟不丢弃）"
+            // 走独立的 SkippedRateLimited 而不是 skipped()：调用方要能对用户说
+            // "请等 N 秒后再试"，而不是含糊的"还没到值得记录的门槛"（后者会让人以为内容不行）。
+            val waitMs = MIN_SUMMARY_INTERVAL_MS - (now - lastMemoryAt)
+            Log.d(
+                TAG,
+                "限流: 距上次记忆=${now - lastMemoryAt}ms，还需等 ${waitMs}ms" +
+                    "（按角色 $key 计，只延迟不丢弃，游标未动）"
             )
+            return SummarizeResult.SkippedRateLimited(waitMs)
         }
 
         // ---- Step 4：拼「待总结对话」 ----
@@ -274,13 +307,17 @@ class SummarizeMemoryUseCase(
         // 表现为"总结永远失败、日志里还没有任何错误"（plan4 §3.2 Step 5c）。
         Log.d(
             TAG,
-            "请求: 输入=${batch.size}条/${dialogue.length}字 temperature=${config.llmTemperature}" +
+            "请求: 输入=${batch.size}条/${dialogue.length}字 temperature=${config.llmTemperature} 思考=关闭" +
                 "（跟随设置：streamChatCompletion 不接受采样参数，见 plan4 §3.2 Step 5b）"
         )
         val raw = StringBuilder()
         var streamFailure: String? = null
         chatRepository.streamChatCompletion(
-            config,
+            // 显式关掉思考模式：总结只做"抽取事实"，思考链对结果没帮助，却会让首字延迟与
+            // 总时长成倍增长，而整轮只有 TIMEOUT_MS 的预算。`llmThinkingEnabled` 目前
+            // 没有任何 UI 入口、恒为 false，这一行今天是**行为不变**的防御 —— 它防的是
+            // 将来那个开关被打开时，总结跟着一起超时。
+            config.copy(llmThinkingEnabled = false),
             readSummaryPrompt(characterName),
             listOf(ChatMessage(role = ROLE_USER, content = dialogue))
         ).collect { event ->
@@ -318,12 +355,22 @@ class SummarizeMemoryUseCase(
         // ⚠️ 只打前 80 字（这是模型写的备忘，不是用户原话），日志会长期留在设备上（plan4 §3.5）
         Log.d(TAG, "结果: len=${cleaned.length} 前80字=${cleaned.take(LOG_PREVIEW_CHARS)}")
 
-        if (cleaned == NO_CONTENT_MARK) return failed("模型判定没有值得长期记住的内容（输出「$NO_CONTENT_MARK」）")
-        if (cleaned.isEmpty()) return failed("空输出（模型没给出任何内容）")
-        if (cleaned.length < MIN_CONTENT_CHARS) return failed("过短 len=${cleaned.length} < $MIN_CONTENT_CHARS")
-        if (cleaned.length > MAX_CONTENT_CHARS) return failed("超长 len=${cleaned.length} > $MAX_CONTENT_CHARS")
+        // 6d 「模型成功应答，但这通对话没有可用内容」→ **推进游标**，不再当成可重试的失败。
+        //    这四种输出都是确定性的：同样的输入下一次只会得到同样的结果。留在 Failed 里
+        //    等于让这通会话永久停在"待整理"，每触发一次就白烧一次 LLM 调用；而且调用方
+        //    失败即停，排在它后面的会话永远轮不到（这正是"点立即整理没反应"的根因）。
+        //    必须排在 6e 之前：否则空的/超长的输出也会先过一遍措辞筛查，打出一条
+        //    "flagged"的误导日志，而实际上什么都没写。
+        val noContentReason = when {
+            cleaned == NO_CONTENT_MARK -> "模型判定没有值得长期记住的内容（输出「$NO_CONTENT_MARK」）"
+            cleaned.isEmpty() -> "空输出（模型没给出任何内容）"
+            cleaned.length < MIN_CONTENT_CHARS -> "过短 len=${cleaned.length} < $MIN_CONTENT_CHARS"
+            cleaned.length > MAX_CONTENT_CHARS -> "超长 len=${cleaned.length} > $MAX_CONTENT_CHARS"
+            else -> null
+        }
+        if (noContentReason != null) return nothingToRemember(sessionId, fresh, noContentReason)
 
-        // 6d 🛡️ 指令式措辞筛查（防自生成注入，plan4 §3.2 Step 6 / R12）：
+        // 6e 🛡️ 指令式措辞筛查（防自生成注入，plan4 §3.2 Step 6 / R12）：
         //    命中**不整条丢弃** —— 那样会连带丢掉里面真实的信息。降级为 summary_flagged：
         //    库里仍然可见、可读、可删，只是加载注入时跳过。
         val flaggedBy = INSTRUCTION_HINTS.firstOrNull { cleaned.contains(it) }
@@ -376,6 +423,33 @@ class SummarizeMemoryUseCase(
     private fun skipped(reason: String): SummarizeResult {
         Log.d(TAG, "跳过: $reason（游标未动）")
         return SummarizeResult.SkippedTooFew
+    }
+
+    /**
+     * 「这通对话处理过了，但没什么可记的」——**游标必须推进**，且不写记忆。
+     *
+     * 为什么"不记"不等于"丢数据"：对话原文还在 `messages` 表里，历史页随时能回看。
+     * 这里放弃的只是"派生出来的备忘"，不是用户说过的话。
+     *
+     * 游标推到 [fresh] 的末条、而不是真正送进 LLM 那 40 条的末条：与 Step 8 的
+     * `sourceTo*` 口径一致 —— 超出 40 条的部分本来就按"已被覆盖"处理。
+     *
+     * 调用方可以放心：本方法**不会**让会话留在"待整理"里，所以连续多通「无」能一路跑完，
+     * 也不会因为写了记忆而触发同角色的 30 秒闸门（闸门读的是 `memories.createdAt`）。
+     */
+    private suspend fun nothingToRemember(
+        sessionId: String,
+        fresh: List<CursorMessage>,
+        reason: String
+    ): SummarizeResult {
+        // 到得了这里 fresh 必然非空：Step 2 已对空列表提前返回 SkippedAlreadyDone
+        val last = fresh.last()
+        Log.w(
+            TAG,
+            "无内容: $reason → 游标推进到 (${last.timestamp},${last.cursor})（不写记忆，避免永久待整理）"
+        )
+        sessionRepository.advanceMemoryCursor(sessionId, last.timestamp, last.cursor)
+        return SummarizeResult.NothingToRemember
     }
 
     /**

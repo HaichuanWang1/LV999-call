@@ -57,6 +57,21 @@ class SessionRepository(
         messageDao.getMessagesBySessionOnce(sessionId).map { it.toSourceMessage() }
 
     /**
+     * **只推游标、不写记忆**。
+     *
+     * 给"模型成功应答但没什么可记的"那条路径用（见
+     * [com.lv999call.app.domain.usecase.SummarizeMemoryUseCase.SummarizeResult.NothingToRemember]）：
+     * 那通对话必须被判成"处理过了"，否则每次触发都会重新调一次 LLM，而且因为调用方
+     * 失败即停，排在它后面的会话永远轮不到。
+     *
+     * 与 [com.lv999call.app.data.repository.MemoryRepository.saveMemoryAndAdvanceCursor] 的区别：
+     * 那条要跨 `memories` 与 `sessions` 两张表，必须在事务里；这里只有一条 UPDATE，
+     * 语句自身就是原子的，**不要**为它套 `withTransaction`。
+     */
+    suspend fun advanceMemoryCursor(sessionId: String, upToTs: Long, upToId: Long) =
+        sessionDao.updateMemoryCursor(sessionId, upToTs, upToId)
+
+    /**
      * 用 [messages] 覆盖某会话的全部消息。
      *
      * 必须是「替换」语义而不是「追加」：调用方传进来的永远是当前完整消息列表，

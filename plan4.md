@@ -291,11 +291,17 @@
       ): SummarizeResult
 
       sealed interface SummarizeResult {
-          data object SkippedTooFew      // 新增消息不够，什么都没做
-          data object SkippedAlreadyDone // 游标已在末尾
-          data class  Success(val memoryId: Long)
-          data class  Failed(val reason: String)
+          data object SkippedTooFew          // 新增消息不够，什么都没做（游标不动）
+          data object SkippedAlreadyDone     // 游标已在末尾（游标不动）
+          data class  SkippedRateLimited(val waitMs: Long)  // 同角色 30s 闸门（游标不动）
+          data object NothingToRemember      // 模型成功应答但没内容可记（**游标已推进**）
+          data class  Success(val memoryId: Long)           // 游标已推进
+          data class  Failed(val reason: String)            // 传输/超时/DB（游标不动）
       }
+
+      ⚠️ 判读只看一件事：**游标动没动**。`Skipped*` 一律不动；`NothingToRemember` 与
+         `Success` 都动。`NothingToRemember` 刻意**不带** `Skipped` 前缀 —— 本文件里
+         `Skipped*` 已隐含"游标未动"，沿用同前缀会误导下一个读代码的人。
 
 3.2 执行步骤（顺序即实现顺序）
 
@@ -376,7 +382,14 @@
                 不要整条丢弃（会连带丢掉真实信息），而是**降级处理**：
                 记 `category = "summary_flagged"`，加载注入时跳过、
                 但记忆库里仍然可见可删。用户能看见的东西才谈得上管理。
-              - 有效内容为空 / 超长 / 全是客套话 → `Failed`，**不写库、不动游标**
+              - 有效内容为空 / 超长 / 全是客套话 / 模型按提示词回「无」
+                → **`NothingToRemember`：推进游标、不写记忆**。
+                这四种输出都是**确定性**的，重试只会得到同样的结果；当成 `Failed` 会让
+                会话永久停在"待整理"，每触发一次白烧一次 LLM 调用，而两个调用方都是
+                **失败即停** → 排在它后面的会话永远轮不到（实现时踩过这个坑）。
+                游标推到"本批新消息末条"，与 Step 7 的 `sourceTo*` 口径一致；
+                不写记忆 ⇒ `memories.createdAt` 不变 ⇒ 不会触发同角色 30 秒闸门，
+                连续多通「无」可以一路跑完。
     Step 7  写 `memories` 一行
               `sourceFrom*` = 本批新消息首条 (timestamp, id)
               `sourceTo*`   = 本批新消息末条 (timestamp, id)
@@ -463,12 +476,23 @@
       SummarizeMemory  D  开始: session=ab12.. character=silverwolf
                               新消息=8 用户轮数=3 字符=612 门槛=通过
       SummarizeMemory  D  跳过: 新消息=1 < 门槛2（或 游标已到末尾）
-      SummarizeMemory  D  请求: 输入=40条/3200字 temperature=0.3
+      SummarizeMemory  D  限流: 距上次记忆=8000ms，还需等 22000ms（游标未动）
+      SummarizeMemory  D  请求: 输入=40条/3200字 temperature=0.3 思考=关闭
       ChatRepo         D  （复用现有请求日志）
       SummarizeMemory  D  结果: len=186 前80字=…
       SummarizeMemory  D  落库: memoryId=7 sourceTo=1717243200000 游标已推进
-      SummarizeMemory  E  失败: 原因=超时/空输出/超长/网络 → 游标未动
+      SummarizeMemory  W  无内容: 模型判定没有值得长期记住的内容（输出「无」）
+                          → 游标推进到 (1717243200000,88)（不写记忆）
+      SummarizeMemory  E  失败: 原因=超时/网络 → 游标未动
       SummarizeMemory  D  补总结: 发现 3 通待整理 → 逐个处理
+
+    判读只看一件事：**游标动没动**。
+    - 传输失败 / 超时 → 不动游标，下次还会再试；
+    - 「无内容」（提示词规定的「无」/ 空输出 / 过短 / 超长）→ **推进游标**。
+      这四种输出是确定性的，重试只会得到同样的结果；当成失败会让会话永久停在
+      「待整理」，而两个调用方都是失败即停，排在它后面的会话永远轮不到。
+    - 时间闸门单独成 `SkippedRateLimited(waitMs)` 而不是混进「门槛没过」：
+      限流是「等一会儿就好」，不是「内容不够」，提示语必须分开说。
 
     注意：不要把用户对话原文整段打进 log（日志会长期留在设备上），
     成功时只打前 80 字做判断依据即可。
@@ -676,7 +700,10 @@
          也可能含"我叫小明"这种高价值信息，一律拦掉就太钝了）
       ＋ 且同**角色**上一次生成记忆距今 ≥ `MIN_SUMMARY_INTERVAL_MS`（默认 30 秒）
 
-      → 不满足就 `SkippedTooFew`，游标不动
+      → 前两条不满足就 `SkippedTooFew`，游标不动
+      → 只有最后那条（时间闸门）不满足时走 `SkippedRateLimited(waitMs)`，游标不动：
+        它不是"内容不够"而是"等一会儿就好"。两者混成一句"还没到值得记录的门槛"，
+        用户会以为内容不行而永远不再点 —— 而实际上等 30 秒就能过。
 
       ⚠️ 「个人信息线索」的判定要**保守**：宁可漏记（少一条记忆）
          也不要错记（把"我今天想吃火锅"记成偏好）。实现上先用关键词表
@@ -702,7 +729,11 @@
 
 5.4 异步与超时
     - 总结整个流程加 `withTimeoutOrNull(30_000L)`
-    - 超时 / 网络失败 / 输出非法 → `Failed`，**游标不动**，静默打日志
+    - 超时 / 网络失败 / DB 错误 → `Failed`，**游标不动**，静默打日志
+    - 「模型成功应答但没有可用内容」（无 / 空 / 过短 / 超长）→ **不算失败**：
+      `NothingToRemember`，**游标推进**（理由见 §3.2 Step 6）
+    - 同角色 30 秒闸门 → `SkippedRateLimited(waitMs)`，游标不动，
+      但要把"还需等多少秒"回报给调用方 —— 它是"等一会儿就好"，不是"内容不够"
     - 用户**永远不需要等待**总结：挂断即回历史页，总结在后台跑
 
 5.5 补总结（**必做**，不是可选）
@@ -724,6 +755,11 @@
     补充的用户可见信号：记忆管理页顶部显示
       「有 N 通对话还没整理」，并给一个「立即整理」按钮（手动触发同一用例）。
       —— 把失败路径变成用户能看见、能自己修的东西，而不是静默丢数据。
+      提示语**归因必须准**，三种分开说：写了记忆的 →「已处理 N 通（写入 N 条记忆）」；
+      模型说没什么可记的 →「已处理 N 通（都没什么可记的）」；
+      被时间闸门拦下的 →「同角色的上一条记忆刚生成，请等约 N 秒后再试」。
+      空积压时也要说破 §2.4(3) 那条产品决定：「没有需要整理的对话
+      （升级前的历史对话不会自动整理）」—— 否则用户只会以为按钮坏了。
 
 5.6 并发与幂等（会被忽略但一定会出事的地方）
     - 总结调 LLM 与用户正在对话调 LLM 会同时打上游：
@@ -733,8 +769,11 @@
         是单例共享状态，而总结流开始收集时会把它清空，可能抹掉对话侧刚记下的失败。
         → 所以另有一条硬要求：**双方都只认流内 `StreamEvent.Failure`**，
           `lastStreamError` 从公共 API 撤掉（见 §8 阶段 2）。
-    - 幂等判据：(savedMemoryUpToTs, savedMemoryUpToId) 字典序单调递增，
-      且只在成功写库（Step 7+8 同事务）后推进
+    - 幂等判据：(savedMemoryUpToTs, savedMemoryUpToId) 字典序单调递增。
+      推进时机有**两种**，两者都必须保证"这通对话不会再被总结"：
+        · 成功写库（Step 7+8 同一个 Room 事务）
+        · `NothingToRemember`（只推游标、不写记忆）—— 单条 UPDATE，自身即原子，
+          **不要**为它套 `withTransaction`（那是跨两张表才需要的）
     - 若同一会话被并发触发两次：Mutex + 二次读游标 → 第二次直接
       `SkippedAlreadyDone`
     - 哈希唯一索引是**第二道**幂等（跨会话重复内容），与游标互补，缺一不可
@@ -1009,6 +1048,15 @@ P0/P1 是**审查推翻原方案**的两条（高危），其余是自查。
   P8  存量会话升级后会被**批量重新总结**（§2.4(3)，审查 B9）
       默认游标 0 + 补总结扫描 → 老用户首次开聊把所有历史会话跑一遍 LLM。
       → 迁移里把老会话游标初始化到各自末尾（产品决定，见 §2.4）。
+  P11 **把"模型成功应答但没内容"当成可重试失败**（§3.2 Step 6 / §5.4）
+      提示词规定的「无」、空输出、过短、超长都是**确定性**输出，重试只会得到同样的结果。
+      当成 `Failed` 有两个后果，而且**一个异常都不抛**：
+        · 这通会话永久停在"待整理"，每次开聊 / 每次点「立即整理」都白烧一次 LLM 调用；
+        · 两个调用方都是**失败即停**，排在它后面的会话永远轮不到
+          → 用户看到的就是"点立即整理没反应"。
+      → 单列 `NothingToRemember`：**推进游标**、不写记忆（对话原文仍在历史页）。
+      同理，时间闸门要单列 `SkippedRateLimited` —— "等一会儿就好"与"内容不够"
+      混成一句提示，用户会以为内容不行而永远不再点。
 
   另两条现状约束（不是坑，是前提）：
   P9  刚合入的 a21e99f 动过 `NavGraph.kt`，plan4 也要动它，开工前先确认没撞车（§7.4.2）

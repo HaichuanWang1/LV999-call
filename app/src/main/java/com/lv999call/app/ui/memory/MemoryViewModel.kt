@@ -204,29 +204,47 @@ class MemoryViewModel(
                     .asReversed()
                     .take(MAX_MANUAL_SUMMARIES)
                 if (backlog.isEmpty()) {
-                    _statusMessage.value = "没有需要整理的对话"
+                    // 空积压最常见的来源不是"都整理完了"，而是升级前的老对话被迁移
+                    // 标成了已整理（plan4 P8）。不说清楚，用户只会以为按钮坏了。
+                    _statusMessage.value = "没有需要整理的对话（升级前的历史对话不会自动整理）"
                     return@launch
                 }
                 Log.d(TAG, "立即整理: 待整理=${backlog.size} 通（一次最多 $MAX_MANUAL_SUMMARIES 通，失败即停）")
-                var done = 0
+                var done = 0        // 真正写进记忆的条数
+                var nothing = 0     // 处理过、但模型判定没什么可记的（**游标已推进**）
+                var maxWaitMs = 0L  // 被同角色时间闸门拦下的最长等待
                 for (session in backlog) {
                     when (val result = summarizeMemoryUseCase.summarize(sessionId = session.id)) {
                         is SummarizeMemoryUseCase.SummarizeResult.Success -> done++
+                        // 游标已经推进，这通不会再出现 —— 它是"处理完了"，不是"跳过"
+                        is SummarizeMemoryUseCase.SummarizeResult.NothingToRemember -> nothing++
+                        is SummarizeMemoryUseCase.SummarizeResult.SkippedRateLimited ->
+                            maxWaitMs = maxOf(maxWaitMs, result.waitMs)
                         is SummarizeMemoryUseCase.SummarizeResult.Failed -> {
                             // 失败即停：继续往下只会把后面的也一起打挂（与自动补总结同一套策略）
                             Log.w(TAG, "立即整理: 失败即停 session=${session.id.take(8)} 原因=${result.reason}")
-                            _statusMessage.value = "整理中断：${result.reason}（已完成 $done 通，可稍后再试）"
+                            _statusMessage.value =
+                                "整理中断：${result.reason}（已处理 ${done + nothing} 通，可稍后再试）"
                             return@launch
                         }
                         // 门槛没过 / 游标已在末尾：不算失败，接着看下一条
                         else -> Log.d(TAG, "立即整理: 跳过 session=${session.id.take(8)} → $result")
                     }
                 }
+                val handled = done + nothing
+                // 向上取整到秒：显示"还需等 0 秒"比不显示更让人困惑
+                val waitSec = if (maxWaitMs > 0) (maxWaitMs + 999) / 1000 else null
                 val left = sessionRepository.countSessionsWithPendingMemory()
                 _statusMessage.value = when {
-                    done == 0 -> "这 ${backlog.size} 通还没到值得记录的门槛"
-                    left > 0 -> "已整理 $done 通，还剩 $left 通（可再点一次）"
-                    else -> "已整理 $done 通"
+                    // 被限流拦下 ≠ 内容不够。这两件事混成一句"还没到门槛"，
+                    // 用户会以为内容不行而永远不再点（等一会儿明明就能过）。
+                    handled == 0 && waitSec != null ->
+                        "同角色的上一条记忆刚生成，请等约 $waitSec 秒后再试"
+                    handled == 0 -> "这 ${backlog.size} 通还没到值得记录的门槛"
+                    waitSec != null -> "已处理 $handled 通，另有 $left 通需等约 $waitSec 秒"
+                    left > 0 -> "已处理 $handled 通，还剩 $left 通（可再点一次）"
+                    done == 0 -> "已处理 $handled 通（都没什么可记的）"
+                    else -> "已处理 $handled 通（写入 $done 条记忆）"
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
