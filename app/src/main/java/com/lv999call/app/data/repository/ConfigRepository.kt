@@ -53,6 +53,15 @@ class ConfigRepository(private val context: Context) {
         val TTS_REF_AUDIO_BASE64 = stringPreferencesKey("tts_ref_audio_base64")
         val TTS_REF_AUDIO_MIME = stringPreferencesKey("tts_ref_audio_mime")
 
+        /**
+         * 一次 TTS 朗读的等待上限（秒）。
+         *
+         * 与项目里其他数值配置一样存字符串：DataStore 只有一套读法，
+         * 多一种类型就多一处"这里为什么不一样"的犹豫。读取时统一过
+         * [ApiConfig.clampTtsPlaybackTimeoutSec]，手改过的坏值不会流到播放链路。
+         */
+        val TTS_PLAYBACK_TIMEOUT_SEC = stringPreferencesKey("tts_playback_timeout_sec")
+
         // 曾经还有 `custom_tts_ref_audio_base64/mime` 与 `custom_prompt` 三个键
         // （"自定义模式"专用）。那条模式入口已不存在、也没有任何 UI 能写它们，
         // 属于死配置，已连同 ApiConfig 的对应字段一起撤掉 ——
@@ -101,6 +110,10 @@ class ConfigRepository(private val context: Context) {
             characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
             ttsReferenceAudioMime = prefs[TTS_REF_AUDIO_MIME] ?: "audio/wav",
+            ttsPlaybackTimeoutSec = ApiConfig.clampTtsPlaybackTimeoutSec(
+                prefs[TTS_PLAYBACK_TIMEOUT_SEC]?.toIntOrNull()
+                    ?: ApiConfig.DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC
+            ),
             characterAvatarUri = prefs[CHARACTER_AVATAR_URI] ?: "",
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
@@ -132,6 +145,8 @@ class ConfigRepository(private val context: Context) {
             prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(config.characterTtsPrompts)
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64
             prefs[TTS_REF_AUDIO_MIME] = config.ttsReferenceAudioMime
+            prefs[TTS_PLAYBACK_TIMEOUT_SEC] =
+                ApiConfig.clampTtsPlaybackTimeoutSec(config.ttsPlaybackTimeoutSec).toString()
             prefs[CHARACTER_AVATAR_URI] = config.characterAvatarUri
             prefs[BACKGROUND_URI] = config.backgroundUri
             prefs[LIVE2D_ENABLED] = config.live2dEnabled.toString()

@@ -68,6 +68,8 @@ fun SettingsScreen(
 
     var ttsApiKey by remember(config) { mutableStateOf(config.ttsApiKey) }
     var ttsModel by remember(config) { mutableStateOf(config.ttsModel) }
+    // 朗读超时：滑杆吃 Float，存的是 Int 秒；保存时统一过 clamp
+    var ttsPlaybackTimeoutSec by remember(config) { mutableStateOf(config.ttsPlaybackTimeoutSec.toFloat()) }
 
     var showApiKey by remember { mutableStateOf(false) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
@@ -383,6 +385,26 @@ fun SettingsScreen(
                     modifier = Modifier.padding(top = 4.dp)
                 )
 
+                // 朗读超时：从发起 TTS 请求到放完最后一段音频的总时长上限。
+                // 卡死（服务端不下发音频 / 放一半断流）由它兜底，代价是长回复也会被它切，
+                // 所以给用户一根可调的滑杆，而不是写死一个数。
+                Spacer(modifier = Modifier.height(12.dp))
+                ParamSlider(
+                    label = "朗读超时",
+                    hint = "一次朗读最多等多久：从发出 TTS 请求到放完最后一段音频，超时立即停止并回到聆听。" +
+                        "长回复总被切尾巴就调大；想让卡住时更快脱身就调小",
+                    valueText = "${ttsPlaybackTimeoutSec.toInt()} 秒",
+                    value = ttsPlaybackTimeoutSec,
+                    onValueChange = { ttsPlaybackTimeoutSec = it },
+                    valueRange = ApiConfig.MIN_TTS_PLAYBACK_TIMEOUT_SEC.toFloat()..
+                        ApiConfig.MAX_TTS_PLAYBACK_TIMEOUT_SEC.toFloat(),
+                    steps = (ApiConfig.MAX_TTS_PLAYBACK_TIMEOUT_SEC -
+                        ApiConfig.MIN_TTS_PLAYBACK_TIMEOUT_SEC) / ApiConfig.TTS_PLAYBACK_TIMEOUT_STEP_SEC - 1,
+                    onReset = {
+                        ttsPlaybackTimeoutSec = ApiConfig.DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC.toFloat()
+                    }
+                )
+
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Switch(checked = showApiKey, onCheckedChange = { showApiKey = it }, colors = SwitchDefaults.colors(checkedTrackColor = colors.primary))
@@ -492,6 +514,9 @@ fun SettingsScreen(
                             asrModel = asrModel,
                             asrLanguage = asrLanguage, asrVoskModelId = asrVoskModelId,
                             ttsApiKey = ttsApiKey, ttsModel = ttsModel,
+                            ttsPlaybackTimeoutSec = ApiConfig.clampTtsPlaybackTimeoutSec(
+                                ttsPlaybackTimeoutSec.toInt()
+                            ),
                             live2dEnabled = live2dEnabled,
                             live2dTransformEnabled = live2dTransformEnabled,
                             memoryAutoSummarizeEnabled = memoryAutoSummarizeEnabled,

@@ -41,9 +41,6 @@ class ProcessAudioUseCase(
     companion object {
         private const val TAG = "ProcessAudioUseCase"
 
-        /** 一次 TTS 播放的等待上限。按秒数给足，长回复不该被它腰斩 */
-        const val TTS_PLAYBACK_TIMEOUT_MS = 180_000L
-
         /**
          * 「刚被摸头」捎带进本轮提示词的一段系统说明。
          *
@@ -262,6 +259,17 @@ class ProcessAudioUseCase(
 
         // Step 3: 单次TTS合成完整响应并播放
         onStateChange(CallState.SPEAKING)
+
+        /**
+         * 本轮朗读的总预算（设置页「朗读超时」，默认 180s）。
+         *
+         * 计时**从发起 TTS 请求那一刻**开始，而不是从开始播放算起：
+         * 「请求发出去了、服务端一个字都不下发」正是最需要兜底的卡死形态，
+         * 只在播放阶段计时会让这种卡死白等满一个 OkHttp readTimeout（120s）才收场。
+         */
+        val playbackBudgetMs = config.ttsPlaybackTimeoutSec * 1000L
+        val speakRequestedAt = android.os.SystemClock.uptimeMillis()
+
         // 本轮播放是否已正常收尾（含尾音延迟）。
         //
         // 为什么需要这个标志：finally 里要兜底停播（取消/超时路径），但**不能**在
@@ -290,21 +298,32 @@ class ProcessAudioUseCase(
                 ?: "audio/wav"
             Log.d(TAG, "TTS: textLen=${aiResponse.length}, refAudioLen=${refAudio.length}, refMime=$refMime, policy=${ttsPolicy ?: "inherit"}")
 
+            // 刻意**不**给合成套 withTimeoutOrNull：超时正好落在「管道已建好、值还没交回
+            // 调用方」那一瞬的话，这个流就再也没人 close，解码协程会永远堵在写管道上
+            // （socket 与协程一起泄漏）。请求阶段本身有 OkHttp 的 connect/read 超时兜底，
+            // 这里只要把**剩余**预算交给播放阶段即可：预算被请求吃光时 remaining=0，
+            // 播放会立刻被判超时，等价于"本轮不朗读"。
             val audioStream = chatRepository.synthesizeSpeech(
                 config, aiResponse, refAudio, refMime, ttsPrompt, voiceOverride = ttsPolicy
             )
             if (audioStream != null) {
-                val speakRequestedAt = android.os.SystemClock.uptimeMillis()
                 audioPlayer.playStream(audioStream)
                 // 等到本轮播放真正结束再返回。
                 // 这里刻意不轮询 isPlaying：音频是边收边播的，首块到达时间不确定，
                 // 轮询既会误判「没开声」，也会在服务端一块都没下发时白等一个超时。
                 // 开声时机由 AudioPlayer 自己打日志（开始出声: 自playStream=Xms）。
-                val finished = audioPlayer.awaitPlaybackEnd(TTS_PLAYBACK_TIMEOUT_MS)
+                //
+                // 只把**剩余**预算给播放阶段：请求阶段已经花掉的那部分不能重复计时，
+                // 否则一次朗读的真实上限会变成"超时 × 2"。
+                val remainingMs =
+                    (playbackBudgetMs - (android.os.SystemClock.uptimeMillis() - speakRequestedAt))
+                        .coerceAtLeast(0L)
+                val finished = audioPlayer.awaitPlaybackEnd(remainingMs)
                 if (!finished) {
                     Log.w(
                         TAG,
-                        "TTS 播放超时（已等 ${android.os.SystemClock.uptimeMillis() - speakRequestedAt}ms），强制停止"
+                        "TTS 朗读超时（上限 ${config.ttsPlaybackTimeoutSec}s，" +
+                            "已等 ${android.os.SystemClock.uptimeMillis() - speakRequestedAt}ms），强制停止"
                     )
                     audioPlayer.stopCurrentPlayback()
                 }
@@ -312,6 +331,12 @@ class ProcessAudioUseCase(
                 kotlinx.coroutines.delay(300)
                 playbackSettled = true
             } else {
+                if (android.os.SystemClock.uptimeMillis() - speakRequestedAt >= playbackBudgetMs) {
+                    Log.w(
+                        TAG,
+                        "TTS 朗读超时（合成阶段就等满 ${config.ttsPlaybackTimeoutSec}s），本轮不朗读"
+                    )
+                }
                 // 没合成出音频（无参考音频 / 服务端报错），本轮没有播放要等
                 playbackSettled = true
             }

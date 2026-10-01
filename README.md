@@ -560,6 +560,10 @@ MiMo SSE 分块(base64) → decodeTtsSseToPcm 逐块解码(+剥头) → AudioPip
   （`Job.cancel()` 叫不醒阻塞中的 `read`，只有 close 才行）。
 - **播放收尾**：`AudioPlayer.awaitPlaybackEnd()` 直接 join 播放任务，不再轮询 `isPlaying` ——
   服务端一块音频都没下发时 `isPlaying` 会在一帧内 true→false，轮询会整个错过、白等一个超时。
+- **朗读超时**：设置页「🔊 TTS 语音合成」里的**朗读超时**（`tts_playback_timeout_sec`，默认 180s、
+  可调 30~600s）是**整段朗读**的预算：从发起 TTS 请求开始计时，请求阶段花掉的部分会从预算里扣掉，
+  剩下的给播放阶段。超时就 `stopCurrentPlayback()` 并回到聆听 —— 兜住「服务端不下发音频」与
+  「放一半断流」两种卡死。它同时也是长回复的天花板，所以做成可调而不是写死。
 
 ### 流式必须用 pcm16（否则整段语音都是「哒哒」声）
 
@@ -615,7 +619,8 @@ adb logcat -s ChatRepo:D AudioPlayer:D ProcessAudioUseCase:D
 | `音频流就绪: wav=.. headerRead=.. sr=.. ch=.. 首块等待=Xms` | 从 `playStream` 到首个音频块到达 —— **X 就是「开口前」的等待时间** |
 | `开始出声: 自playStream=Xms` | 第一帧真正写进 AudioTrack 的时刻 |
 | `TTS流式解码完成: 字节=N, 耗时=Xms` | 整段解码耗时（现在不该再等于静默期） |
-| `TTS 播放超时（已等 Xms）` | 120s 兜底：音频一直没放完，已强制停止 |
+| `TTS 朗读超时（上限 Xs，已等 Xms）` | 朗读超时兜底（设置页可调，默认 180s）：音频一直没放完，已强制停止 |
+| `TTS 朗读超时（合成阶段就等满 Xs）` | 连音频都没合成出来就耗光了整份预算，本轮不朗读 |
 
 > 参考音频（`assets/silverwolf/ref_voice.wav`，约 640KB，base64 后 ~880KB）每轮都要
 > 随请求上传，这是「开口前等待」里除服务端合成之外的另一块固定成本。

@@ -90,6 +90,19 @@ data class ApiConfig(
     val ttsReferenceAudioBase64: String = "",
     val ttsReferenceAudioMime: String = "audio/wav",
 
+    /**
+     * 一次 TTS 朗读的等待上限（秒）。
+     *
+     * 从「开口」到「放完最后一段音频」整段计时，超时立刻停播并回到聆听。
+     * 它兜的是两类卡死：服务端接了请求却一直不下发音频（一个字都没出声），
+     * 以及音频放了一半后再也不来新数据（解码协程挂在 socket 上）。
+     *
+     * 之所以做成可配置：这个上限同时也是**正常长回复的天花板** —— 调小了会把
+     * 说到一半的回复硬切掉，调大了卡死时要干等更久。默认 [DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC]
+     * 与旧版本写死的值一致，升级后行为不变。
+     */
+    val ttsPlaybackTimeoutSec: Int = DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC,
+
     // 角色配置
     val characterAvatarUri: String = "",
     val backgroundUri: String = "",
@@ -121,6 +134,33 @@ data class ApiConfig(
      */
     val memorySummarizeShortCalls: Boolean = false
 ) {
+    companion object {
+        /** 朗读超时默认值（秒）—— 与旧版本写死的 180s 一致 */
+        const val DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC = 180
+
+        /**
+         * 朗读超时可调范围（秒）。
+         *
+         * 下限 30s：比这更短的话，正常的长回复也会被腰斩，用户会以为"TTS 坏了"；
+         * 上限 600s：再长就等于没有超时，卡死时用户只能挂断。
+         */
+        const val MIN_TTS_PLAYBACK_TIMEOUT_SEC = 30
+        const val MAX_TTS_PLAYBACK_TIMEOUT_SEC = 600
+
+        /** 滑杆档位（秒）：30/60/…/600，避免滑出 137 秒这种怪数字 */
+        const val TTS_PLAYBACK_TIMEOUT_STEP_SEC = 30
+
+        /**
+         * 把任意来源的秒数夹进合法范围。
+         *
+         * 读配置与设置页保存**都要过这一道**：DataStore 里可能是手改过的旧值
+         * （0 / 负数 / 巨大值），直接乘 1000 交给 `withTimeoutOrNull` 会得到
+         * 一个立刻超时或永不超时的行为，两者都不是用户想要的。
+         */
+        fun clampTtsPlaybackTimeoutSec(sec: Int): Int =
+            sec.coerceIn(MIN_TTS_PLAYBACK_TIMEOUT_SEC, MAX_TTS_PLAYBACK_TIMEOUT_SEC)
+    }
+
     /**
      * 取某内置角色的 TTS 风格提示词。
      *

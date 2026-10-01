@@ -637,7 +637,7 @@ class CallViewModel(
             try {
                 // 这里刻意不再用 withTimeoutOrNull 包住整轮：
                 // 整轮耗时由各组成部分自己的超时兜底（ASR / HTTP 走 OkHttp 超时，
-                // TTS 播放走 ProcessAudioUseCase.TTS_PLAYBACK_TIMEOUT_MS）。外层再套一个
+                // TTS 朗读走设置页可调的「朗读超时」，见 ProcessAudioUseCase）。外层再套一个
                 // 更短的整体超时只会在超时点取消协程，而播放跑在 AudioPlayer 自己的
                 // scope 里不会随之停下 —— 结果就是麦克风开着去录 AI 还在播的声音
                 // （自听自说，AI 会回应自己刚说的话）。
