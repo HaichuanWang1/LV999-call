@@ -505,6 +505,43 @@ python tools/live2d_dump_parts.py --json     # 输出可粘贴进 bridge.js 的 
 旧实现往下一轮系统提示词里注入过一段"玩家刚刚摸了一下你的头"（全局单例标记，
 挂断不清、跨角色串味、`刚刚`还可能是几分钟前），已整条删除。
 
+#### 大姿态走动作文件，脸走程序化层
+
+程序化叠层的幅度是"微表情"级别（tilt 3°），读起来更像"轻轻歪了下头" ——
+真正的大姿态走**动作文件**：
+
+```bash
+python tools/live2d_make_pat.py       # 生成 pat_lv1..lv4 + 注册 PatOnce 组
+node tools/live2d_motion_check.cjs    # 校验（段结构 / 值域 / 通道预算 / 组齐全）
+```
+
+**通道预算是最要紧的约束**：`applyIdle()` 与 `applyPat()` 每帧写的是同一批通道
+（brow / smile / squint / mouthForm / breath / tilt / sway），动作文件写它们必然被覆盖。
+摸头动作因此只用 `ParamAngleY` 与 `ParamBodyAngleX/Y` —— 与现有 `idle_nod` / `idle_shift`
+同一个预算。分工是：**动作管大姿态，程序化层管脸**（脸红 / 眯眼 / 眉毛）。
+这比"演出期间让待机层整体让位"更好：让位会把那张脸一起掐掉。
+（DeepSeek 酱的 `ParamBodyAngleX/Y/Z` **全是物理输出**，那一档只能动头。）
+
+`PatOnce` 用 `FORCE` 优先级播放，抢占运行库正在自动播的待机动作；
+但**变身过场期间不抢** —— 那套演出在写同一批通道，插进去只会把过场顶坏。
+
+#### 连点档位与"不高兴"
+
+| 档 | 触发 | 动作 | 银狼 / DeepSeek 酱表情 |
+|---|---|---|---|
+| 1 | 第 1 下 | 头下沉 6.5° 后慢慢回弹 | `02 脸红爱心` / `脸红` |
+| 2 | 第 2 下 | 下沉 10.5°，回弹带一次小过冲 | `02 脸红爱心` / `脸红` |
+| 3 | 第 3 下 | 下沉 13.5° 压住不回弹 + 身体下沉 | `05 ＞＜` / `流汗` |
+| 4 | 第 4 下起 | 猛地抬头过冲 +2.5°（甩开） | `03 生气` / `生气` |
+
+- **一串连点**：相邻两次间隔不超过 `comboWindow`（5s）；静置超过就重新从第 1 档开始。
+  冷却只有 0.25s —— 它只用来吞掉"同一下按压被识别成两下"的抖动，**不能**拦掉连摸，
+  否则第 4 档永远摸不到（旧值 0.6+duration ≈ 1.5s 就有这个问题）。
+- **第 4 档之后挂 9s 的"不高兴"**：生气脸保持，姿势偏向"别过头去"（歪头 + 眉毛压低）。
+  这是"她记得被摸过"的唯一表达方式 —— 摸头不出声、不进历史、不进记忆。
+- 档位表在 `bridge.js` 的 `CFG.pat.tiers`（动作序号 / 时长 / 表情 / 保持时长 / 幅度倍率），
+  加角色只改配置，不用碰逻辑。
+
 ### 资源不入库
 
 `lib/` 与 `models/` 已被 `.gitignore` 排除，原因：
@@ -561,6 +598,7 @@ node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情
 node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
 node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
 python tools/live2d_dump_parts.py      # 摸头命中盒用的头部部件表（从 cdi3.json 生成）
+python tools/live2d_make_pat.py        # 摸头动作文件 PatOnce（4 档）
 bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形回绕
 python tools/memory_migration_check.py # Room 3→4 迁移：结构/数据存活/游标初始化（23 项）
 ```

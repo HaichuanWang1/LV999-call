@@ -95,8 +95,15 @@
     pat: {
       enabled: true,
 
-      duration: 0.95,   // 单次演出时长（秒）
-      cooldown: 0.6,    // 冷却：这段时间内的重复触发直接忽略，避免连点叠成乱抖
+      duration: 0.95,   // 单次演出时长（秒）—— 默认值，各档另有 duration
+      /**
+       * 冷却（秒）：这段时间内的重复触发直接忽略。
+       *
+       * 刻意很短（0.25s）：它只用来吞掉"一次按压被识别成两下"的抖动，
+       * **不能**拦掉用户真的在连摸 —— 连点计数（CFG.pat.tiers）靠的就是每一下都算数。
+       * 旧值是 0.6 + duration（约 1.5s），那样连摸四下根本摸不到第 4 档。
+       */
+      cooldown: 0.25,
       waves: 2.2,       // 一个 duration 内包含几个"上下"周期（= 被揉了几下）
 
       /**
@@ -132,6 +139,46 @@
         mouthForm: 0.10,  // 嘴角（绝不碰 ParamMouthOpenY —— 那是口型的通道）
         sway:      0.0    // 身体左右晃
       },
+
+      /**
+       * 大姿态交给动作文件（`tools/live2d_make_pat.py` 生成的 PatOnce 组）。
+       *
+       * 为什么必须走动作文件：程序化叠层的幅度是"微表情"级别（tilt 3°），
+       * 读起来更像"轻轻歪了下头"，看不出被摸头 —— 关键帧 + 尾部过冲才做得出来。
+       * 但动作文件只能写**两层程序化叠层都不碰**的通道（ParamAngleY /
+       * ParamBodyAngleX/Y），否则每帧被 applyIdle / applyPat 覆盖；
+       * 所以分工是：**动作管大姿态，程序化层管脸**（脸红 / 眯眼 / 眉毛）。
+       *
+       * 拿不到这个组时只播程序化叠层 —— 退化但不报错。
+       */
+      group: 'PatOnce',
+
+      /**
+       * 连点档位：连摸第 N 下用哪一档。
+       *
+       * `motion` 是 PatOnce 组里的动作序号（第 N 档 = 第 N 条动作，顺序由
+       * tools/live2d_make_pat.py 的 TIERS 决定）；`expression` / `ampScale`
+       * 各模型不同，由 profile 覆盖（BASE 这里只给结构性默认值）。
+       */
+      tiers: [
+        { motion: 0, duration: 0.95, expression: null, ampScale: 1.00 },
+        { motion: 1, duration: 1.00, expression: null, ampScale: 1.30 },
+        { motion: 2, duration: 1.05, expression: null, ampScale: 1.60 },
+        { motion: 3, duration: 0.75, expression: null, ampScale: 1.15 }
+      ],
+
+      /** 连点窗口（秒）：这期间的连点算"同一串"，静置超过就重新从第 1 档开始 */
+      comboWindow: 5.0,
+
+      /**
+       * 第 4 档之后的"不高兴残留"（秒）与姿势偏移。
+       *
+       * 用户口径是"摸头不出声"，那"她记得被摸过"就只能靠看得见的东西表达：
+       * 生气脸保持一段时间（holdMs 由宿主按档位给），这里再叠一点"别过头去"的
+       * 姿势（歪头 + 眉毛压低）。静置期满自然收敛回正常。
+       */
+      sulkDuration: 9.0,
+      sulk: { tilt: 2.4, browForm: 0.12 },
 
       /**
        * 有 LLM 情绪表情时，把「和表情抢戏」的通道压到这个比例。
@@ -299,7 +346,14 @@
                     'Part121', 'Part125', 'Part126'],
         amp: { tilt: 3.2, brow: 0.18, smile: 0.22, squint: 0.20, mouthForm: 0.10, sway: 1.6 },
         expression: '02 脸红爱心',
-        holdMs: 1200
+        holdMs: 1200,
+        // 档位表情取自模型自带的 14 个表情（名字必须与文件里完全一致）
+        tiers: [
+          { motion: 0, duration: 0.95, expression: '02 脸红爱心', ampScale: 1.00, holdMs: 1200 },
+          { motion: 1, duration: 1.00, expression: '02 脸红爱心', ampScale: 1.30, holdMs: 1200 },
+          { motion: 2, duration: 1.05, expression: '05 ＞＜', ampScale: 1.60, holdMs: 1400 },
+          { motion: 3, duration: 0.75, expression: '03 生气', ampScale: 1.15, holdMs: 9000 }
+        ]
       }
     },
 
@@ -421,7 +475,14 @@
                     'Part96'],
         amp: { tilt: 3.0, brow: 0.16, smile: 0, squint: 0, mouthForm: 0.08, sway: 0 },
         expression: '脸红',
-        holdMs: 1200
+        holdMs: 1200,
+        // 档位表情取自模型自带的 44 个表情
+        tiers: [
+          { motion: 0, duration: 0.95, expression: '脸红', ampScale: 1.00, holdMs: 1200 },
+          { motion: 1, duration: 1.00, expression: '脸红', ampScale: 1.30, holdMs: 1200 },
+          { motion: 2, duration: 1.05, expression: '流汗', ampScale: 1.60, holdMs: 1400 },
+          { motion: 3, duration: 0.75, expression: '生气', ampScale: 1.15, holdMs: 9000 }
+        ]
       }
     }
   };
@@ -502,6 +563,7 @@
   // 摸头反应（见 CFG.pat）
   var _patUntil = -1;          // 演出结束时间（_idleTime 秒）；-1 表示没在演
   var _patStart = -1;          // 演出开始时间
+  var _patDuration = 0;        // 本次演出的时长（各档不同）
   var _patCooldownUntil = -1;  // 冷却结束时间（连点直接忽略）
   var _patValue = {};          // 当前摸头层的通道叠加值（与 _idleValue 同构）
   var _patDebug = false;       // 调试：画出命中区
@@ -511,6 +573,11 @@
   var _patDownAt = -1;         // 手势：按下时刻（performance.now()，毫秒）
   var _patDownX = 0;           // 手势：按下位置（clientX/Y，用于判"划走了"）
   var _patDownY = 0;
+  var _patTier = -1;           // 当前/最近一档（0 基），-1 表示还没摸过
+  var _patAmpScale = 1;        // 当前档位的叠层幅度倍率
+  var _patCount = 0;           // 连点计数（一串里摸了几下）
+  var _patCountUntil = -1;     // 这一串的过期时间（静置超过就重新从第 1 档开始）
+  var _patSulkUntil = -1;      // "不高兴残留"结束时间（第 4 档之后挂一段）
 
   // layout() 算出的布局量缓存（给摸头命中判定用）。
   // 每次 layout() 覆盖；换模型/销毁时清掉，避免拿上一份模型的数据做判定。
@@ -1073,13 +1140,69 @@
   function onPatPointerCancel() { _patDownAt = -1; }
 
   /**
+   * 模型里有没有摸头动作组（PatOnce）。
+   *
+   * 没有也能用 —— 只剩程序化叠层（幅度是微表情级别），所以这个信息要回报宿主，
+   * 排查"摸头没什么动静"时第一眼看它。
+   */
+  function hasPatGroup() {
+    try {
+      var im = model && model.internalModel;
+      var defs = im && im.motionManager && im.motionManager.definitions;
+      var g = CFG.pat.group;
+      return !!(defs && g && defs[g] && defs[g].length);
+    } catch (e) { return false; }
+  }
+
+  /**
+   * 连摸第 N 下该用哪一档（0 基）。
+   *
+   * 一串连点的定义：相邻两次间隔不超过 comboWindow。静置超过就归零 ——
+   * 否则用户五分钟前摸过一下，现在再摸就直接进"不耐烦"，说不通。
+   */
+  function nextPatTier() {
+    if (_idleTime > _patCountUntil) _patCount = 0;
+    _patCount += 1;
+    _patCountUntil = _idleTime + (CFG.pat.comboWindow || 5.0);
+    var n = (CFG.pat.tiers && CFG.pat.tiers.length) || 1;
+    return Math.min(_patCount - 1, n - 1);
+  }
+
+  /**
+   * 播一次摸头动作（PatOnce 组）。
+   *
+   * FORCE 优先级：必须打断运行库正在自动播放的待机动作，否则大姿态会被 Idle 压住
+   * （与变身过场同一个理由）。但**变身过场期间不抢** —— 那套演出正在写同一批通道，
+   * 而且它的收尾复位优先级最高，插进去只会把过场顶坏。
+   *
+   * @returns 是否真的播了动作文件（false = 只有程序化叠层，退化但可用）
+   */
+  function playPatMotion(index) {
+    if (!modelReady || !model) return false;
+    if (_sequence) return false;
+    var im = model.internalModel;
+    var defs = im && im.motionManager && im.motionManager.definitions;
+    var group = CFG.pat.group;
+    if (!defs || !group || !defs[group] || !defs[group].length) return false;
+    try {
+      var n = defs[group].length;
+      var i = Math.max(0, Math.min(index | 0, n - 1));
+      model.motion(group, i, PIXI.live2d.MotionPriority.FORCE);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
    * 触发一次摸头（手势与调试入口共用同一条路径）。
    *
    * @param norm {x,y} 视口归一化坐标；传 null = 不看位置、强制触发（调试用）
    * @param source 'tap' / 'api' —— 进日志，便于区分"用户点的"和"调试叫的"
+   * @param tier   指定档位（0 基）；不传则按连点计数自动取
    * @returns 是否真的播了演出
    */
-  function triggerPat(norm, source) {
+  function triggerPat(norm, source, tier) {
     if (!modelReady || !model || !CFG.pat.enabled) return false;
 
     if (norm) {
@@ -1101,16 +1224,36 @@
       return false;
     }
 
+    var tiers = (CFG.pat.tiers && CFG.pat.tiers.length) ? CFG.pat.tiers : null;
+    var idx = (tier === undefined || tier === null || tier === '') ? nextPatTier()
+            : Math.max(0, Math.min(tier | 0, (tiers ? tiers.length : 1) - 1));
+    var tcfg = tiers ? (tiers[idx] || tiers[0]) : null;
+    var duration = (tcfg && tcfg.duration) || CFG.pat.duration;
+    var ampScale = (tcfg && tcfg.ampScale) || 1;
+
+    _patTier = idx;
+    _patAmpScale = ampScale;
     _patStart = _idleTime;
-    _patUntil = _idleTime + CFG.pat.duration;
-    _patCooldownUntil = _idleTime + CFG.pat.cooldown + CFG.pat.duration;
+    _patDuration = duration;
+    _patUntil = _idleTime + duration;
+    // 冷却从**这一次触发**算起，不是从演出结束算起 ——
+    // 否则连摸的第二下会被上一次的演出时长挡住，"连点计数"永远到不了第 4 档。
+    _patCooldownUntil = _idleTime + (CFG.pat.cooldown || 0.25);
+    // 最后一档之后挂一段"不高兴"：表情由宿主按 holdMs 保持，姿势由本层叠
+    if (tcfg && (tcfg.sulk || idx === (tiers ? tiers.length - 1 : 0))) {
+      _patSulkUntil = _idleTime + (CFG.pat.sulkDuration || 9.0);
+    }
+
+    var motion = playPatMotion(tcfg ? tcfg.motion : 0);
 
     // 表情只在「当前没有 LLM 情绪表情」时才套 —— _cue 优先级更高，
     // 否则一次摸头会把 LLM 刚触发的情绪脸冲掉，而且复位后回不到那张脸。
-    var expr = (CFG.pat.expression && !_cue) ? CFG.pat.expression : null;
+    var expr = (tcfg && tcfg.expression) || CFG.pat.expression || null;
+    if (_cue) expr = null;
     notify('pat', {
-      hit: true, playing: true, source: source,
-      expression: expr, holdMs: CFG.pat.holdMs || 1200
+      hit: true, playing: true, source: source, tier: idx,
+      motion: motion, expression: expr,
+      holdMs: (tcfg && tcfg.holdMs) || CFG.pat.holdMs || 1200
     });
     if (_patDebug) drawPatBox(true);
     return true;
@@ -1125,6 +1268,9 @@
    *
    * 该层只做**叠加**：目标值直接取 envelope × amp，不清零待机层的基线。
    * 不在演出期时按同一套插值把叠加值衰减回 0（不是硬切），否则演出结束会"咔"一下。
+   *
+   * 这一层只负责**脸**（脸红/眯眼/眉毛）与侧倾；大姿态在 PatOnce 动作文件里 ——
+   * 两者通道不重叠，所以不需要互相让位（见 CFG.pat.group 的说明）。
    */
   function updatePat(dt) {
     if (!modelReady || !model || !CFG.pat.enabled) return;
@@ -1142,28 +1288,49 @@
     var scale = _cue ? cfg.cueScale : 1;
     var env = 0;
     if (active) {
-      var p = clamp((_idleTime - _patStart) / cfg.duration, 0, 1);
+      // 用**这一次**的时长：各档时长不同（见 CFG.pat.tiers）
+      var dur = _patDuration > 0 ? _patDuration : cfg.duration;
+      var p = clamp((_idleTime - _patStart) / dur, 0, 1);
       env = Math.sin(p * Math.PI) * Math.abs(Math.sin(p * Math.PI * cfg.waves));
     }
+
+    // 第 4 档之后的"不高兴残留"：演出早结束了，但姿势先别回去 ——
+    // 这是"她记得被摸过"的唯一表达方式（摸头不出声、不进对话）
+    var sulk = (_patSulkUntil > 0 && _idleTime <= _patSulkUntil) ? 1 : 0;
+    var sulkCfg = cfg.sulk || {};
 
     var amp = cfg.amp, name;
     var rate = cfg.poseRate || 0.16;
     var k = 1 - Math.pow(1 - rate, dt * 60);
     var idle = 0;
 
+    // 参与本层的通道 = amp 的通道 ∪ 残留姿势要写的通道。
+    // 后者（比如 browForm）不在 amp 里 —— 只在残留期有目标值，平时是 0。
+    var names = {};
     for (name in amp) {
-      if (!Object.prototype.hasOwnProperty.call(amp, name)) continue;
+      if (Object.prototype.hasOwnProperty.call(amp, name)) names[name] = true;
+    }
+    for (name in sulkCfg) {
+      if (Object.prototype.hasOwnProperty.call(sulkCfg, name)) names[name] = true;
+    }
+
+    for (name in names) {
+      if (!Object.prototype.hasOwnProperty.call(names, name)) continue;
       // 这个通道在本模型的待机通道表里不存在 → 跳过多余的数学
       if (!CFG.idle.channels || !CFG.idle.channels[name]) continue;
       // 与表情抢戏的通道在情绪表情期间压一点，纯姿势通道不压
       var sc = (name === 'tilt' || name === 'sway') ? 1 : scale;
-      var want = env * amp[name] * sc;
+      var want = env * (amp[name] || 0) * sc * _patAmpScale;
+      // 残留期：姿势先别回中性 —— 歪头 + 眉毛压低（"别过头去"）
+      if (sulk && name === 'tilt') want += (sulkCfg.tilt || 0);
+      if (sulk && name === 'browForm') want += (sulkCfg.browForm || 0);
       _patValue[name] += ((want || 0) - (_patValue[name] || 0)) * k;
       if (Math.abs(_patValue[name]) > 1e-4) idle = 1;
     }
 
-    // 收敛到 0 且已不在演出期：彻底清零，避免每帧写一堆 1e-7 级别的噪声值
-    if (!active && !idle) {
+    // 收敛到 0 且已不在演出期（也不在残留期）：彻底清零，
+    // 避免每帧写一堆 1e-7 级别的噪声值
+    if (!active && !sulk && !idle) {
       for (name in _patValue) {
         if (Object.prototype.hasOwnProperty.call(_patValue, name)) _patValue[name] = 0;
       }
@@ -1475,8 +1642,9 @@
      *
      * 1.2.0：摸头命中区改为按部件顶点现算、手势改为页面内捕获，
      *        `patHead({x,y})` 降级为调试入口（宿主不再调用）。
+     * 1.3.0：摸头接上 PatOnce 动作文件（大姿态）与连点档位 + 不高兴残留。
      */
-    version: '1.2.0',
+    version: '1.3.0',
 
     get ready() { return modelReady; },
     get state() { return currentState; },
@@ -1605,7 +1773,8 @@
     },
 
     /**
-     * 摸头：{x, y} 是**视口归一化坐标**（0~1，相对整个 WebView 视口，左上为原点）。
+     * 摸头：{x, y} 是**视口归一化坐标**（0~1，相对整个 WebView 视口，左上为原点），
+     * 可选 `tier` 指定档位（0 基，不传则按连点计数自动取）。
      *
      * ⚠️ 手势已经改在**页面内**捕获（见 onPatPointerDown/Up），宿主不再需要传坐标 ——
      * 这个方法现在只剩两个用途：CDP 调试手测，以及自测脚本驱动。
@@ -1623,7 +1792,8 @@
         var o = typeof opts === 'string' ? JSON.parse(opts) : (opts || {});
         var nx = Number(o.x), ny = Number(o.y);
         var norm = (isFinite(nx) && isFinite(ny)) ? { x: nx, y: ny } : null;
-        return triggerPat(norm, 'api');
+        var tier = (o.tier === undefined || o.tier === null) ? null : Number(o.tier);
+        return triggerPat(norm, 'api', isFinite(tier) ? tier : null);
       } catch (e) {
         console.warn('[L2D] patHead 失败: ' + (e && e.message ? e.message : e));
         return false;
@@ -1715,6 +1885,11 @@
           active: _patUntil > 0 && _idleTime <= _patUntil,
           values: _patValue,
           debug: _patDebug,
+          tier: _patTier,
+          ampScale: _patAmpScale,
+          comboCount: _patCount,
+          sulk: _patSulkUntil > 0 && _idleTime <= _patSulkUntil,
+          motionGroup: hasPatGroup(),
           headParts: (CFG.pat.headParts || []).length,
           modelBox: patHeadModelBox(),
           box: patHeadBox(),
@@ -1747,7 +1922,10 @@
       enabled: CFG.pat.enabled,
       duration: CFG.pat.duration,
       headParts: (CFG.pat.headParts || []).length,
-      boxReady: !!patHeadBox()
+      boxReady: !!patHeadBox(),
+      // 动作组在不在：不在就只有程序化叠层（幅度很轻）
+      motionGroup: hasPatGroup(),
+      tiers: (CFG.pat.tiers || []).length
     };
     try {
       var im = model.internalModel;

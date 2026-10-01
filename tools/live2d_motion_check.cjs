@@ -264,6 +264,14 @@ function inspectMotion(file, params, physics) {
           groups.TransformOnce.length === 2,
           JSON.stringify(groups.TransformOnce.map((d) => d.File)));
   }
+  if (groups.PatOnce) {
+    check('摸头组 PatOnce 有 4 档（连点档位各一条）',
+          groups.PatOnce.length === 4,
+          JSON.stringify(groups.PatOnce.map((d) => d.File)));
+  } else {
+    warn('没有 PatOnce 组：摸头只剩程序化叠层，动作幅度会很轻'
+       + '（跑 python tools/live2d_make_pat.py 生成）');
+  }
 
   const hasIdle = !!groups.Idle && groups.Idle.length > 0;
   console.log(hasIdle
@@ -293,8 +301,10 @@ function inspectMotion(file, params, physics) {
             info.problems.slice(0, 3).join(' | '));
       const outCurves = Object.keys(info.roles).filter((id) => info.roles[id] === 'output');
       const loop = info.meta.Loop === true;
-      const ours = /^idle_/.test(path.basename(def.File));
-      const copy = /^transform_(in|out)/.test(path.basename(def.File));
+      const base = path.basename(def.File);
+      // 我们自己生成的动作（待机 Idle 组 + 摸头 PatOnce 组）：要求比作者原文件严
+      const ours = /^idle_/.test(base) || /^pat_lv/.test(base);
+      const copy = /^transform_(in|out)/.test(base);
 
       // 值域越界：我们自己的文件必须干净；作者原文件只提示（不是我们改的，
       // 但值得知道 —— 例如 m_transform_2 的 Param172 写着 10~20 而 moc3 上限是 10，

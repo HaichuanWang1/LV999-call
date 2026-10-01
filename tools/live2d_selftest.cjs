@@ -99,7 +99,8 @@ const model = {
       resetExpression() { rec.expressions.push('<reset>'); },
     },
     motionManager: {
-      definitions: { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}] },
+      // PatOnce = 摸头动作组（4 档，由 tools/live2d_make_pat.py 生成）
+      definitions: { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}], PatOnce: [0, 1, 2, 3] },
       // 序列推进依赖 motionFinish 事件与 state.currentGroup（事件在 complete() 之前触发）
       state: { currentGroup: undefined, currentIndex: undefined },
       on(evt, cb) { if (evt === 'motionFinish') onMotionFinish = cb; },
@@ -476,7 +477,10 @@ function check(name, cond, extra = '') {
   console.warn = origWarn;
   check('动作组缺失时返回 false 并警告', started === false && warned,
         `started=${started} warned=${warned}`);
-  mm.definitions = { Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}] };
+  // 恢复成完整的一组（含摸头的 PatOnce —— 少了它后面的档位用例会假失败）
+  mm.definitions = {
+    Idle: [0, 1, 2], Tap: [0, 1], TransformOnce: [{}, {}], PatOnce: [0, 1, 2, 3],
+  };
 
   // ---- 自动恢复兜底：正常播完 / 中途被打断，都必须回到"没变过身"的参数上 ----
   // 正常路径靠 _2 自己还原 + 动作权重淡出，但序列可能被切后台之类打断，
@@ -672,6 +676,9 @@ function check(name, cond, extra = '') {
         swInfo && JSON.stringify(swInfo.pat));
   check('银狼档位的 headParts 与 dump 脚本一致（15 个）',
         !!swInfo && swInfo.pat.headParts === 15, swInfo && String(swInfo.pat.headParts));
+  check('ready 信息带上动作组与档位表（排查"摸头没什么动静"第一眼看它）',
+        !!swInfo && swInfo.pat.motionGroup === true && swInfo.pat.tiers === 4,
+        swInfo && JSON.stringify({ g: swInfo.pat.motionGroup, t: swInfo.pat.tiers }));
 
   // 命中盒必须是「头部部件顶点的并集」，且**不含**身体部件的远端顶点。
   // 期望值直接由 mock 顶点算出（含 8% 外扩），不写死屏幕像素：
@@ -699,6 +706,9 @@ function check(name, cond, extra = '') {
 
   rec.events.length = 0;
   check('摸头：命中头部盒中心时触发', win.L2D.patHead(hitPt) === true, JSON.stringify(hitPt));
+  // 冷却（0.25s）只吞"同一下按压被识别成两下"的抖动，所以紧接着的第二下必须被忽略；
+  // 但它是**防抖**不是防连摸 —— 连点计数靠的就是每一下都算数（见第 16 节）
+  check('冷却窗口内的第二下被忽略（防抖）', win.L2D.patHead(hitPt) === false);
   check('摸头：点底部不触发（返回 false）', win.L2D.patHead({ x: 0.5, y: 0.99 }) === false);
   check('未命中也会回报原因（不再有"点了没反应却查不到"）',
         rec.events.some(([t, p]) => t === 'pat' && JSON.parse(p).hit === false),
@@ -720,9 +730,7 @@ function check(name, cond, extra = '') {
         !('ParamMouthOpenY' in rec.params) || rec.params.ParamMouthOpenY === 0,
         String(rec.params.ParamMouthOpenY));
 
-  // 冷却：紧接着再点一次必须被忽略
-  check('摸头冷却：连点第二次被忽略（返回 false）', win.L2D.patHead(hitPt) === false);
-
+  // 冷却：紧接着再点一次必须被忽略（这里已经过了 0.25s，所以改用显式档位验证不受影响）
   tick(120);
   check('摸头演出结束后叠加值归零',
         (() => {
@@ -794,7 +802,85 @@ function check(name, cond, extra = '') {
   win.L2D.setExpression(null);
 
   // ========================================================================
-  console.log('\n[16] 摸头不再进提示词（回归守卫）');
+  console.log('\n[16] 摸头档位（连点会不耐烦）');
+
+  // 每档都该播对应的动作文件（PatOnce 第 N 条，FORCE 抢占待机动作）
+  const tierOf = (ev) => JSON.parse(ev[1]).tier;
+  const playOf = (ev) => JSON.parse(ev[1]);
+  // 先把上一节留下的连点计数熬过去（静置 > comboWindow 5s），否则档位不从 0 开始
+  tick(400);
+  rec.events.length = 0;
+  rec.motions.length = 0;
+  const tierSeen = [];
+  const motionSeen = [];
+  const holdSeen = [];
+  for (let n = 0; n < 4; n++) {
+    if (n > 0) tick(30);   // 30 帧 ≈ 480ms > 冷却 0.25s，但远小于连点窗口 5s
+    win.L2D.patHead(hitPt);
+    const ev = rec.events.filter(isPlaying).pop();
+    if (ev) { tierSeen.push(tierOf(ev)); holdSeen.push(playOf(ev).holdMs); }
+    const m = rec.motions[rec.motions.length - 1];
+    motionSeen.push(m ? m[1] : null);
+  }
+  check('连点四下的档位依次递进 0→1→2→3',
+        JSON.stringify(tierSeen) === JSON.stringify([0, 1, 2, 3]), JSON.stringify(tierSeen));
+  check('每一档都播了 PatOnce 里对应的动作（index 跟着档位走）',
+        JSON.stringify(motionSeen) === JSON.stringify([0, 1, 2, 3]), JSON.stringify(motionSeen));
+  check('摸头动作以 FORCE 优先级播放（否则被待机动作压住）',
+        rec.motions.every((m) => m[0] === 'PatOnce' && m[2] === 3),
+        JSON.stringify(rec.motions));
+  check('第 4 档的表情是"生气"且保持 9s（不高兴残留）',
+        holdSeen[3] === 9000, JSON.stringify(holdSeen));
+  const dbgTier = JSON.parse(win.L2D.debug()).pat;
+  check('第 4 档之后进入不高兴残留状态',
+        dbgTier.sulk === true && dbgTier.tier === 3,
+        JSON.stringify({ sulk: dbgTier.sulk, tier: dbgTier.tier }));
+  tick(20);   // 让残留姿势收敛几帧（刚触发那一帧还没跑过 updatePat）
+  check('残留期间姿势不回中性（歪头 + 眉压真的写进了通道）',
+        (() => {
+          const v = JSON.parse(win.L2D.debug()).pat.values;
+          return (v.tilt || 0) > 1.2 && (v.browForm || 0) > 0.05;
+        })(), JSON.stringify(JSON.parse(win.L2D.debug()).pat.values));
+
+  // 静置超过连点窗口 → 重新从第 1 档开始（也顺带把残留熬过去）
+  tick(700);   // 700 帧 ≈ 11s > sulkDuration 9s，且 > comboWindow 5s
+  rec.events.length = 0;
+  win.L2D.patHead(hitPt);
+  const afterIdle = rec.events.filter(isPlaying).pop();
+  check('静置超过连点窗口后重新从第 1 档开始',
+        !!afterIdle && tierOf(afterIdle) === 0, afterIdle && afterIdle[1]);
+  const dbgAfter = JSON.parse(win.L2D.debug()).pat;
+  check('残留期满后姿势收敛回中性（不再挂着不高兴）',
+        dbgAfter.sulk === false, JSON.stringify({ sulk: dbgAfter.sulk }));
+
+  // 模型没有 PatOnce 组时：只播程序化叠层，退化但不报错
+  tick(120);
+  const savedDefs = model.internalModel.motionManager.definitions;
+  delete model.internalModel.motionManager.definitions.PatOnce;
+  rec.events.length = 0;
+  rec.motions.length = 0;
+  const noGroupOk = win.L2D.patHead(hitPt) === true;
+  const noGroupEv = rec.events.filter(isPlaying).pop();
+  check('没有 PatOnce 组时仍然触发（只剩程序化叠层，不报错）',
+        noGroupOk && !!noGroupEv && playOf(noGroupEv).motion === false,
+        JSON.stringify(noGroupEv));
+  check('没有动作组时不会去调 model.motion', rec.motions.length === 0,
+        JSON.stringify(rec.motions));
+  model.internalModel.motionManager.definitions = savedDefs;
+
+  // 变身过场期间不抢动作（那套演出在写同一批通道，插进去会把过场顶坏）
+  tick(200);
+  win.L2D.playTransform('full');
+  tick(2);
+  rec.motions.length = 0;
+  rec.events.length = 0;
+  win.L2D.patHead(hitPt);
+  check('变身过场期间摸头不抢动作文件（过场优先）',
+        rec.motions.every((m) => m[0] !== 'PatOnce'), JSON.stringify(rec.motions));
+  tick(400);   // 等过场结束
+
+  // ========================================================================
+  console.log('\n[17] 摸头不再进提示词（回归守卫）');
   //
   // 摸头是纯视觉互动：不产生语音、不进历史、不影响对话。
   // 旧实现用 AppModule 里一个全局 AtomicBoolean 把"刚被摸头"捎带进下一轮
