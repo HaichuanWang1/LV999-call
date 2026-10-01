@@ -83,6 +83,23 @@ class ConfigRepository(private val context: Context) {
 
         /** 长期记忆总开关（plan4 §5.7，默认开）。关掉 = 不读不写，但已有记忆保留 */
         val MEMORY_AUTO_SUMMARIZE_ENABLED = stringPreferencesKey("memory_auto_summarize_enabled")
+
+        /**
+         * 记忆提醒通知开关（默认关）。
+         *
+         * 与其他 boolean 一样存字符串：这套读写口径已经铺满全项目，
+         * 单独为它引一个 `booleanPreferencesKey` 只会让下一个读代码的人多一次犹豫。
+         */
+        val MEMORY_REMINDER_ENABLED = stringPreferencesKey("memory_reminder_enabled")
+
+        /**
+         * 上次成功推送提醒的时刻（毫秒，0 = 从未）。
+         *
+         * 存字符串的理由同上（全项目的数字配置都存字符串）；读的时候 `toLongOrNull()`
+         * 兜住手改过的坏值 —— 坏值读成 0 的后果只是"这一轮可能早推一次"，
+         * 比抛异常把整个 Worker 打挂要好得多。
+         */
+        val MEMORY_REMINDER_LAST_AT = stringPreferencesKey("memory_reminder_last_at")
     }
 
     val configFlow: Flow<ApiConfig> = context.dataStore.data.map { prefs ->
@@ -119,7 +136,9 @@ class ConfigRepository(private val context: Context) {
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
             live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
-            memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false
+            memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false,
+            memoryReminderEnabled = prefs[MEMORY_REMINDER_ENABLED]?.toBooleanStrictOrNull() ?: false,
+            memoryReminderLastAt = prefs[MEMORY_REMINDER_LAST_AT]?.toLongOrNull() ?: 0L
         )
     }
 
@@ -153,6 +172,25 @@ class ConfigRepository(private val context: Context) {
             prefs[LIVE2D_TRANSFORM_ENABLED] = config.live2dTransformEnabled.toString()
             prefs[MEMORY_AUTO_SUMMARIZE_ENABLED] = config.memoryAutoSummarizeEnabled.toString()
             prefs[MEMORY_SUMMARIZE_SHORT_CALLS] = config.memorySummarizeShortCalls.toString()
+            prefs[MEMORY_REMINDER_ENABLED] = config.memoryReminderEnabled.toString()
+            prefs[MEMORY_REMINDER_LAST_AT] = config.memoryReminderLastAt.toString()
+        }
+    }
+
+    /**
+     * 只更新「上次成功推送提醒的时刻」，**不动其他配置**。
+     *
+     * 与 [updateCharacterTtsPrompt] 同一个理由：整体 [saveConfig] 要求调用方先把整份配置
+     * 读出来再写回，而本方法的调用方是后台 Worker —— 它读配置（判开关/频控）与写 lastAt
+     * 之间隔着一次十几秒的 LLM 调用，中间用户完全可能在设置页改完配置并保存。
+     * 那时整体写回就会把用户刚改的字段覆盖回 Worker 手里那份**旧快照**，
+     * 表现为"设置改完又自己变回去了"，而且只在跑提醒的那天才偶发。
+     *
+     * read-modify-write 只在 DataStore 的 edit 事务里动这一个 key，天然免疫这类覆盖。
+     */
+    suspend fun updateMemoryReminderLastAt(timestamp: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[MEMORY_REMINDER_LAST_AT] = timestamp.toString()
         }
     }
 

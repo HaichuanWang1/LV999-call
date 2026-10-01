@@ -212,6 +212,12 @@ CallScreen 下发 Live2DController.setExpression()，保持到本轮说完再回
   标签始终**最多 1 个**：表情与姿势二选一 —— 多条 exp3 会把同组 key 互相归零，
   同时下发的结果不可控。仍未开放：`10 吹泡泡`。
 
+- **同一条标签现在还驱动声音**。`[[e:…]]` / `[[m:…]]` 的 key 会经
+  [`EmotionVoiceStyles`](app/src/main/java/com/lv999call/app/domain/model/EmotionVoiceStyles.kt)
+  查出一句语气修饰，拼进这一轮的 TTS 风格指令 —— 此前标签**只换脸不换声**，
+  「表情变了而语气不变」等于表演只做了一半。详见
+  [TTS 播放链路 → 风格提示词](tts.md)。
+
 可调项：[`Live2DExpressions`](app/src/main/java/com/lv999call/app/domain/model/Live2DExpression.kt)
 里每个角色的表情集（标签 ↔ 真实表情名 ↔ 情绪说明 ↔ few-shot 示例）、
 `CallScreen.kt` 的 `EXPRESSION_MIN_HOLD_MS` / `EXPRESSION_MAX_HOLD_MS`（保持时长兜底）。

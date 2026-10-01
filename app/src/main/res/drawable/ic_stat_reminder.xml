@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏小图标（状态栏图标）。
+  ⚠️ 系统只取它的**alpha 通道**并把整块涂成白色，所以这里必须是纯白单色、
+  且不能带背景色块 —— 直接用 @mipmap/ic_launcher 会渲染成一坨白方块。
+  图形取 Material 的「chat」气泡：提醒是"角色给你发了条消息"，与通知语义一致。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M20,2H4C2.9,2 2,2.9 2,4v12c0,1.1 0.9,2 2,2h14l4,4V4C22,2.9 21.1,2 20,2z" />
+</vector>

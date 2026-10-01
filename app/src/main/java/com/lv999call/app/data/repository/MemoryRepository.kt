@@ -71,6 +71,16 @@ class MemoryRepository(
     /** 记忆总条数（首页「🧠 记忆库（N 条）」入口用） */
     suspend fun countMemories(): Int = memoryDao.countMemories()
 
+    /**
+     * 最近一条**可注入**记忆属于哪个角色；一条都没有时返回 null。
+     *
+     * 目前唯一的调用方是「记忆提醒通知」：它在"最近聊过的那个角色没有可用记忆"时
+     * 用它回落到"最近有记忆的角色"，避免提醒被静默饿死（详见 [MemoryDao] 那条查询的注释）。
+     * 排除口径与注入链路一致（flagged 不算），否则会挑出一个"有记忆但一条都不注入"的角色。
+     */
+    suspend fun latestEligibleCharacterKey(): String? =
+        memoryDao.getLatestCharacterKeyExcluding(Memory.CATEGORY_SUMMARY_FLAGGED)
+
     /** 该角色最近一次生成记忆的时刻；从未生成过返回 null（时间闸门用） */
     suspend fun getLatestCreatedAt(characterId: String): Long? =
         memoryDao.getLatestCreatedAt(characterId)

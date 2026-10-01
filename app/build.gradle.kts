@@ -150,4 +150,7 @@ dependencies {
 
     // Vosk offline ASR
     implementation(libs.vosk.android)
+
+    // WorkManager：记忆提醒通知的周期调度（版本必须 2.9.0，见 libs.versions.toml 的注释）
+    implementation(libs.work.runtime.ktx)
 }

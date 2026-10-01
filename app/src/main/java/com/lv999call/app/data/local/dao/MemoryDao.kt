@@ -54,6 +54,31 @@ interface MemoryDao {
     @Query("UPDATE memories SET lastUsedAt = :usedAt WHERE id IN (:ids)")
     suspend fun updateLastUsedAt(ids: List<Long>, usedAt: Long)
 
+    /**
+     * 最近一条**可注入**记忆属于哪个角色；一条都没有时返回 null。
+     *
+     * 给「记忆提醒通知」挑角色时做**回落**用。那条链路本来优先选"最近聊过的角色"
+     * （提醒要接着最近这次聊天往下说），但那个桶里完全可能一条记忆都没有 ——
+     * 最近一通是快速模式（`default`）、刚认识的新角色、或那通没到总结门槛。
+     * 只认首选的话就会**每个周期都在"没有可用记忆"处跳过，用户永远收不到提醒，
+     * 而别的角色明明有记忆**，日志里还只是一行 D 级跳过，看不出是功能坏了。
+     *
+     * 排除的类别由调用方传入，而不是在 SQL 里写死 `'summary_flagged'`：那个字面量是
+     * [com.lv999call.app.domain.model.Memory.CATEGORY_SUMMARY_FLAGGED] 的值，
+     * 在 SQL 里再写一份等于把同一个事实存了两处，改一处漏一处。
+     *
+     * 排序口径与 [getMemoriesByCharacterOnce] 一致（`createdAt DESC, id DESC`）——
+     * `createdAt` 不唯一，不带 id 决胜的话同毫秒两条的先后不可复现。
+     */
+    @Query(
+        """
+        SELECT characterId FROM memories
+        WHERE category != :excludeCategory
+        ORDER BY createdAt DESC, id DESC LIMIT 1
+        """
+    )
+    suspend fun getLatestCharacterKeyExcluding(excludeCategory: String): String?
+
     @Query("DELETE FROM memories WHERE id = :id")
     suspend fun deleteMemory(id: Long)
 

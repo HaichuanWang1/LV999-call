@@ -1,5 +1,7 @@
 package com.lv999call.app.ui.settings
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -29,6 +31,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lv999call.app.audio.VoskModelManager
 import com.lv999call.app.domain.model.ApiConfig
+import com.lv999call.app.notify.MemoryReminderScheduler
+import com.lv999call.app.notify.ReminderNotifier
 import com.lv999call.app.ui.common.Live2DAuthorCredit
 import kotlinx.coroutines.launch
 
@@ -77,6 +81,8 @@ fun SettingsScreen(
     // 长期记忆两个开关（plan4 §5.7）
     var memoryAutoSummarizeEnabled by remember(config) { mutableStateOf(config.memoryAutoSummarizeEnabled) }
     var memorySummarizeShortCalls by remember(config) { mutableStateOf(config.memorySummarizeShortCalls) }
+    // 记忆提醒通知（默认关）。它是子开关，只在记忆总开关打开时显示
+    var memoryReminderEnabled by remember(config) { mutableStateOf(config.memoryReminderEnabled) }
     val scrollState = rememberScrollState()
 
     var modelList by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -85,6 +91,37 @@ fun SettingsScreen(
     var modelDialogTarget by remember { mutableStateOf("tts") } // "llm" or "tts"
     var fetchError by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    /**
+     * 通知权限请求（API 33+ 的 POST_NOTIFICATIONS）。
+     *
+     * ⚠️ 这是本项目**第一处**运行时权限请求（RECORD_AUDIO 那条只 checkSelfPermission、
+     * 从不 request），所以这套"开关 + 请求 + 拒绝回滚"的写法是新立的：
+     * · 请求只在用户主动打开开关时发起（不是一进设置页就弹，那属于骚扰）；
+     * · **被拒绝时绝不能把开关留在打开状态** —— 那样用户以为开好了，而 Worker 每 12 小时
+     *   检查一次权限、永远静默跳过，表现为"功能是坏的"。宁可回滚开关 + 明确告诉用户怎么办。
+     */
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        // granted 只代表"权限对话框的结果"；系统里的通知总开关/渠道屏蔽是另一回事，
+        // 所以这里再走一遍 canPost，避免"权限给了但通知仍被关着"时把开关误置为开
+        if (granted && ReminderNotifier.canPost(context)) {
+            memoryReminderEnabled = true
+            MemoryReminderScheduler.sync(context, true)
+        } else {
+            memoryReminderEnabled = false
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    if (!granted) {
+                        "没有通知权限，提醒发不出来。可在系统设置里为「LV999」开启通知后重试"
+                    } else {
+                        "系统里通知被关闭了（或屏蔽了「角色的提醒」），请到系统设置里打开"
+                    }
+                )
+            }
+        }
+    }
 
     // Vosk 下载完成提示
     LaunchedEffect(voskDownloadState) {
@@ -498,6 +535,55 @@ fun SettingsScreen(
                             )
                         }
                     }
+
+                    // 记忆提醒通知：第二个子开关，与上面的子开关同一套缩进与处理
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(modifier = Modifier.width(28.dp))
+                        Switch(
+                            checked = memoryReminderEnabled,
+                            onCheckedChange = { want ->
+                                when {
+                                    // 关：立刻取消后台任务。用户关掉开关后**必须**马上生效，
+                                    // 不能等下一次 App 启动的 sync（那时可能已经推过一条了）
+                                    !want -> {
+                                        memoryReminderEnabled = false
+                                        MemoryReminderScheduler.sync(context, false)
+                                    }
+                                    // API 33+ 且还没有通知权限 → 先要权限，结果由上面的回调决定。
+                                    // 这里刻意**先不改开关状态**：被拒时回调会把它按回关，
+                                    // 若先置 true 再回滚，用户会看到开关"闪一下"
+                                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        !ReminderNotifier.hasPostPermission(context) -> {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    // 有权限，但系统里通知被关了 / 本渠道被屏蔽：系统不会再弹对话框，
+                                    // 只能引导用户自己去系统设置（开关保持关，避免"看起来开着却收不到"）
+                                    !ReminderNotifier.canPost(context) -> {
+                                        memoryReminderEnabled = false
+                                        scope.launch {
+                                            snackbarHostState.showSnackbar("系统里通知已被关闭，请到系统设置里为「LV999」打开通知")
+                                        }
+                                    }
+                                    else -> {
+                                        memoryReminderEnabled = true
+                                        MemoryReminderScheduler.sync(context, true)
+                                    }
+                                }
+                            },
+                            colors = SwitchDefaults.colors(checkedTrackColor = colors.primary)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text("记忆提醒通知", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                            Text(
+                                text = "角色偶尔会以通知形式给你发一条消息，像主动来找你说话。默认关闭；打开后每天最多一条，" +
+                                    "且 22:00–09:00 不会打扰你。只发文字通知，不会响铃、不涉及通话",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -520,8 +606,14 @@ fun SettingsScreen(
                             live2dEnabled = live2dEnabled,
                             live2dTransformEnabled = live2dTransformEnabled,
                             memoryAutoSummarizeEnabled = memoryAutoSummarizeEnabled,
-                            memorySummarizeShortCalls = memorySummarizeShortCalls
+                            memorySummarizeShortCalls = memorySummarizeShortCalls,
+                            memoryReminderEnabled = memoryReminderEnabled
                         ))
+                        // 开关切换时已经 sync 过一次，但那只改了"内存里的意图"，配置要到
+                        // 这里保存才落盘。再 sync 一次是为了对齐**落盘后的最终状态**：
+                        // 用户开了开关又没保存就退出时，内存里的 sync 已经入队，而配置仍是关的
+                        // （Worker 读到关就自己跳过，不会误推），下次启动 App 会按配置取消掉它
+                        MemoryReminderScheduler.sync(context, memoryReminderEnabled)
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                     shape = shapes.medium,

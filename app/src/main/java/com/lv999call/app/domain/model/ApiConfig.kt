@@ -132,7 +132,26 @@ data class ApiConfig(
      * 打开它的用户要的就是"一句不落"，降档要真的明显，见
      * [com.lv999call.app.domain.usecase.SummarizeMemoryUseCase] 的门槛判据。
      */
-    val memorySummarizeShortCalls: Boolean = false
+    val memorySummarizeShortCalls: Boolean = false,
+
+    /**
+     * 记忆提醒通知开关（默认**关**）。
+     *
+     * 为什么默认关而不是像总开关那样默认开：这是一条「App 主动弹系统通知打扰用户」的能力，
+     * 与"后台记点备忘"完全不是一个量级 —— 后者用户看不见，前者会在锁屏上亮起来。
+     * 这类能力必须用户显式开启（也会连带触发 API 33+ 的通知权限请求），
+     * 默认打开等于替用户做了"愿意被推送"的决定。
+     */
+    val memoryReminderEnabled: Boolean = false,
+
+    /**
+     * 上次**成功推送**提醒的时刻（毫秒，0 = 从未），用于 24 小时频控。
+     *
+     * 语义严格限定为"通知真的发出去了"：只有 [ReminderNotifier] 返回 true 之后才写。
+     * 提前写会让一次失败的尝试白吃掉一整天的配额，用户那天就再也收不到提醒了 ——
+     * 而失败最常见的原因（没网、LLM 抽风）本来下一轮就能自愈。
+     */
+    val memoryReminderLastAt: Long = 0
 ) {
     companion object {
         /** 朗读超时默认值（秒）—— 与旧版本写死的 180s 一致 */

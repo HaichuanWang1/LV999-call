@@ -9,6 +9,14 @@
     <!-- 麦克风权限 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!--
+      记忆提醒通知（API 33+ 才存在这条权限，低版本声明了也不会要求授予）。
+      ⚠️ 只声明是不够的：推送前必须在 ReminderNotifier 里检查权限与通知总开关，
+      设置页也要在用户打开开关时用 RequestPermission 发起请求 —— 否则开关能打开、
+      通知却永远弹不出来（Android 13 的静默失败，排查起来只能靠日志）。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- 存储权限（读取图片） -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"

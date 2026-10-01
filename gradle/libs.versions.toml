@@ -15,6 +15,9 @@ coroutines = "1.8.1"
 serialization = "1.6.3"
 activityCompose = "1.9.0"
 coreKtx = "1.13.1"
+# ⚠️ 锁死 2.9.0：2.10.0 起 work-runtime 的 AAR 要求 compileSdk 35，
+# 而本项目是 compileSdk 34（升 SDK 会连带触发一堆行为变更，不在这个功能的范围内）
+workManager = "2.9.0"
 
 [libraries]
 # Compose BOM
@@ -61,6 +64,9 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 
 # Vosk offline ASR
 vosk-android = { group = "com.alphacephei", name = "vosk-android", version.ref = "vosk" }
+
+# WorkManager（记忆提醒通知的后台周期任务）
+work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workManager" }
 
 # Core
 core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

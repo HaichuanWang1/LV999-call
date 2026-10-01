@@ -14,6 +14,7 @@ import com.lv999call.app.data.repository.ConfigRepository
 import com.lv999call.app.data.repository.MemoryRepository
 import com.lv999call.app.data.repository.SessionRepository
 import com.lv999call.app.domain.model.TtsPolicy
+import com.lv999call.app.domain.usecase.ComposeReminderUseCase
 import com.lv999call.app.domain.usecase.LoadMemoryUseCase
 import com.lv999call.app.domain.usecase.ManageSessionUseCase
 import com.lv999call.app.domain.usecase.ProcessAudioUseCase
@@ -146,6 +147,22 @@ class AppModule(private val context: Context) {
         LoadMemoryUseCase(
             memoryRepository = memoryRepository,
             configRepository = configRepository
+        )
+    }
+
+    /**
+     * 记忆提醒文案的生成用例。
+     *
+     * 与总结用例同一条红线：只走 LLM 文本通道，永不碰 TTS/麦克风/播放器。
+     * 它跑在 WorkManager 的 Worker 里（`MemoryReminderWorker`），生命周期由系统管，
+     * 所以**不**需要 [applicationScope]，也没有 Mutex —— 一次周期任务只会有一个实例，
+     * 且它与"挂断后总结"并发时本来也不共享任何状态（各自收集自己的流）。
+     */
+    val composeReminderUseCase: ComposeReminderUseCase by lazy {
+        ComposeReminderUseCase(
+            chatRepository = chatRepository,
+            configRepository = configRepository,
+            context = context
         )
     }
 }

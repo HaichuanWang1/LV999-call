@@ -9,6 +9,7 @@ import com.lv999call.app.domain.model.ApiConfig
 import com.lv999call.app.domain.model.AsrEmptyException
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
+import com.lv999call.app.domain.model.EmotionVoiceStyles
 import com.lv999call.app.domain.model.ExpressionSet
 import com.lv999call.app.domain.model.Live2DExpression
 import com.lv999call.app.domain.model.TtsPolicy
@@ -153,8 +154,17 @@ class ProcessAudioUseCase(
         // 你的头"，那是全局单例标记：挂断不清、跨角色串味，而且"刚刚"可能
         // 已经是几分钟前 —— 已整条删除。
         //
-        // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来
-        val tagParser = ExpressionTagParser(expressions, onExpression)
+        // 边收边剥离表情标签：UI 显示与 TTS 用同一个干净文本，标签不会被念出来。
+        //
+        // 顺手记下本轮的表情 key：表情标签此前**只驱动 Live2D**，声音一个字都不变。
+        // 这里把它留给 Step 3 —— TTS 是整段文本收完之后才发起的，所以开嗓之前一定
+        // 已经拿到了这一轮的情绪，可以据此改这一句的语气（见 [EmotionVoiceStyles]）。
+        // 标签协议规定每轮最多 1 个，所以直接覆盖即可，不需要队列。
+        var turnEmotionKey: String? = null
+        val tagParser = ExpressionTagParser(expressions) { expression ->
+            turnEmotionKey = expression.key
+            onExpression(expression)
+        }
         // 边收边剥离推理块：思考内容既不显示也不朗读（详见 ReasoningStripper）
         val reasoningStripper = ReasoningStripper()
         /** 是否已经出现过可见正文 —— 它决定 UI 是「思考中转圈」还是「流式打字」 */
@@ -270,8 +280,29 @@ class ProcessAudioUseCase(
             // （socket 与协程一起泄漏）。请求阶段本身有 OkHttp 的 connect/read 超时兜底，
             // 这里只要把**剩余**预算交给播放阶段即可：预算被请求吃光时 remaining=0，
             // 播放会立刻被判超时，等价于"本轮不朗读"。
+
+            // 语气跟着本轮情绪走：把角色的基础风格与本轮表情对应的语气拼成这一次的提示词。
+            //
+            // 没有表情标签时（提示词里要求"情绪不明显就宁可少加"）[EmotionVoiceStyles.styleFor]
+            // 返回 null，拼出来就是原样的 ttsPrompt —— 行为与加这个功能之前完全一致，
+            // 所以这条路径对"她本来就不怎么用标签"的角色零影响。
+            val voiceStyle = EmotionVoiceStyles.styleFor(turnEmotionKey)
+            if (turnEmotionKey != null && voiceStyle == null) {
+                // 表里漏了这个键 → 静默退回角色原本的语气。这一条日志是唯一的发现手段
+                // （键名写错不会报错，只会"怎么没效果"）。
+                Log.w(
+                    TAG,
+                    "本轮表情「$turnEmotionKey」在 EmotionVoiceStyles 里没有配语气，" +
+                        "沿用角色基础风格（表里现有 ${EmotionVoiceStyles.knownKeys().size} 个键）"
+                )
+            }
+            val turnTtsPrompt = EmotionVoiceStyles.composePrompt(ttsPrompt, voiceStyle)
+            if (voiceStyle != null) {
+                Log.d(TAG, "语气: 表情=$turnEmotionKey → $voiceStyle")
+            }
+
             val audioStream = chatRepository.synthesizeSpeech(
-                config, aiResponse, refAudio, refMime, ttsPrompt, voiceOverride = ttsPolicy
+                config, aiResponse, refAudio, refMime, turnTtsPrompt, voiceOverride = ttsPolicy
             )
             if (audioStream != null) {
                 audioPlayer.playStream(audioStream)
