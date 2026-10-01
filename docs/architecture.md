@@ -113,7 +113,8 @@ tools/
 
 图本身是 Archify 生成的可交互通话链路图：
 主链路 `用户 → CallScreen → CallViewModel → AudioRecorder → AsrEngine → ChatRepository → AudioPlayer`，
-外加 Live2D、长期记忆、Room 与三个远程 AI 端点，共 14 个组件、15 条关系，每条都带源码位置。
+外加 Live2D、表情→语气、长期记忆、记忆提醒（后台）、Room 与三个远程 AI 端点，
+共 **16 个组件、20 条关系、5 张说明卡**，每条都带源码位置。
 
 Skill 本体在 `.agents/skills/archify/`（MIT，v3.0.1），dsh 以 `project-agents` 优先级自动发现，无需安装。
 改了通话链路后重跑：
@@ -127,3 +128,15 @@ node .agents/skills/archify/bin/archify.mjs finalize architecture \
 
 > 浏览器门禁需要 Chromium；本机没装 Chrome 时指向 Edge：
 > `$env:ARCHIFY_CHROME = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'`
+
+### 加节点前先看这条：画布宽高比必须 ≥ 1.55
+
+`finalize` 的 `composition/desktop-readability` 门禁会按画布比例选预算
+（`desktop-readability.mjs` 的 `DECLARED_WIDE_READER_RATIO = 1.55`）：
+
+- **宽高比 ≥ 1.55** → 认「宽版阅读契约」，按实际投影字号判定，本图 1538×888（1.73）走的就是这条；
+- **低于 1.55** → 退回保守的 930px 桌面预算，此时 1538 宽的画布会被判「字太小」而**直接失败**。
+
+所以**加内容时要横向铺开，不要往下堆行**：这张图是从 888 高加到 1248 高之后才发现比例掉到
+1.23、四个门禁全挂在 validate 上的。同理，把某条 `via` 回线往画布底部挪（例如 y=820 → y=1180）
+也会连带把比例拉垮 —— 回线要贴着内容走，别让它单独撑高画布。
