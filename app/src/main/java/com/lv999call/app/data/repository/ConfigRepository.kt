@@ -139,7 +139,7 @@ class ConfigRepository(private val context: Context) {
             emotionVoiceEnabled = prefs[EMOTION_VOICE_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false,
-            memoryReminderEnabled = prefs[MEMORY_REMINDER_ENABLED]?.toBooleanStrictOrNull() ?: false,
+            memoryReminderEnabled = prefs[MEMORY_REMINDER_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memoryReminderLastAt = prefs[MEMORY_REMINDER_LAST_AT]?.toLongOrNull() ?: 0L
         )
     }
@@ -194,6 +194,20 @@ class ConfigRepository(private val context: Context) {
     suspend fun updateMemoryReminderLastAt(timestamp: Long) {
         context.dataStore.edit { prefs ->
             prefs[MEMORY_REMINDER_LAST_AT] = timestamp.toString()
+        }
+    }
+
+    /**
+     * 只更新「记忆提醒开关」，**不动其他配置**。
+     *
+     * 调用方是 [com.lv999call.app.MainActivity] 的权限回调：用户在系统对话框里拒绝了
+     * POST_NOTIFICATIONS 时要把开关落回关。那里与 [saveConfig] 的调用场景之间隔着一次
+     * 系统对话框（用户可能离开 App 很久），整体写回同样会覆盖掉期间的其他改动 ——
+     * 与 [updateMemoryReminderLastAt] 是同一个理由。
+     */
+    suspend fun updateMemoryReminderEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[MEMORY_REMINDER_ENABLED] = enabled.toString()
         }
     }
 

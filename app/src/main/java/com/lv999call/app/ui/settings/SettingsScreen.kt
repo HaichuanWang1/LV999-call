@@ -594,7 +594,7 @@ fun SettingsScreen(
                         Column {
                             Text("记忆提醒通知", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                             Text(
-                                text = "角色偶尔会以通知形式给你发一条消息，像主动来找你说话。默认关闭；打开后每天最多一条，" +
+                                text = "角色偶尔会以通知形式给你发一条消息，像主动来找你说话。每天最多一条，" +
                                     "且 22:00–09:00 不会打扰你。只发文字通知，不会响铃、不涉及通话",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = colors.onSurfaceVariant.copy(alpha = 0.6f)

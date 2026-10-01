@@ -129,9 +129,12 @@ character as Silver Wolf, …"），而且**TTS 把它一起念了出来**（`te
 | 项 | 状态 |
 |---|---|
 | 通知渠道创建 | ✅ 已验（`NotificationChannel{mId='memory_reminder', mName=角色的提醒, mImportance=3}`） |
-| App 启动按开关同步调度 | ✅ 已验（开关默认关 → `调度: 已取消 unique=memory_reminder`） |
-| 权限对话框（允许路径） | ❌ 未验 |
-| 权限对话框（**拒绝** → 开关必须回滚 + 提示） | ❌ 未验（最容易写错的一处） |
+| App 启动按开关同步调度 | ✅ 已验（当时开关默认关 → `调度: 已取消 unique=memory_reminder`）。⚠️ 开关**改成默认开后这条要重验**：应变成 `调度: 已入队` |
+| 冷启动权限请求：**没有会话时不弹框** | ❌ 未验（应看到 `还没有任何会话，提醒本来就发不出去，暂不请求通知权限`） |
+| 冷启动权限请求：有会话 + 无权限 → 弹框 | ❌ 未验 |
+| 冷启动权限请求：**拒绝** → 开关落回 false | ❌ 未验（最容易写错的一处） |
+| 设置页权限对话框（允许路径） | ❌ 未验 |
+| 设置页权限对话框（**拒绝** → 开关回滚 + 提示） | ❌ 未验 |
 | `调度: 已入队` | ❌ 未验 |
 | WorkManager 实际执行 + 通知弹出 | ❌ 未验（首次 30 分钟后） |
 | 点通知的返回栈 | ❌ 未验 |
@@ -143,7 +146,7 @@ character as Silver Wolf, …"），而且**TTS 把它一起念了出来**（`te
 全项目**只 `checkSelfPermission`、从不 `request`**（`AudioRecorder.kt:93`）。
 新装用户若不手动去系统设置里给权限，**麦克风不工作**。
 
-`POST_NOTIFICATIONS` 那套「开关 + 请求 + 拒绝回滚」可以直接搬过来。
+`POST_NOTIFICATIONS` 那两套（设置页的开关路径、`MainActivity` 的冷启动兜底）可以直接搬过来。
 （用户说过懒得修无伤大雅的东西，但这条影响核心功能，单列出来。）
 
 ### 2.5 架构图剩余 4 处建议性交叉
@@ -174,15 +177,15 @@ archify 四个门禁（validate / deliver / check / browser-check）**全部 pas
 
 ## 3. 当前工作区状态
 
-- 已提交：`3f7da65`（v1.6.0 版本号 + 发行说明，**尚未发布**）
-- 本次提交包含：
-  - `plan6.md`（本文件）
-  - 第 1.2 / 1.3 节的修复，共 5 个文件（**编译通过，未真机复测**）：
-    - `domain/model/EmotionVoiceStyles.kt`（语气表去语速 + 铁律注释 + composePrompt 限定语）
-    - `domain/usecase/ExpressionTagParser.kt`（回调返回 Boolean）
-    - `domain/usecase/ProcessAudioUseCase.kt`（参数类型 + 只在 applied 时捕获语气）
-    - `ui/call/CallViewModel.kt`（`cueExpression` 返回 Boolean）
-    - `domain/usecase/SummarizeMemoryUseCase.kt`（no-op lambda 改 `{ true }`）
+- 已提交：
+  - `3f7da65` v1.6.0 版本号 + 发行说明（**尚未发布**）
+  - `4410419` 第 1.2 / 1.3 节修复 + 本文件
+  - `e28195e` 「声音跟着情绪走」开关（Live2D 子开关，默认开）
+  - 本次：记忆提醒**默认改开** + `MainActivity` 冷启动权限请求路径 + 文案/文档同步
 - 第 1.1 节（英文前言）**一行都还没改** —— 下一步从那里开始
 - 真机：`com.lv999call.app` = 1.6.0 (14)，debug 包，数据保留；**装机的是修复前的包**，
   改完要重新 `install -r`
+- ⚠️ **验"默认开"之前先注意**：`?:` 只对"键不存在"生效。本机若**保存过设置**，
+  `memory_reminder_enabled` 早已被写成 `"false"` 落盘，新默认值**压不过它**。
+  要验默认开得先清数据（`pm clear`），或直接在设置页把开关拨开
+- 本地领先 `origin/main` 若干个提交，**一个都没推**（用户只说了 commit）
