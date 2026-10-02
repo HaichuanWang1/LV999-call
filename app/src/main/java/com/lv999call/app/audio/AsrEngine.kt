@@ -67,8 +67,17 @@ class AsrEngine(private val context: Context) {
             currentVoskModelId = modelId
             Log.d(TAG, "Vosk模型+Recognizer加载成功: $modelId")
             true
-        } catch (e: Exception) {
-            Log.e(TAG, "Vosk模型加载失败: ${e.message}")
+        } catch (e: Throwable) {
+            // 这里必须接 Throwable，不能只接 Exception。
+            //
+            // `libvosk.so` 加载不出来时抛的是 **UnsatisfiedLinkError**，它属于 Error 而不是
+            // Exception —— 只接 Exception 的话会一路冒到顶把 App 崩掉。而"这台设备没有
+            // 我们打包的 ABI"（例如 x86 模拟器且系统镜像不带 ARM 翻译）**只该表现为
+            // 语音识别用不了**，通话本身和文字聊天都不受影响。
+            //
+            // 这一段里没有挂起点（Model / Recognizer 都是普通构造），所以不必担心
+            // 顺手吞掉 CancellationException。
+            Log.e(TAG, "Vosk模型加载失败: ${e::class.java.simpleName}: ${e.message}")
             voskModel = null
             voskRecognizer = null
             currentVoskModelId = null
@@ -230,7 +239,7 @@ class AsrEngine(private val context: Context) {
     /**
      * HTTP ASR：失败重试一次，仍失败则在**离线模型已加载**时回退 Vosk。
      *
-     * 不在失败时现场加载 Vosk 模型：首次要从 assets 解压 ~50MB，会把这一轮通话卡死几十秒，
+     * 不在失败时现场加载 Vosk 模型：首次要从 assets 解压 ~65MB，会把这一轮通话卡死几十秒，
      * 比直接告诉用户「没听清」更糟。首次准备由通话开始前的进度遮罩负责
      * （见 [com.lv999call.app.ui.call.VoskPrepareState]）。
      */

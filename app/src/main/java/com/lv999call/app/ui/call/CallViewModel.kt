@@ -79,7 +79,7 @@ class CallViewModel(
      * 离线语音模型（Vosk）的准备进度。
      *
      * 默认 ASR 是随包分发的 Vosk 模型，首次使用要把它从 assets 解压到内部存储
-     * （约 50 MB），这段等待必须让用户看见 —— 详见 [VoskPrepareState]。
+     * （约 65 MB），这段等待必须让用户看见 —— 详见 [VoskPrepareState]。
      */
     private val _voskPrepare = MutableStateFlow<VoskPrepareState>(VoskPrepareState.Idle)
     val voskPrepare: StateFlow<VoskPrepareState> = _voskPrepare.asStateFlow()
@@ -547,7 +547,7 @@ class CallViewModel(
             _messages.value = emptyList()
 
             val currentConfig = configRepository.configFlow.first()
-            // 离线模型首次要从 assets 解压（约 50 MB），进度由 voskPrepare 遮罩呈现。
+            // 离线模型首次要从 assets 解压（约 65 MB），进度由 voskPrepare 遮罩呈现。
             // 失败不结束通话 —— 见 prepareAsr 的说明
             prepareAsr(currentConfig)
 

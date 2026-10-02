@@ -199,7 +199,7 @@ data class ApiConfig(
          *
          * 之所以默认离线：在线那条路要求用户自己填 baseUrl 与 key，装完是**不可用**的；
          * 而离线模型是 assets 资产，装完即可说话，且录音不出设备。
-         * 代价是首次使用要把它解压到内部存储（约 50 MB），这一段有进度遮罩兜着 ——
+         * 代价是首次使用要把它解压到内部存储（约 65 MB），这一段有进度遮罩兜着 ——
          * 见 [com.lv999call.app.ui.call.VoskPrepareState]。
          */
         const val DEFAULT_ASR_PROVIDER = ASR_PROVIDER_VOSK

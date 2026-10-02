@@ -181,7 +181,7 @@ fun CallScreen(
      * 离线语音模型的准备状态（[CallViewModel.voskPrepare]）。
      *
      * 默认 ASR 是随包分发的 Vosk 模型，首次使用要把它从 assets 解压到本机
-     * （约 50 MB）。那段时间里页面本身没有任何变化，必须靠这层遮罩告诉用户
+     * （约 65 MB）。那段时间里页面本身没有任何变化，必须靠这层遮罩告诉用户
      * "在干活，不是卡死了"。
      */
     voskPrepare: VoskPrepareState = VoskPrepareState.Idle,
@@ -975,7 +975,7 @@ private fun CallStatusIndicator(callState: CallState, showAsrRetryHint: Boolean 
  *
  * ## 为什么必须有
  *
- * 默认 ASR 是随包分发的 Vosk 模型（assets 资产）。第一次要用它，得先把约 50 MB
+ * 默认 ASR 是随包分发的 Vosk 模型（assets 资产）。第一次要用它，得先把约 65 MB
  * 解压到内部存储，再把模型读进内存。改造前这段等待没有任何界面表现：
  * 用户点了「开始通话」，看到的是页面一动不动；如果解压失败，更是直接被
  * `CallState.ENDED` 踢回上一页，连一句解释都没有。
@@ -1084,7 +1084,7 @@ private fun VoskPrepareOverlay(
                     Text(
                         // 说清"为什么要等"和"只等这一次"：不然用户会以为这软件每次
                         // 开聊都要先愣半分钟
-                        text = "第一次使用需要把中文语音模型解压到本机（约 50 MB），" +
+                        text = "第一次使用需要把中文语音模型解压到本机（约 65 MB），" +
                             "只需要这一次。之后语音识别完全离线，录音不出设备。",
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant,

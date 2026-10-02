@@ -57,7 +57,7 @@
 12. **默认 ASR 是离线 Vosk，默认值只写在 `ApiConfig` 的常量里**：
     `DEFAULT_ASR_PROVIDER` / `DEFAULT_VOSK_MODEL_ID` 是唯一来源（`ConfigRepository` 也读它，
     以前那里另有一份 `"custom"` 字面量，改一处不生效）。模型是 assets 资产，首次使用要把
-    约 50 MB 解压到内部存储 —— 那段等待有进度遮罩（`VoskPrepareState`），
+    约 65 MB 解压到内部存储 —— 那段等待有进度遮罩（`VoskPrepareState`），
     **准备失败不再结束通话**（旧实现是 `CallState.ENDED`，人会被静默踢出通话页）。
 13. **删 assets 之前先确认真的没人引用**：`models/haru/`（只出现在注释里）与
     `models/deepseek/`（已被 dafeiyu 取代）就是这样清掉的，省 6.6 MB。
