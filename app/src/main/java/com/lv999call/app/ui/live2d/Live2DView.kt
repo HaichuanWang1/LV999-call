@@ -32,8 +32,13 @@ private const val TAG = "Live2DView"
  * 资源缺失或 JS 整体异常时可能永远收不到 ready/error 回调，
  * 若不设兜底，UI 会停在 LOADING → live2dActive 恒为 true →
  * 用户看到的是一片空白而不是静态头像。
+ *
+ * 15s 而不是更短：这个超时是**墙钟**时间，而它统计的那一段里除了页面加载，
+ * 还可能夹着主线程被整体卡住的时间（见 [createWebView] 里 onPageStarted 的注释）。
+ * 计时已经改成从"页面真的开始加载"起算，15s 对 10.9MB 的模型资源足够宽裕
+ * （实测热启动 1s 内就绪），同时缺模型时也不会让用户对着空白等太久。
  */
-private const val LOAD_TIMEOUT_MS = 8_000L
+private const val LOAD_TIMEOUT_MS = 15_000L
 
 /** Live2D 形象的加载状态 */
 enum class Live2DStatus {
@@ -405,6 +410,22 @@ private fun createWebView(
                 request: WebResourceRequest
             ): WebResourceResponse? {
                 return Live2DAssetLoader.intercept(context.applicationContext, request.url)
+            }
+
+            /**
+             * 计时从「页面真的开始加载」起算，而不是从 WebView 被创建起算。
+             *
+             * 为什么必须这么做：Compose 里那句 `LaunchedEffect { delay(LOAD_TIMEOUT_MS) }`
+             * 在组合时就开始跑了，而它前面还压着 WebView 构造（Chromium 首次初始化）。
+             * 实测「装完 APK 后第一次启动」这条路径上主线程被连着卡了 14 秒
+             * （`Choreographer: Skipped 861 frames`），超时预算在页面还没开始加载时
+             * 就耗光了 —— 现象是**更新后第一次通话舞台空白**（回落到静态头像），
+             * 第二次通话又正常，很容易被当成"模型坏了"。
+             * onPageStarted 只在真正开载时回调，用它重置计时，超时预算就只覆盖加载这一段。
+             * （依赖 loadGeneration 的那个 LaunchedEffect 会因此重启，见 Live2DView 尾部。）
+             */
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                controller.loadGeneration++
             }
 
             override fun onReceivedError(

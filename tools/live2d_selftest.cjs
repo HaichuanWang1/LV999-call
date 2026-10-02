@@ -19,7 +19,7 @@ const BRIDGE_PATH = path.join(
 const BRIDGE = fs.readFileSync(BRIDGE_PATH, 'utf8');
 
 // ---------------- 记录与 mock ----------------
-const rec = { params: {}, expressions: [], motions: [], focus: [], scale: [], events: [], anchor: [] };
+const rec = { params: {}, expressions: [], motions: [], focus: [], focusWorldPoint: [], scale: [], events: [], anchor: [] };
 let beforeModelUpdate = null;
 let afterMotionUpdate = null;
 let onMotionFinish = null;
@@ -83,19 +83,31 @@ const coreModel = {
 };
 
 const model = {
-  // 记三个分量：x / y 是世界坐标点，i 是 instant（状态切换归位要用瞬时插值）
-  focus(x, y, i) { rec.focus.push([x, y, i]); },
+  /**
+   * 公开 API：收**世界坐标点**，内部只取方向、模长恒为 1 —— 表达不了"看正前方"。
+   * 单独记一份，用来断言正常路径**没有**走它（走它就会满偏）。
+   */
+  focus(x, y, i) { rec.focusWorldPoint.push([x, y, i]); },
   expression(n) { rec.expressions.push(n); },
   motion(g, i, p) { rec.motions.push([g, i, p]); },
   anchor: { set(x, y) { rec.anchor.push([x, y]); } },
-  // scale 必须真的存住 x/y —— setGaze() 靠它把归一化偏移反解成世界坐标点，
-  // 只记录不存储的话那条换算会退化成 NaN，而 NaN 又会被 try/catch 吞掉。
+  // scale 必须真的存住 x/y —— 兜底那条换算要用，只记录不存储会让它退化成 NaN，
+  // 而 NaN 又会被 try/catch 吞掉，测试就永远绿。
   scale: { x: 1, y: 1, set(s) { rec.scale.push(s); this.x = s; this.y = s; } },
   x: 0, y: 0,
   destroy() {},
   internalModel: {
     originalWidth: 2048, originalHeight: 2048,
     coreModel,
+    /**
+     * 视线真正写进去的地方。bridge.js 的 setGaze() 直接写它 ——
+     * 因为公开的 model.focus() 只取方向、模长恒为 1，"看正前方"表达不出来
+     * （画布正中心 → atan2(0,0)=0 → focus(1,0) → 向右满偏）。
+     * 这里的 x / y 就是归一化偏移本身（[-1,1]，正 y 向上）。
+     */
+    focusController: {
+      focus(x, y, i) { rec.focus.push([x, y, i]); },
+    },
     /**
      * 命中盒走 im.getDrawableBounds(i) —— 与 layout()/contentBounds() 同源的
      * "画布像素"空间（Core 的顶点是模型单位，两套坐标差了 PixelsPerUnit，见 bridge.js）。
@@ -1001,40 +1013,81 @@ function check(name, cond, extra = '') {
         /Live2DAuthorCredit/.test(callScreenSrc));
 
   // ========================================================================
-  console.log('\n[18] 视线：归一化偏移必须换算成世界坐标点（回归守卫）');
+  console.log('\n[18] 视线：直接写归一化偏移，不走 model.focus（回归守卫）');
   //
-  // 旧实现直接调 `model.focus(fx, fy)`，而运行库把参数当**世界坐标里的点**：
-  // 它只取「画布中心 → 该点」的方向、**模长恒为 1**。传 (0, 0) 时那个点就是舞台
-  // 左上角，于是两个角色都满偏地盯着左上角（ParamAngleX -21°、ParamEyeBallY +0.707），
-  // 而 `applyState()` 里那句「视线瞬时归位」归的又是同一个角 —— 状态切换也救不回来。
-  // 这里锁住换算结果：归位必须落在**画布中心**（= model.x / model.y）。
+  // 这个 API 坑了两次，两次的现象完全不同：
+  //   ① 旧实现调 `model.focus(fx, fy)`，运行库把参数当**世界坐标里的点**，
+  //      只取「画布中心 → 该点」的方向、**模长恒为 1**。传 ±0.09 这种小偏移
+  //      几乎等于世界原点 → 舞台左上角 → 两个角色都**满偏地盯着左上角**
+  //      （ParamAngleX -21°、ParamEyeBallY +0.707）；而 applyState() 里那句
+  //      「视线瞬时归位」`model.focus(0, 0, true)` 归的是同一个角，救不回来。
+  //   ② 改成"把偏移反解成世界坐标点"之后仍不对：**画布正中心是这个 API 的奇点** ——
+  //      `atan2(0, 0) = 0` → `focus(cos 0, -sin 0) = (1, 0)`，也就是**向右满偏**
+  //      （真机截图：两只眼珠都偏在眼白右侧）。"看正前方"用公开 API 根本表达不出来。
+  //
+  // 结论：视线只能直接写 `internalModel.focusController`（那才是归一化偏移的原生单位，
+  // [-1,1]，直接当 ParamEyeBallX/Y 的加量、再 ×30 加到 ParamAngleX/Y）。
+  // 下面三条断言分别锁住：归位 = (0,0)、游移幅度 = 配置振幅、**没走公开 API**。
   const im = model.internalModel;
   win.L2D.setState('thinking');           // applyState 里有一次「视线瞬时归位」
   const gzReset = rec.focus[rec.focus.length - 1];
-  check('视线归位落在画布中心（不是世界原点 0,0）',
-        !!gzReset &&
-        Math.abs(gzReset[0] - model.x) < 1e-6 && Math.abs(gzReset[1] - model.y) < 1e-6,
-        JSON.stringify({ focus: gzReset, center: [model.x, model.y] }));
+  check('视线归位写的是归一化偏移 (0, 0)（0 就是正前方）',
+        !!gzReset && Math.abs(gzReset[0]) < 1e-9 && Math.abs(gzReset[1]) < 1e-9,
+        JSON.stringify(gzReset));
   check('归位走瞬时插值（instant = true）', !!gzReset && gzReset[2] === true,
         JSON.stringify(gzReset));
 
-  // 游移幅度：换算后必须还在配置的振幅之内。
-  // idle 档 focus=0.25 × 振幅 0.35 / 0.2 → 0.0875 / 0.05，留一点浮点余量。
-  // 旧实现下这里是 1.0（满偏），所以这条断言能真的逮住回归。
+  // 游移幅度：idle 档 focus=0.25 × 振幅 0.35 / 0.2 → 0.0875 / 0.05，留一点浮点余量。
+  // ① 的实现下这里会是 1.0（满偏），所以这条断言能真的逮住回归。
   win.L2D.setState('idle');
   tick(120);
   const gzDrift = rec.focus[rec.focus.length - 1];
-  const halfW = im.originalWidth * model.scale.x * 0.5;
-  const halfH = im.originalHeight * model.scale.y * 0.5;
-  const offX = gzDrift ? Math.abs(gzDrift[0] - model.x) / halfW : 1;
-  const offY = gzDrift ? Math.abs(gzDrift[1] - model.y) / halfH : 1;
   check('游移幅度不超过配置振幅（x ≤ 0.09 / y ≤ 0.06）',
-        offX <= 0.09 + 1e-6 && offY <= 0.06 + 1e-6,
-        `offX=${offX.toFixed(4)} offY=${offY.toFixed(4)}`);
+        !!gzDrift && Math.abs(gzDrift[0]) <= 0.09 + 1e-6 && Math.abs(gzDrift[1]) <= 0.06 + 1e-6,
+        JSON.stringify(gzDrift));
 
   const tail = rec.focus.slice(-60);
   const distinct = new Set(tail.map((p) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`)).size;
   check('游移真的在动（不是钉死在一个点）', distinct > 5, `不同位置 ${distinct} 个`);
+
+  check('视线没有走公开的 model.focus（它表达不了"正前方"，会满偏）',
+        rec.focusWorldPoint.length === 0, JSON.stringify(rec.focusWorldPoint.slice(0, 3)));
+
+  // 拿不到 focusController 时才允许退回公开 API（那条路会满偏，但不会崩）
+  const savedFc = im.focusController;
+  delete im.focusController;
+  win.L2D.setState('idle');
+  tick(10);
+  check('拿不到 focusController 时退回公开 API 且不抛异常',
+        rec.focusWorldPoint.length > 0, JSON.stringify(rec.focusWorldPoint.slice(0, 2)));
+  im.focusController = savedFc;
+
+  // ========================================================================
+  console.log('\n[19] 内容盒必须裁到画布范围内（回归守卫）');
+  //
+  // mock 只有 3 个 drawable，而 contentBounds() 要求 ≥4 个有效包围盒才认，
+  // 所以那条路径在自测里走的是"整块画布"的分支 —— 覆盖不到。这里退一步做
+  // **源码级守卫**（与 [17] 查 Kotlin 源码同一手法）。
+  //
+  // 为什么这条重要：VTS 风格模型把道具藏在**画布之外**（靠开关参数把网格挪走，
+  // 不是靠透明度），3%~97% 分位 trim 拦不住 —— 内容盒会被撑到比画布还大
+  // （大肥鱼实测 3511×5925 vs 画布 4704×5348）。而 CallScreen 是按内容盒宽高比
+  // 选适配边的，于是角色缩成小小一只杵在中间。删掉那一刀不会有任何报错，
+  // 只在真机上"看起来有点小"，所以只能靠守卫拦住。
+  //
+  // ⚠️ 别改成"先剔除 opacity ≤ 0.01 的网格再取分位"：分位是按网格**数量**取的，
+  //    剔掉隐藏网格会让分位点整体下移、盒子在顶部变紧 —— 实测把银狼的发顶和
+  //    蓝色天线切掉了（y0 从 561 抬到 789）。那个 3% 余量本来就在替少数几根
+  //    发丝兜底，动不得。
+  const cbSrc = (fs.readFileSync(BRIDGE_PATH, 'utf8')
+    .match(/function contentBounds\(\)[\s\S]*?\n  \}/) || [''])[0];
+  check('抠到了 contentBounds 源码片段', cbSrc.length > 0, `${cbSrc.length} 字符`);
+  check('contentBounds 把盒子裁到画布内（y1 > ch → y1 = ch）',
+        /y1\s*>\s*ch\s*\)\s*y1\s*=\s*ch/.test(cbSrc), '未找到裁剪');
+  check('contentBounds 把盒子裁到画布内（x0 < 0 → x0 = 0）',
+        /x0\s*<\s*0\s*\)\s*x0\s*=\s*0/.test(cbSrc), '未找到裁剪');
+  check('contentBounds 没有按 opacity 剔除网格（那会把银狼的发顶切掉）',
+        !/opacities\[i\]\s*<=\s*0\.01/.test(cbSrc), '不要按透明度过滤');
 
   console.log(`\n${'='.repeat(46)}`);
   console.log(`通过 ${pass} / 失败 ${fail}`);

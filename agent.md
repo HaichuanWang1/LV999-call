@@ -44,9 +44,10 @@
 9. **Live2D 写参数前先查 `physics3.json`**：**物理输出**参数每帧被物理覆写，写上去等于没写
    （动作文件、程序化待机层都算）。同理，动作文件不许写 `ParamAngleX` / `ParamEyeBall*`
    （视线只来自 focus 与呼吸）和待机层占用的通道 —— 有 `tools/live2d_motion_check.cjs` 兜着。
-10. **`model.focus()` 收的是世界坐标点，不是归一化偏移**：传 `(0,0)` 会被解成"舞台左上角"，
-    角色就满偏盯着左上角，而**数值读回一路正常**。桥接层统一走 `bridge.js` 的 `setGaze()`
-    （它按 `layout()` 的公式把偏移反解成世界坐标点）。
+10. **视线只走 `bridge.js` 的 `setGaze()`，别直接调 `model.focus()`**：那个公开 API 收的是
+    世界坐标点、只取「画布中心 → 该点」的**方向**、**模长恒为 1** —— 传归一化偏移会得到
+    "满偏盯左上角"，传画布正中心会得到"满偏盯右边"（**正中心是它的奇点**）。
+    「看正前方」它根本表达不出来，只有 `internalModel.focusController`（`[-1,1]`）能。
 11. **Live2D 的 profile id 与模型目录名可以不一致，别"顺手对齐"**：`live2dProfileId`
     是角色 ↔ 形象的绑定键，自定义预设也会把这个字符串存进数据库 —— 改名会让已有预设找不到档位。
     DeepSeek 酱就是 profile 叫 `deepseek`、模型在 `models/dafeiyu/`。

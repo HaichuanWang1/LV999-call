@@ -712,6 +712,8 @@
    *
    * getDrawableBounds 返回的是模型画布坐标系下的值（画布左上角为原点），
    * 需要减去画布中心才是容器本地坐标。
+   *
+   * ⚠️ 最后必须**裁到画布范围内**，理由见下面的注释。
    */
   function contentBounds() {
     try {
@@ -737,6 +739,32 @@
       };
       var x0 = q(L, CFG.trimLow), x1 = q(R, CFG.trimHigh);
       var y0 = q(T, CFG.trimLow), y1 = q(B, CFG.trimHigh);
+
+      // 裁到画布范围内。
+      //
+      // 为什么（换大肥鱼时踩到）：VTS 风格的模型把道具（钢盆 / token / 气泡 /
+      // 米饭…）**藏在画布之外** —— 靠开关参数把网格挪走，而不是靠透明度。
+      // 上面那个分位 trim 拦不住它们：大肥鱼 108 个网格里有一批被摆到画布上方
+      // （y 到 -976，而画布高只有 5348），内容盒被撑成 3511×5925，**比画布还高**。
+      // 后果不是"盒子难看"，而是 CallScreen 按内容盒宽高比选适配边：
+      // 0.593 < 舞台 1.435 → 走 height 适配 → 用被撑大的高度算缩放，
+      // 角色缩成小小一只杵在中间（实测只有银狼的一半宽）。
+      //
+      // 画布之外的网格本来就渲染不出来，所以"可见内容"必然是画布的子集 ——
+      // 裁一刀既修好大肥鱼，又对银狼**零影响**（它的盒子 597..3404 × 561..2385
+      // 本来就在画布 4000×2600 内，裁完一模一样）。
+      //
+      // ⚠️ 试过改成"先剔除 opacity ≤ 0.01 的网格再取分位"，结果把银狼弄坏了：
+      //    分位是按**网格数量**取的，剔掉隐藏网格后分位点整体下移，盒子在顶部变紧
+      //    （y0 从 561 抬到 789），她的发顶和天线被舞台上沿直接切断。
+      //    换句话说，那个 3% 的分位余量本来就在替少数几根发丝兜底，不能动。
+      var cw = im.originalWidth || 0, ch = im.originalHeight || 0;
+      if (cw > 0 && ch > 0) {
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > cw) x1 = cw;
+        if (y1 > ch) y1 = ch;
+      }
       if (x1 <= x0 || y1 <= y0) return null;
       return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
     } catch (e) { return null; }
@@ -817,12 +845,17 @@
    * 两个角色都**满偏地盯着左上角**，且 `applyState()` 里那句「视线瞬时归位」
    * `model.focus(0, 0, true)` 归的是同一个左上角 —— 所以状态切换也救不回来。
    *
-   * 现在按 layout() 同一套换算把偏移**反解**成世界坐标点
-   * （`patHeadBox()` 用的是它的逆运算，两处公式必须一致）：
+   * ⚠️ 但"换算成世界坐标点"也不对 —— 第二次踩同一个 API 才发现：
+   * 它只取**方向**、模长恒为 1，所以**「看正前方」根本表达不出来**。
+   * 画布正中心映射成 `atan2(0, 0) = 0` → `focus(cos 0, -sin 0) = (1, 0)`，
+   * 也就是**向右满偏**；按 layout() 的公式把偏移反解成世界坐标点之后，
+   * `setGaze(0, 0)` 落到的正是这个奇点 —— 角色于是从"盯着左上角"变成"盯着右边"
+   * （真机截图确认：两只眼珠都偏在眼白右侧）。
    *
-   *     screen = model.x + (canvasX - canvasW / 2) * scale
-   *
-   * 世界坐标 y 向下、focus 的 y 向上，所以 fy 取负。
+   * 真正被 `updateFocus()` 消费的是 `focusController.x / .y` —— 直接当
+   * `ParamEyeBallX/Y` 的加量、再 ×30 加到 `ParamAngleX/Y`，范围 [-1, 1]。
+   * 那才是"归一化偏移"的原生单位，所以这里**直接写它**；
+   * `model.focus()` 那条路只留给拿不到内部对象时的兜底。
    *
    * @param fx      水平偏移 [-1,1]，正数 = 看向画面右侧（满偏约 +30° 头 yaw）
    * @param fy      垂直偏移 [-1,1]，正数 = 向上看
@@ -831,14 +864,24 @@
   function setGaze(fx, fy, instant) {
     if (!model || !model.internalModel) return;
     var im = model.internalModel;
-    // layout() 一定跑在模型就绪之后，但降级路径下 scale 可能是空对象 —— 兜成 1
+
+    var fc = im.focusController;
+    if (fc && typeof fc.focus === 'function') {
+      try {
+        fc.focus(clamp(fx, -1, 1), clamp(fy, -1, 1), !!instant);
+      } catch (e) { /* 视线不是关键路径 */ }
+      return;
+    }
+
+    // 兜底：拿不到 focusController（换了运行库版本）时退回公开 API。
+    // 它只能表达方向、模长恒为 1，所以会满偏 —— 但不至于让视线完全不动。
     var sx = (model.scale && model.scale.x) || 1;
     var sy = (model.scale && model.scale.y) || 1;
     try {
       model.focus(model.x + fx * im.originalWidth * sx * 0.5,
                   model.y - fy * im.originalHeight * sy * 0.5,
                   !!instant);
-    } catch (e) { /* 视线不是关键路径，拿不到变换时静默跳过 */ }
+    } catch (e) { /* ignore */ }
   }
 
   // ======================= 口型同步核心 =======================
