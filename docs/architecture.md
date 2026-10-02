@@ -116,6 +116,12 @@ tools/
 外加 Live2D、表情→语气、长期记忆、记忆提醒（后台）、Room 与三个远程 AI 端点，
 共 **16 个组件、20 条关系、5 张说明卡**，每条都带源码位置。
 
+> **图里没画的一条前置闸门**：三条通话路由（内置角色 / 自定义预设 / 续聊）的入口都挂了
+> [`ui/common/PermissionGate.kt`](../app/src/main/java/com/lv999call/app/ui/common/PermissionGate.kt)
+> 的 `MicPermissionGuard` —— 进通话页即申请 `RECORD_AUDIO`，拒绝时渲染说明页并
+> **不启动通话**。它位于"用户 → 通话页"之间，不改变主链路的数据流，所以没单独占一个节点；
+> 通知权限那条路（设置页开关 + 冷启动兜底）同理，见 [长期记忆](memory.md)。
+
 Skill 本体在 `.agents/skills/archify/`（MIT，v3.0.1），dsh 以 `project-agents` 优先级自动发现，无需安装。
 改了通话链路后重跑：
 

@@ -62,20 +62,15 @@ data class ApiConfig(
     val ttsModel: String = "mimo-v2.5-tts-voiceclone",
 
     /**
-     * 全局 TTS 风格提示词 —— **兜底**用。
-     *
-     * 取值优先级：`characterTtsPrompts[角色 id]`（准备页里为该角色单独设置的那一格）
-     * → [BuiltInCharacter.defaultTtsPrompt] → 这一份（如银狼：它没有自带默认语气）。
-     * 自定义方案有自己的一份（`PresetEntity.ttsPrompt`，编辑页里配），不走这里 ——
-     * 否则在 DeepSeek酱 页面改一句语气会连带把银狼的语气也改掉，
-     * 这正是"并列预设"要避免的互相污染。
-     */
-    val ttsPrompt: String = "",
-
-    /**
      * 各内置角色的 TTS 风格提示词，键为 [BuiltInCharacter.id]。
      *
      * 未设置时回落到该角色的 [BuiltInCharacter.defaultTtsPrompt]。
+     *
+     * ⚠️ 这里曾经还有一份**全局** `ttsPrompt`，作为"角色没配语气时的兜底"。
+     * 它是一条实打实的跨角色污染通道：银狼的默认语气是空的，于是会一路回落到全局那份
+     * —— 只要全局那一格里有任何内容（历史上确实有 UI 能写它），银狼就会用**别人的**语气说话，
+     * 而且从准备页完全看不出来。现在语气只有两个来源：这一张表（按角色）与自定义方案自带的
+     * `PresetEntity.ttsPrompt`，谁都不许串到别人身上。
      */
     val characterTtsPrompts: Map<String, String> = emptyMap(),
 
@@ -115,18 +110,22 @@ data class ApiConfig(
     val live2dTransformEnabled: Boolean = true,
 
     /**
-     * 声音跟着情绪走（默认**开**）：把本轮表情标签对应的语气拼进这一次的 TTS 提示词。
+     * 声音跟着情绪走（默认**关**）：把本轮表情标签对应的语气拼进这一次的 TTS 提示词。
      *
      * 关掉后**表情照常变**，只是朗读沿用角色一贯的语气 —— 脸是脸、声音是声音。
-     * 默认开是为了让升级上来的用户行为不变（这个能力在 v1.6.0 本来就是默认生效的，
-     * 若默认关，老用户升上来会发现"语气怎么不跟着走了"，那是静默的行为倒退）。
+     *
+     * 默认关是刻意的：情绪语气是**叠加在基础风格之上的第二段指令**，而基础风格
+     * （角色的 `ttsPrompt`）常常是空的（例如 DeepSeek 酱默认不再预置语气）——
+     * 两段里只剩情绪段时，模型很容易把它当成"整段风格"来演，听感上像是这一句
+     * 换了个人。它是个加分项，不该是默认行为；想要"笑着说出很凶的话"的用户
+     * 自己去设置页打开即可（Live2D 子开关，见 [live2dEnabled]）。
      *
      * 依赖 [live2dEnabled]：表情标签协议只在 Live2D 打开时注入（见
      * [com.lv999call.app.domain.usecase.ProcessAudioUseCase] 拼提示词处），
      * 所以 Live2D 关着时本开关**无从生效** —— 设置页因此把它做成 Live2D 的子开关，
      * 而不是给一个"开着却什么都不做"的独立开关。
      */
-    val emotionVoiceEnabled: Boolean = true,
+    val emotionVoiceEnabled: Boolean = false,
 
     // ---------- 长期记忆（plan4 §5.7） ----------
 
@@ -207,11 +206,11 @@ data class ApiConfig(
      *
      * 优先用户为该角色单独设置的值，其次角色自带的默认值（由调用方传入，
      * 因为它来自 [BuiltInCharacter] 而非配置本身）。
+     *
+     * 取不到就返回空串 —— 空串是**合法且常见**的结果（例如银狼、以及默认不再预置
+     * 语气的 DeepSeek 酱）：TTS 请求里那条风格指令留空，模型按它自己的默认语气念。
+     * 这里**不再往全局配置回落**，见 [characterTtsPrompts] 的说明。
      */
     fun getTtsPromptForCharacter(characterId: String, default: String = ""): String =
         characterTtsPrompts[characterId]?.takeIf { it.isNotEmpty() } ?: default
-
-    /** 覆写某内置角色的 TTS 风格提示词 */
-    fun withCharacterTtsPrompt(characterId: String, prompt: String): ApiConfig =
-        copy(characterTtsPrompts = characterTtsPrompts + (characterId to prompt))
 }

@@ -192,6 +192,14 @@ fun NavGraph() {
             val activeCharacter by viewModel.character.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
+            // 麦克风权限闸门：进通话页就申请（见 PermissionGate 的说明）。
+            // 没授权时它自己渲染说明页并返回 false —— 直接 return，下面那句
+            // startCharacterCall 根本不会执行，也就不会出现"她在自说自话"的假通话。
+            if (!com.lv999call.app.ui.common.MicPermissionGuard(
+                    onBack = { navController.popBackStack() }
+                )
+            ) return@composable
+
             LaunchedEffect(characterId) { viewModel.startCharacterCall(characterId) }
 
             // 过场只在"角色确实有这套演出"时才等（见 BuiltInCharacter.hasTransform）
@@ -331,6 +339,12 @@ fun NavGraph() {
             val expressionCue by viewModel.expressionCue.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
 
+            // 麦克风权限闸门：与内置角色那条路由同一套处理（见 PermissionGate）
+            if (!com.lv999call.app.ui.common.MicPermissionGuard(
+                    onBack = { navController.popBackStack() }
+                )
+            ) return@composable
+
             // 加载预设数据用于显示
             var presetBgUri by remember { mutableStateOf<String?>(null) }
             var presetAvatarUri by remember { mutableStateOf<String?>(null) }
@@ -399,6 +413,12 @@ fun NavGraph() {
             val activeCharacter by viewModel.character.collectAsState()
             val presetVisuals by viewModel.presetVisuals.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
+
+            // 麦克风权限闸门：续聊同样要申请（用户可能在上一次通话里点了"以后再说"）
+            if (!com.lv999call.app.ui.common.MicPermissionGuard(
+                    onBack = { navController.popBackStack() }
+                )
+            ) return@composable
 
             LaunchedEffect(Unit) { viewModel.continueSession(sessionId) }
 

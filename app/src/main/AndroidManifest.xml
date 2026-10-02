@@ -6,7 +6,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- 麦克风权限 -->
+    <!--
+      麦克风权限（运行时权限，API 23+ 必须在使用前申请）。
+      ⚠️ 声明只是"允许申请"，真正弹系统对话框的是
+      `ui/common/PermissionGate.kt` 的 MicPermissionGuard —— 它挂在三条通话路由
+      （内置角色 / 自定义预设 / 续聊）的入口上，进通话页即申请。
+      以前只有 AudioRecorder 里一句 checkSelfPermission（从不 request），
+      新装用户进通话页会得到一个"她听不到你"的静默坏功能。
+    -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!--
@@ -17,10 +24,13 @@
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- 存储权限（读取图片） -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
+    <!--
+      存储权限：**故意不声明**。
+      头像 / 背景图 / 参考音频全部走 SAF（`ActivityResultContracts.GetContent()`），
+      记忆库导出走 `CreateDocument()` —— 这两条路都由系统按次授权单个 Uri，
+      根本不需要 READ_MEDIA_IMAGES / READ_EXTERNAL_STORAGE。声明了不用，
+      只会在应用详情页里多出一堆用户看不懂、也不会被请求的权限条目。
+    -->
 
     <application
         android:name=".App"

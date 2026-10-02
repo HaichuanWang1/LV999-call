@@ -39,7 +39,11 @@ class ConfigRepository(private val context: Context) {
 
         val TTS_API_KEY = stringPreferencesKey("tts_api_key")
         val TTS_MODEL = stringPreferencesKey("tts_model")
-        val TTS_PROMPT = stringPreferencesKey("tts_prompt")
+
+        // 曾经还有一个全局的 `tts_prompt`（"角色没配语气时的兜底"）。它是一条跨角色
+        // 污染通道：银狼的默认语气是空的，会一路回落到全局那份，于是用**别人的**语气
+        // 说话（见 ApiConfig.characterTtsPrompts 的说明）。字段已整条撤掉。
+        // DataStore 里可能还留着旧值 —— 没有任何代码读它，不再构成污染。
 
         /**
          * 各内置角色的 TTS 风格提示词。
@@ -124,7 +128,6 @@ class ConfigRepository(private val context: Context) {
             asrVoskModelId = prefs[ASR_VOSK_MODEL_ID] ?: "",
             ttsApiKey = prefs[TTS_API_KEY] ?: "",
             ttsModel = prefs[TTS_MODEL] ?: "mimo-v2.5-tts-voiceclone",
-            ttsPrompt = prefs[TTS_PROMPT] ?: "",
             characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),
             ttsReferenceAudioBase64 = prefs[TTS_REF_AUDIO_BASE64] ?: "",
             ttsReferenceAudioMime = prefs[TTS_REF_AUDIO_MIME] ?: "audio/wav",
@@ -136,7 +139,7 @@ class ConfigRepository(private val context: Context) {
             backgroundUri = prefs[BACKGROUND_URI] ?: "",
             live2dEnabled = prefs[LIVE2D_ENABLED]?.toBooleanStrictOrNull() ?: true,
             live2dTransformEnabled = prefs[LIVE2D_TRANSFORM_ENABLED]?.toBooleanStrictOrNull() ?: true,
-            emotionVoiceEnabled = prefs[EMOTION_VOICE_ENABLED]?.toBooleanStrictOrNull() ?: true,
+            emotionVoiceEnabled = prefs[EMOTION_VOICE_ENABLED]?.toBooleanStrictOrNull() ?: false,
             memoryAutoSummarizeEnabled = prefs[MEMORY_AUTO_SUMMARIZE_ENABLED]?.toBooleanStrictOrNull() ?: true,
             memorySummarizeShortCalls = prefs[MEMORY_SUMMARIZE_SHORT_CALLS]?.toBooleanStrictOrNull() ?: false,
             memoryReminderEnabled = prefs[MEMORY_REMINDER_ENABLED]?.toBooleanStrictOrNull() ?: true,
@@ -162,7 +165,6 @@ class ConfigRepository(private val context: Context) {
             prefs[ASR_VOSK_MODEL_ID] = config.asrVoskModelId
             prefs[TTS_API_KEY] = config.ttsApiKey
             prefs[TTS_MODEL] = config.ttsModel
-            prefs[TTS_PROMPT] = config.ttsPrompt
             prefs[CHARACTER_TTS_PROMPTS] = serializeCharacterPrompts(config.characterTtsPrompts)
             prefs[TTS_REF_AUDIO_BASE64] = config.ttsReferenceAudioBase64
             prefs[TTS_REF_AUDIO_MIME] = config.ttsReferenceAudioMime

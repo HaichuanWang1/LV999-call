@@ -63,7 +63,12 @@ object BuiltInCharacters {
         backgroundResId = R.drawable.deepseek_bg,
         // 强制锁定 mimo 预置音色模型的少女音，无论设置里选了什么
         ttsPolicy = TtsPolicy.PresetVoice(voice = "冰糖"),
-        defaultTtsPrompt = "用清亮软糯的少女音说话，语速稍快，带点懒洋洋的傲娇感，偶尔像饿了一样有气无力。",
+        // 默认**不带**风格提示词：预置音色「冰糖」本身就是这个角色的声音，
+        // 再叠一段"清亮软糯、语速稍快、懒洋洋"的指令，等于在音色之上又压了一层表演，
+        // 实际听感会更飘、也更难和角色的语气表（EmotionVoiceStyles）配合。
+        // 留空 = TTS 请求里那条风格指令是空串，模型按预置音色自己的自然读法念；
+        // 想调语气的用户在准备页里写自己的那一格即可（存进 characterTtsPrompts）。
+        defaultTtsPrompt = "",
         // 该模型没有"变身"这类一次性演出（只有 idle / 吹泡泡 / 自拍等循环动作），
         // 硬播会在接通瞬间定格一个怪动作，所以关闭过场
         hasTransform = false,

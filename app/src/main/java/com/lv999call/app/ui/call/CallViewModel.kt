@@ -371,7 +371,6 @@ class CallViewModel(
                 // 记忆角色键只能从会话那一列读回来：续聊手里只有 sessionId，
                 // 自定义预设靠提示词反查推不出来（plan4 §2.3 / P1）
                 memoryCharacterKey = session.characterKey
-                val currentConfig = configRepository.configFlow.first()
                 // 续聊要恢复原角色的形象、提示词与发声策略。判据**优先用会话上那一列角色键**：
                 // 它落库时就写明了"这通属于谁"，比拿提示词全文去和 assets 比对可靠 ——
                 // 后者只要方案的提示词与某个内置角色逐字相同就会串味（用错头像/音色）。
@@ -387,11 +386,11 @@ class CallViewModel(
                     currentCharacter = matchCharacterByPrompt(session.systemPrompt)
                     systemPrompt = session.systemPrompt.ifEmpty { null }
                     // TTS 语气同样要恢复，口径与 startCharacterCall 一致：
-                    // 准备页为该角色单独设的那一格 → 角色自带默认 → 全局兜底
-                    currentTtsPrompt = currentCharacter?.let { c ->
-                        currentConfig.getTtsPromptForCharacter(c.id, c.defaultTtsPrompt)
-                            .ifEmpty { currentConfig.ttsPrompt }
-                    } ?: currentConfig.ttsPrompt
+                    // 准备页为该角色单独设的那一格 → 角色自带默认（可能是空串）
+                    val restoredConfig = configRepository.configFlow.first()
+                    currentTtsPrompt = currentCharacter
+                        ?.let { c -> restoredConfig.getTtsPromptForCharacter(c.id, c.defaultTtsPrompt) }
+                        .orEmpty()
                     _presetVisuals.value = null
                 }
                 // 续聊同样要带记忆（plan4 §4.1）。这里只是**追加**到本次请求，
@@ -478,12 +477,11 @@ class CallViewModel(
                 }
             }
 
-            // TTS 风格提示词：准备页为该角色单独设的那一格 → 角色自带默认 → 全局兜底。
-            // ⚠️ 中间那一档（characterTtsPrompts）以前漏读了：准备页写进去、通话却只读
-            // defaultTtsPrompt，于是"改了没反应"；银狼（默认语气为空）还会回落到**全局**
-            // ttsPrompt，等于把别的角色的语气串过来。
+            // TTS 风格提示词：准备页为该角色单独设的那一格 → 角色自带默认。
+            // ⚠️ 以前这里还有"→ 全局兜底"的第三档，那是一条跨角色污染通道：银狼默认语气为空，
+            // 于是会一路回落到全局那一格，用**别人的**语气说话（见 ApiConfig.characterTtsPrompts）。
+            // 现在取不到就是空串，TTS 请求里那条风格指令留空，模型按自己的默认语气念。
             currentTtsPrompt = currentConfig.getTtsPromptForCharacter(character.id, character.defaultTtsPrompt)
-                .ifEmpty { currentConfig.ttsPrompt }
 
             beginResponseTurn()
             try {

@@ -314,11 +314,18 @@ class ChatRepository(
                     // 风格控制路径之一（另一条是把 `[笑]`/`（叹气）` 这类音频标签直接写进
                     // assistant 正文）。audio 对象里**没有** prompt 字段：官方只认
                     // format / voice / optimize_text_preview，塞进去服务端不认、也不生效。
-                    // ttsPrompt 为空时传空串，保持旧行为（不带任何风格指令）。
-                    messages = listOf(
-                        TtsModels.TtsMessage(role = "user", content = ttsPrompt),
-                        TtsModels.TtsMessage(role = "assistant", content = cleanText)
-                    ),
+                    //
+                    // ⚠️ 风格指令为空时**整条 user 消息都不发**，而不是发一条 `content: ""`。
+                    // 空串 content 是个"看着无害"的陷阱：它仍然是请求体里的一个 message，
+                    // 严格校验的接口会直接 400，而失败现象是"这个角色突然不出声了"，
+                    // 排查时只会怀疑音色/参考音频，很难联想到"空字符串"。
+                    // 银狼与 DeepSeek 酱的默认语气现在都是空的，这条路径是**常态**，不是边界。
+                    messages = buildList {
+                        if (ttsPrompt.isNotBlank()) {
+                            add(TtsModels.TtsMessage(role = "user", content = ttsPrompt))
+                        }
+                        add(TtsModels.TtsMessage(role = "assistant", content = cleanText))
+                    },
                     audio = TtsModels.TtsAudioConfig(
                         // 流式必须用 pcm16。
                         //

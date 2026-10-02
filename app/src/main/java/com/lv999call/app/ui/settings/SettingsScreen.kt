@@ -78,7 +78,7 @@ fun SettingsScreen(
     var showApiKey by remember { mutableStateOf(false) }
     var live2dEnabled by remember(config) { mutableStateOf(config.live2dEnabled) }
     var live2dTransformEnabled by remember(config) { mutableStateOf(config.live2dTransformEnabled) }
-    // 声音跟着情绪走（默认开）。它是 Live2D 的子开关：表情标签协议只在 Live2D 打开时注入，
+    // 声音跟着情绪走（默认关）。它是 Live2D 的子开关：表情标签协议只在 Live2D 打开时注入，
     // 关掉 Live2D 后它无从生效，所以跟着 Live2D 一起隐藏
     var emotionVoiceEnabled by remember(config) { mutableStateOf(config.emotionVoiceEnabled) }
     // 长期记忆两个开关（plan4 §5.7）
