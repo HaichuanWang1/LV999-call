@@ -341,7 +341,7 @@ class SummarizeMemoryUseCase(
         ).collect { event ->
             when (event) {
                 is ChatRepository.StreamEvent.Text -> raw.append(event.value)
-                is ChatRepository.StreamEvent.Failure -> streamFailure = event.reason
+                is ChatRepository.StreamEvent.Failure -> streamFailure = event.error.detail
             }
         }
         val failureReason = streamFailure

@@ -6,6 +6,7 @@ import com.lv999call.app.audio.AsrEngine
 import com.lv999call.app.data.repository.ChatRepository
 import com.lv999call.app.data.repository.ConfigRepository
 import com.lv999call.app.domain.model.ApiConfig
+import com.lv999call.app.domain.model.ApiFailure
 import com.lv999call.app.domain.model.AsrEmptyException
 import com.lv999call.app.domain.model.CallState
 import com.lv999call.app.domain.model.ChatMessage
@@ -107,6 +108,15 @@ class ProcessAudioUseCase(
         onUserMessage: (ChatMessage) -> Unit = {},
         onPartialResponse: (String) -> Unit,
         /**
+         * LLM / TTS 失败回调（含"没填 key""额度耗尽"这类需要用户去补配置的失败）。
+         *
+         * 为什么必须回调出去，而不是像改造前那样只写日志：失败在 UI 上的表现是
+         * 「角色突然不说话」，用户完全无从判断是没网、key 没填、还是额度用完了。
+         * 失败详情由 [com.lv999call.app.data.remote.ApiErrorParser] 从服务端响应体里
+         * 解析出来，这里只负责往上送，**不在这里决定弹什么**（那是 UI 的事）。
+         */
+        onApiFailure: (ApiFailure) -> Unit = {},
+        /**
          * LLM 通过 [[e:标签]] 触发表情时回调（Live2D 关闭时不会被触发）。
          *
          * **返回值 = 宿主有没有真的用上这个表情**：首轮开场问候 CallViewModel 会故意
@@ -180,7 +190,7 @@ class ProcessAudioUseCase(
         /** 是否已经出现过可见正文 —— 它决定 UI 是「思考中转圈」还是「流式打字」 */
         var sawVisible = false
         /**
-         * 本轮 LLM 的失败原因，**只认流内的 [ChatRepository.StreamEvent.Failure]**。
+         * 本轮 LLM 的失败详情，**只认流内的 [ChatRepository.StreamEvent.Failure]**。
          *
          * 为什么不用仓库上那个共享字段（原实现在下方读 `chatRepository.lastStreamError`）：
          * ChatRepository 是单例，而 plan4 的记忆总结流**开始收集时会清空**那个共享字段，
@@ -188,7 +198,7 @@ class ProcessAudioUseCase(
          * 继续拿一段残缺回复去 TTS 并落库。错误必须跟着"这一次调用"走，不能挂在单例上
          * （plan4 §3.2 Step 5a / §7.3 / P5）。
          */
-        var streamFailure: String? = null
+        var streamFailure: ApiFailure? = null
 
         try {
             chatRepository.streamChatCompletion(
@@ -212,8 +222,8 @@ class ProcessAudioUseCase(
                     }
 
                     is ChatRepository.StreamEvent.Failure -> {
-                        streamFailure = event.reason
-                        Log.e(TAG, "LLM 流式失败: ${event.reason}")
+                        streamFailure = event.error
+                        Log.e(TAG, "LLM 流式失败: kind=${event.error.kind} detail=${event.error.detail}")
                     }
                 }
             }
@@ -223,9 +233,12 @@ class ProcessAudioUseCase(
 
         // 本轮 LLM 出过错就到此为止：不合成、不朗读、不写历史。
         // 否则会把一段残缺回复（或干脆是空的）拿去 TTS，听起来像 AI 突然敷衍一句。
-        val failureReason = streamFailure
-        if (failureReason != null) {
-            Log.w(TAG, "本轮 LLM 失败，跳过 TTS 与落库: $failureReason")
+        val failure = streamFailure
+        if (failure != null) {
+            Log.w(TAG, "本轮 LLM 失败，跳过 TTS 与落库: kind=${failure.kind} detail=${failure.detail}")
+            // 把服务端原话交给 UI 弹窗（key 没填 / 额度耗尽 / 其他报错）。
+            // 改造前这里只有一行日志，用户那边就是"她一句话都不说"。
+            onApiFailure(failure)
             return Pair(userMessage, null)
         }
 
@@ -323,11 +336,11 @@ class ProcessAudioUseCase(
                 Log.d(TAG, "语气: 表情=$turnEmotionKey → $voiceStyle")
             }
 
-            val audioStream = chatRepository.synthesizeSpeech(
+            val speechResult = chatRepository.synthesizeSpeech(
                 config, aiResponse, refAudio, refMime, turnTtsPrompt, voiceOverride = ttsPolicy
             )
-            if (audioStream != null) {
-                audioPlayer.playStream(audioStream)
+            if (speechResult is ChatRepository.SpeechResult.Audio) {
+                audioPlayer.playStream(speechResult.stream)
                 // 等到本轮播放真正结束再返回。
                 // 这里刻意不轮询 isPlaying：音频是边收边播的，首块到达时间不确定，
                 // 轮询既会误判「没开声」，也会在服务端一块都没下发时白等一个超时。
@@ -357,7 +370,16 @@ class ProcessAudioUseCase(
                         "TTS 朗读超时（合成阶段就等满 ${config.ttsPlaybackTimeoutSec}s），本轮不朗读"
                     )
                 }
-                // 没合成出音频（无参考音频 / 服务端报错），本轮没有播放要等
+                // 没合成出音频（无参考音频 / key 没填 / 服务端报错），本轮没有播放要等。
+                // 失败要**弹窗说明**：否则现象就是"她忽然不出声了"，用户只能瞎猜。
+                // Skipped 不算失败（洗完之后没内容可念），静默收场。
+                if (speechResult is ChatRepository.SpeechResult.Failed) {
+                    Log.w(
+                        TAG,
+                        "TTS 失败: kind=${speechResult.error.kind} detail=${speechResult.error.detail}"
+                    )
+                    onApiFailure(speechResult.error)
+                }
                 playbackSettled = true
             }
         } catch (e: Exception) {

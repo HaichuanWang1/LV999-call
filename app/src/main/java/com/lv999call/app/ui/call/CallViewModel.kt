@@ -110,6 +110,84 @@ class CallViewModel(
     val presetVisuals: StateFlow<PresetVisuals?> = _presetVisuals.asStateFlow()
 
     /**
+     * 一次需要用户知道的接口失败（LLM / TTS）—— 弹窗文案在这里就拼好，UI 只负责显示。
+     *
+     * 与 [VoskPrepareState.Failed] 同一套做法：ViewModel 出"给用户看的话"，
+     * UI 不参与判断失败属于哪一类。
+     */
+    data class ApiFailureDialog(val title: String, val message: String)
+
+    /**
+     * 待弹出的接口失败提醒；null = 没有要弹的。
+     *
+     * 为什么要弹窗而不是只写日志：改造前 LLM/TTS 失败在界面上**毫无痕迹** ——
+     * 用户看到的是"角色突然不说话了"，分不清是没网、key 没填、还是额度用完了。
+     * 这三件事要做的事完全不同，必须说清楚。
+     */
+    private val _apiFailureDialog = MutableStateFlow<ApiFailureDialog?>(null)
+    val apiFailureDialog: StateFlow<ApiFailureDialog?> = _apiFailureDialog.asStateFlow()
+
+    /**
+     * 已经提示过的「本地配置类」失败（kind|detail）。
+     *
+     * 为什么要去重：key 没填 / 没配音色这类问题，用户在**通话中没法改**
+     * （设置页在另一条路由上），于是每一轮都会原样失败一次 —— 每轮弹一个一模一样的
+     * 弹窗就是纯骚扰。同一句话只提示一次；换了原因（哪怕是同类）照常弹。
+     *
+     * 只对配置类去重，不对网络类去重：超时/断网是**可能自愈**的，
+     * 第二次失败仍然需要让用户看见。
+     */
+    private var lastConfigFailureKey: String? = null
+
+    /**
+     * 收到一次接口失败 → 组装弹窗。
+     *
+     * 文案分档的依据见 [ApiFailureKind]：key 类让用户去补 key、额度类让用户去充值、
+     * 音色类让用户去选参考音频。三档都会明确指向「设置」页 —— 只说"请求失败"
+     * 等于把排查工作丢回给用户。
+     */
+    private fun showApiFailure(failure: ApiFailure) {
+        val key = "${failure.kind}|${failure.detail}"
+        val isConfigProblem = failure.kind == ApiFailureKind.MISSING_KEY ||
+            failure.kind == ApiFailureKind.TTS_VOICE_MISSING
+        if (isConfigProblem) {
+            if (key == lastConfigFailureKey) {
+                android.util.Log.d("CallVM", "同一配置问题已提示过，不再重复弹窗: $key")
+                return
+            }
+            lastConfigFailureKey = key
+        }
+
+        android.util.Log.w("CallVM", "接口失败: kind=${failure.kind} detail=${failure.detail}")
+        _apiFailureDialog.value = ApiFailureDialog(
+            title = when (failure.kind) {
+                ApiFailureKind.MISSING_KEY -> "API Key 没填好"
+                ApiFailureKind.QUOTA_EXHAUSTED -> "额度可能已用尽"
+                ApiFailureKind.TTS_VOICE_MISSING -> "TTS 音色没有配置"
+                ApiFailureKind.OTHER -> "接口请求失败"
+            },
+            message = when (failure.kind) {
+                ApiFailureKind.MISSING_KEY ->
+                    "${failure.detail}\n\n请到「设置」检查 API Key 是否填写正确；LLM 的 Base URL 也要一并确认。"
+
+                ApiFailureKind.QUOTA_EXHAUSTED ->
+                    "${failure.detail}\n\n请到服务商后台确认余额与额度；如果只是请求太频繁（HTTP 429），过一会儿再试即可。"
+
+                ApiFailureKind.TTS_VOICE_MISSING ->
+                    "${failure.detail}\n\n请到「设置 → TTS」或通话准备页选择一段参考音频作为音色。"
+
+                ApiFailureKind.OTHER ->
+                    "${failure.detail}\n\n请到「设置」检查 API Key 与 Base URL 是否填写正确，或稍后重试。"
+            }
+        )
+    }
+
+    /** 弹窗上的「知道了」 */
+    fun dismissApiFailureDialog() {
+        _apiFailureDialog.value = null
+    }
+
+    /**
      * 实时音量（0f ~ 1f），用于驱动 Live2D 口型同步。
      *
      * - SPEAKING：取 TTS 播放音量（口型跟着合成语音张合）
@@ -574,7 +652,10 @@ class CallViewModel(
                     onStateChange = { state -> onState(state) },
                     onUserMessage = ::appendUserMessage,
                     onPartialResponse = { partial -> onPartial(partial) },
-                    onExpression = ::cueExpression
+                    onExpression = ::cueExpression,
+                    // 失败要弹窗说清楚（key / 额度 / 音色 / 原始报错），
+                    // 改造前这里什么都不做，用户只看到"她忽然不说话了"
+                    onApiFailure = ::showApiFailure
                 )
                 val newMessages = mutableListOf(userMsg)
                 if (assistantMsg != null) newMessages.add(assistantMsg)
@@ -641,7 +722,10 @@ class CallViewModel(
                         onStateChange = { state -> onState(state) },
                         onUserMessage = ::appendUserMessage,
                         onPartialResponse = { partial -> onPartial(partial) },
-                        onExpression = ::cueExpression
+                        onExpression = ::cueExpression,
+                        // 失败要弹窗说清楚（key / 额度 / 音色 / 原始报错），
+                        // 改造前这里什么都不做，用户只看到"她忽然不说话了"
+                        onApiFailure = ::showApiFailure
                     )
                     val newMessages = mutableListOf(userMsg)
                     if (assistantMsg != null) newMessages.add(assistantMsg)
@@ -729,7 +813,10 @@ class CallViewModel(
                     onStateChange = { state -> onState(state) },
                     onUserMessage = ::appendUserMessage,
                     onPartialResponse = { partial -> onPartial(partial) },
-                    onExpression = ::cueExpression
+                    onExpression = ::cueExpression,
+                    // 失败要弹窗说清楚（key / 额度 / 音色 / 原始报错），
+                    // 改造前这里什么都不做，用户只看到"她忽然不说话了"
+                    onApiFailure = ::showApiFailure
                 )
                 // userMessage 在 ASR 出来时就已上屏（见 appendUserMessage），
                 // 这里只补助手回复；用时间戳去重，防止重复气泡。
@@ -790,7 +877,10 @@ class CallViewModel(
                     onStateChange = { state -> onState(state) },
                     onUserMessage = ::appendUserMessage,
                     onPartialResponse = { partial -> onPartial(partial) },
-                    onExpression = ::cueExpression
+                    onExpression = ::cueExpression,
+                    // 失败要弹窗说清楚（key / 额度 / 音色 / 原始报错），
+                    // 改造前这里什么都不做，用户只看到"她忽然不说话了"
+                    onApiFailure = ::showApiFailure
                 )
                 // 用户消息已在上面的回调里提早上屏，这里只补助手回复
                 val newMessages = mutableListOf<ChatMessage>()

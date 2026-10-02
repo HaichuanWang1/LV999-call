@@ -188,7 +188,16 @@ fun CallScreen(
     /** 遮罩上的「重试」（[CallViewModel.retryVoskPrepare]） */
     onRetryVoskPrepare: () -> Unit = {},
     /** 遮罩上的「先打字聊」（[CallViewModel.dismissVoskPrepareError]） */
-    onDismissVoskPrepareError: () -> Unit = {}
+    onDismissVoskPrepareError: () -> Unit = {},
+    /**
+     * 接口失败提醒（[CallViewModel.apiFailureDialog]）；null = 不弹。
+     *
+     * 覆盖 LLM 与 TTS 两条链路：key 没填、额度耗尽、音色没配、以及服务端返回的
+     * 其他报错。文案由 ViewModel 按失败分类拼好，UI 只负责显示与关闭。
+     */
+    apiFailureDialog: CallViewModel.ApiFailureDialog? = null,
+    /** 弹窗上的「知道了」（[CallViewModel.dismissApiFailureDialog]） */
+    onDismissApiFailure: () -> Unit = {}
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
@@ -632,6 +641,21 @@ fun CallScreen(
             onDismissError = onDismissVoskPrepareError,
             onHangUp = onHangUp
         )
+
+        // ---------- 接口失败弹窗（最上层）----------
+        // 为什么用弹窗而不是状态胶囊上顶一句：这几类失败（key 没填 / 额度耗尽 /
+        // 音色没配）用户**必须去处理**，而"2 秒后自己消失"的提示很容易被漏看，
+        // 漏看的代价就是"她一直不说话，我还以为是 App 坏了"。
+        apiFailureDialog?.let { dialog ->
+            AlertDialog(
+                onDismissRequest = onDismissApiFailure,
+                title = { Text(dialog.title) },
+                text = { Text(dialog.message) },
+                confirmButton = {
+                    TextButton(onClick = onDismissApiFailure) { Text("知道了") }
+                }
+            )
+        }
     }
 }
 

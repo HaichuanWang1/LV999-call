@@ -2,6 +2,7 @@ package com.lv999call.app.data.repository
 
 import com.google.gson.Gson
 import com.lv999call.app.audio.AudioPipe
+import com.lv999call.app.data.remote.ApiErrorParser
 import com.lv999call.app.data.remote.LlmApiService
 import com.lv999call.app.data.remote.LlmModels
 import com.lv999call.app.data.remote.ModelsApiService
@@ -9,6 +10,8 @@ import com.lv999call.app.data.remote.ModelsResponse
 import com.lv999call.app.data.remote.TtsApiService
 import com.lv999call.app.data.remote.TtsModels
 import com.lv999call.app.domain.model.ApiConfig
+import com.lv999call.app.domain.model.ApiFailure
+import com.lv999call.app.domain.model.ApiFailureKind
 import com.lv999call.app.domain.model.ChatMessage
 import com.lv999call.app.domain.model.TtsPolicy
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +42,26 @@ class ChatRepository(
      */
     sealed interface StreamEvent {
         data class Text(val value: String) : StreamEvent
-        data class Failure(val reason: String) : StreamEvent
+        data class Failure(val error: ApiFailure) : StreamEvent
+    }
+
+    /**
+     * TTS 合成的结果。
+     *
+     * 为什么不再用 `InputStream?`：null 把三件完全不同的事混成了一个值 ——
+     * 「这段文本没内容可念」（正常）、「TTS 的 key 没填」（用户要去补配置）、
+     * 「服务端 401/429」（用户要看服务端原话）。以前三者都表现为"她不说话"，
+     * 只有 Logcat 知道区别。现在必须分得开，UI 才能给出对应的弹窗。
+     */
+    sealed interface SpeechResult {
+        /** 合成成功，拿到边收边播的 PCM 流 */
+        data class Audio(val stream: InputStream) : SpeechResult
+
+        /** 本轮无需合成（清洗后没有可念的文字），**不算错误**，不提示 */
+        data object Skipped : SpeechResult
+
+        /** 合成失败，必须让用户知道 */
+        data class Failed(val error: ApiFailure) : SpeechResult
     }
 
     /**
@@ -109,7 +131,12 @@ class ChatRepository(
                     android.util.Log.d("ChatRepo", "模型原始响应(${resp.code}): ${body.take(300)}")
 
                     if (!resp.isSuccessful) {
-                        return@withContext Result.failure(Exception("请求失败 (${resp.code}): ${resp.message}"))
+                        // 与通话链路同一套解析：OkHttp 里非 2xx 的响应体同样是 body，
+                        // 所以这里能直接读到服务端写的那句 "Invalid API key"。
+                        // 老实现只给 `请求失败 (401): Unauthorized`，设置页的 Snackbar
+                        // 等于没说清是 key 错了还是额度没了。
+                        val failure = ApiErrorParser.fromHttp(resp.code, resp.message, body)
+                        return@withContext Result.failure(Exception(failure.detail))
                     }
 
                     val jsonObj = org.json.JSONObject(body)
@@ -186,8 +213,17 @@ class ChatRepository(
             }
         )
 
+        // 本地就没填 baseUrl：请求发出去只会得到 OkHttp 的一句
+        // `Expected URL scheme 'http' or 'https'`，对用户毫无意义，还白跑一次网络。
+        // （key 不在这里拦：key 空但 url 正常时，服务端自己会回 401，那条路判得更准。）
+        if (config.llmBaseUrl.isBlank()) {
+            emit(StreamEvent.Failure(ApiErrorParser.configMissing("LLM 的 Base URL 还没有填写")))
+            return@flow
+        }
+
         val url = LlmApiService.buildFullUrl(config.llmBaseUrl)
         val auth = "Bearer ${config.llmApiKey}"
+        var streamFailure: ApiFailure? = null
 
         try {
             val responseBody = llmApi.chatCompletionStream(url, auth, config.llmApiKey, request)
@@ -197,16 +233,34 @@ class ChatRepository(
                     var line: String?
                     while (reader.readLine().also { line = it } != null) {
                         val currentLine = line ?: continue
-                        if (currentLine.startsWith("data: ")) {
-                            val data = currentLine.removePrefix("data: ").trim()
-                            if (data == "[DONE]") break
-                            try {
-                                val chunk = gson.fromJson(data, LlmModels.ChatResponse::class.java)
-                                val content = chunk.choices?.firstOrNull()?.delta?.content
-                                if (!content.isNullOrEmpty()) emit(StreamEvent.Text(content))
-                            } catch (e: Exception) {
-                                android.util.Log.w("ChatRepo", "SSE解析跳过: ${e.message}")
+                        val isSse = currentLine.startsWith("data: ")
+                        val payload =
+                            if (isSse) currentLine.removePrefix("data: ").trim() else currentLine.trim()
+                        if (payload.isEmpty()) continue
+                        if (payload == "[DONE]") break
+
+                        // 200 + 错误体：既可能是 SSE 里的一个错误分块（`data: {"error":…}`），
+                        // 也可能是整个响应体就是一个错误 JSON（某些网关不按 SSE 回）。
+                        // 先看带 "error" 的行 —— 不加这一层判断的话，每个正常分块都要多解析一次 JSON。
+                        if (payload.contains("\"error\"")) {
+                            // 刻意不写成 `?.let { ... break }`：break 在 lambda 里是编译错误
+                            // （非局部跳转只对 return 开），只能老老实实判一次 null。
+                            val inlineError = ApiErrorParser.fromSuccessfulBody(payload)
+                            if (inlineError != null) {
+                                streamFailure = inlineError
+                                break
                             }
+                        }
+
+                        // 非 data: 前缀的行（event: / 注释行）到这里就结束了
+                        if (!isSse) continue
+
+                        try {
+                            val chunk = gson.fromJson(payload, LlmModels.ChatResponse::class.java)
+                            val content = chunk.choices?.firstOrNull()?.delta?.content
+                            if (!content.isNullOrEmpty()) emit(StreamEvent.Text(content))
+                        } catch (e: Exception) {
+                            android.util.Log.w("ChatRepo", "SSE解析跳过: ${e.message}")
                         }
                     }
                 } finally {
@@ -215,11 +269,27 @@ class ChatRepository(
             } finally {
                 responseBody.close()
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 挂断 / 离开页面会取消这条流。取消不是"调用失败"，绝不能弹窗；
+            // 而且吞掉它会把上层的结构化并发弄断。
+            throw e
         } catch (e: Exception) {
-            // 失败走独立通道：调用方据此跳过 TTS 与落库，绝不把这串念给用户听
-            val reason = e.message ?: "未知错误"
-            android.util.Log.e("ChatRepo", "LLM 流式失败: $reason")
-            emit(StreamEvent.Failure(reason))
+            // 失败走独立通道：调用方据此跳过 TTS 与落库，绝不把这串念给用户听。
+            // 这里不再用 `e.message`（Retrofit 只会给一句 "HTTP 401 Unauthorized"），
+            // 而是把服务端响应体里的错误说明读出来 —— 见 [ApiErrorParser]。
+            val failure = ApiErrorParser.fromThrowable(e)
+            android.util.Log.e(
+                "ChatRepo",
+                "LLM 流式失败: http=${failure.httpCode} kind=${failure.kind} detail=${failure.detail}"
+            )
+            emit(StreamEvent.Failure(failure))
+            return@flow
+        }
+
+        // 200 里的错误也要弹出来，否则现象就是"模型突然不说话了"
+        streamFailure?.let {
+            android.util.Log.e("ChatRepo", "LLM 返回错误分块: kind=${it.kind} detail=${it.detail}")
+            emit(StreamEvent.Failure(it))
         }
     }.flowOn(Dispatchers.IO)
 
@@ -243,6 +313,9 @@ class ChatRepository(
      *        内置角色可以锁定自己的模型与音色（例如 DeepSeek 酱固定用 MiMo
      *        预置少女音），此时**无视全局设置**里选的 TTS 模型。
      *        传 null / [TtsPolicy.Inherit] 则完全跟随设置（历史行为不变）。
+     * @return 见 [SpeechResult]：成功给音频流，失败给**可展示**的原因。
+     *        改造前这里返回 `InputStream?`，失败（没填 key / 没配音色 / 服务端报错）
+     *        全被压成 null，用户只知道"她不说话"，不知道要去补什么配置。
      */
     suspend fun synthesizeSpeech(
         config: ApiConfig,
@@ -251,7 +324,7 @@ class ChatRepository(
         refAudioMime: String = config.ttsReferenceAudioMime,
         ttsPrompt: String = "",
         voiceOverride: TtsPolicy? = null
-    ): InputStream? {
+    ): SpeechResult {
         // 去除emoji、特殊符号、LLM推理标签、语气标注，TTS无法处理会导致乱音/卡顿
         val cleanText = text
             .replace(REGEX_THINKING, "")
@@ -259,7 +332,15 @@ class ChatRepository(
             .replace("~", "，")
             .replace(Regex("\\s+"), " ")
             .trim()
-        if (cleanText.isBlank()) return null
+        // 洗完之后没内容可念：这不是错误，静默跳过（例如整句都是表情标签）
+        if (cleanText.isBlank()) return SpeechResult.Skipped
+
+        // key 没填就不用发请求了 —— 这一档连服务端都碰不到，是纯粹的本地配置缺失。
+        // 用户在这里看到的必须是"去设置页补 TTS 的 key"，而不是一句 HTTP 401。
+        if (config.ttsApiKey.isBlank()) {
+            android.util.Log.w("ChatRepo", "TTS 跳过：API Key 未填写")
+            return SpeechResult.Failed(ApiErrorParser.configMissing("TTS 的 API Key 还没有填写"))
+        }
 
         // 请求体里塞着整段参考音频（~900KB base64），构建 + 网络 + 响应头都在 IO 线程做
         return withContext(Dispatchers.IO) {
@@ -281,12 +362,19 @@ class ChatRepository(
                         voiceUri = if (refAudioBase64.isNotEmpty()) {
                             if (refAudioBase64.length > 10 * 1024 * 1024) {
                                 android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
-                                return@withContext null
+                                return@withContext SpeechResult.Failed(
+                                    ApiErrorParser.voiceMissing(
+                                        "参考音频超过 MiMo 的 10MB 上限" +
+                                            "（当前约 ${refAudioBase64.length / 1024 / 1024}MB），请换一段更短的音频"
+                                    )
+                                )
                             }
                             "data:$refAudioMime;base64,$refAudioBase64"
                         } else {
                             android.util.Log.w("ChatRepo", "角色锁定了克隆音色但参考音频为空，跳过TTS")
-                            return@withContext null
+                            return@withContext SpeechResult.Failed(
+                                ApiErrorParser.voiceMissing("角色锁定了克隆音色，但本地没有可用的参考音频")
+                            )
                         }
                     }
 
@@ -297,13 +385,22 @@ class ChatRepository(
                             // MiMo限制: base64不超过10MB
                             if (refAudioBase64.length > 10 * 1024 * 1024) {
                                 android.util.Log.e("ChatRepo", "参考音频base64超限: ${refAudioBase64.length / 1024 / 1024}MB > 10MB, 请重新选择较短的音频")
-                                return@withContext null
+                                return@withContext SpeechResult.Failed(
+                                    ApiErrorParser.voiceMissing(
+                                        "参考音频超过 MiMo 的 10MB 上限" +
+                                            "（当前约 ${refAudioBase64.length / 1024 / 1024}MB），请换一段更短的音频"
+                                    )
+                                )
                             }
                             "data:$refAudioMime;base64,$refAudioBase64"
                         } else {
                             // voiceclone模型必须有参考音频，无音频则跳过TTS
                             android.util.Log.w("ChatRepo", "无参考音频，voiceclone模型无法工作，跳过TTS")
-                            return@withContext null
+                            return@withContext SpeechResult.Failed(
+                                ApiErrorParser.voiceMissing(
+                                    "TTS 模型「$modelId」需要一段参考音频作为音色，但设置里还没有选择"
+                                )
+                            )
                         }
                     }
                 }
@@ -351,18 +448,34 @@ class ChatRepository(
 
                 val response = ttsApi.synthesizeStream(url, "Bearer ${config.ttsApiKey}", config.ttsApiKey, request)
                 if (!response.isSuccessful) {
-                    val errorBody = response.errorBody()?.string()?.take(500) ?: "无响应体"
-                    android.util.Log.e("ChatRepo", "TTS API错误: HTTP ${response.code()}, $errorBody")
-                    return@withContext null
+                    // 不再只写日志：状态码 + 响应体里的错误说明一起交给上层弹窗。
+                    // 老实现把 errorBody 打给 Logcat 就返回 null，用户只知道"她不说话"。
+                    val errorBody = runCatching { response.errorBody()?.string() }.getOrNull()
+                    val failure = ApiErrorParser.fromHttp(response.code(), response.message(), errorBody)
+                    android.util.Log.e(
+                        "ChatRepo",
+                        "TTS API错误: http=${failure.httpCode} kind=${failure.kind} detail=${failure.detail}"
+                    )
+                    return@withContext SpeechResult.Failed(failure)
                 }
                 val responseBody = response.body() ?: run {
                     android.util.Log.e("ChatRepo", "TTS API返回空响应体")
-                    return@withContext null
+                    return@withContext SpeechResult.Failed(
+                        ApiFailure(
+                            ApiFailureKind.OTHER,
+                            "TTS 返回了空响应体（HTTP ${response.code()}）",
+                            response.code()
+                        )
+                    )
                 }
-                openPcmPipe(responseBody)
+                SpeechResult.Audio(openPcmPipe(responseBody))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 挂断 / 离开页面：取消不是失败，不弹窗
+                throw e
             } catch (e: Exception) {
-                android.util.Log.e("ChatRepo", "TTS合成异常: ${e.message}", e)
-                null
+                val failure = ApiErrorParser.fromThrowable(e)
+                android.util.Log.e("ChatRepo", "TTS合成异常: ${failure.detail}", e)
+                SpeechResult.Failed(failure)
             }
         }
     }
