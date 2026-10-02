@@ -138,6 +138,51 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
 3. `Transform` 与 `AngryLoop` 都有曲线写着**物理输出**参数
    （`ParamAngleX2`、`ParamBodyAngleX3` 等），那些曲线会被物理覆盖。
 
+### 视线（`model.focus()` 的坑）
+
+两个角色都「一直盯着左上方、不像在看你」—— 根因不在动作文件，也不在模型数据，
+而在 `model.focus()` 的**参数语义**：
+
+```js
+// 运行库 Live2DModel.focus(x, y)：参数是**世界坐标里的一个点**
+focus(t, e, i) {
+  this.toModelPosition(...)                 // worldTransform.applyInverse → 画布像素
+  let s = px / originalWidth  * 2 - 1,      // → [-1,1]
+      r = py / originalHeight * 2 - 1,
+      a = Math.atan2(r, s);
+  this.internalModel.focusController.focus(Math.cos(a), -Math.sin(a), i)
+}
+```
+
+它只取「画布中心 → 该点」的**方向**，**模长恒为 1** —— 传进去的数值大小完全不影响力道，
+只影响方向。旧代码传的是 ±0.09 / ±0.05 这种归一化偏移（`CFG.states[*].focus` × 0.35 / 0.2），
+换算后几乎就是世界原点；而 anchor 在画布中心、`model.x/y` 在屏幕中心，
+**世界原点 = 舞台左上角**，于是 `focusController` 被钉死在 `(-0.707, +0.707)`：
+
+| 参数 | 写入 | 观感 |
+|---|---|---|
+| `ParamAngleX` | `+= -21.2°` | 头转向画面左侧 |
+| `ParamAngleY` | `+= +21.2°` | 抬头 |
+| `ParamEyeBallX/Y` | `+= ∓0.707` | 眼珠左上 |
+
+更糟的是 `applyState()` 里那句「视线瞬时归位」`model.focus(0, 0, true)` 归的**是同一个左上角**，
+所以每次状态切换都"归位"到左上 —— 这就是为什么这个现象看起来永远不变、且两个角色一模一样。
+
+修法是 `bridge.js` 的 `setGaze()`：按 `layout()` 同一套公式把归一化偏移**反解**成世界坐标点
+（`patHeadBox()` 用的是它的逆运算，两处必须一致）：
+
+```
+screen = model.x + (canvasX - canvasW / 2) * scale     // 世界 y 向下、focus 的 y 向上 → fy 取负
+```
+
+> 教训：这类"数值一路正常、画面却不对"的问题，根因往往在**参数的单位 / 坐标空间**上，
+> 而不是数值本身。`tools/live2d_selftest.cjs` 的 `[18] 视线` 一节把这个换算锁住了
+> （在旧实现下偏移量会达到画布半径的 0.80，断言立刻红）。
+
+顺带一提，`tools/live2d_motion_check.cjs` 的 `GAZE_PARAMS` 禁令（待机动作不许写
+yaw / 眼球）依然成立 —— 那是另一个独立成因（`idle_glance` 写 `ParamAngleX=-9°`），
+两者叠加才会显得"完全没在看你"。
+
 ### 变身过场（TransformOnce）
 
 模型自带的 `Transform_1/2` 是同一段演出的前后两半，但都是 `Loop: true`，

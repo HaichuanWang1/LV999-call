@@ -83,11 +83,14 @@ const coreModel = {
 };
 
 const model = {
-  focus(x, y, i) { rec.focus.push([x, y]); },
+  // 记三个分量：x / y 是世界坐标点，i 是 instant（状态切换归位要用瞬时插值）
+  focus(x, y, i) { rec.focus.push([x, y, i]); },
   expression(n) { rec.expressions.push(n); },
   motion(g, i, p) { rec.motions.push([g, i, p]); },
   anchor: { set(x, y) { rec.anchor.push([x, y]); } },
-  scale: { set(s) { rec.scale.push(s); } },
+  // scale 必须真的存住 x/y —— setGaze() 靠它把归一化偏移反解成世界坐标点，
+  // 只记录不存储的话那条换算会退化成 NaN，而 NaN 又会被 try/catch 吞掉。
+  scale: { x: 1, y: 1, set(s) { rec.scale.push(s); this.x = s; this.y = s; } },
   x: 0, y: 0,
   destroy() {},
   internalModel: {
@@ -970,6 +973,42 @@ function check(name, cond, extra = '') {
         !/PAT_HEAD_ZONE|detectTapGestures/.test(callScreenSrc));
   check('署名链接已移出舞台 Box（不再与 WebView 抢触摸）',
         /Live2DAuthorCredit/.test(callScreenSrc));
+
+  // ========================================================================
+  console.log('\n[18] 视线：归一化偏移必须换算成世界坐标点（回归守卫）');
+  //
+  // 旧实现直接调 `model.focus(fx, fy)`，而运行库把参数当**世界坐标里的点**：
+  // 它只取「画布中心 → 该点」的方向、**模长恒为 1**。传 (0, 0) 时那个点就是舞台
+  // 左上角，于是两个角色都满偏地盯着左上角（ParamAngleX -21°、ParamEyeBallY +0.707），
+  // 而 `applyState()` 里那句「视线瞬时归位」归的又是同一个角 —— 状态切换也救不回来。
+  // 这里锁住换算结果：归位必须落在**画布中心**（= model.x / model.y）。
+  const im = model.internalModel;
+  win.L2D.setState('thinking');           // applyState 里有一次「视线瞬时归位」
+  const gzReset = rec.focus[rec.focus.length - 1];
+  check('视线归位落在画布中心（不是世界原点 0,0）',
+        !!gzReset &&
+        Math.abs(gzReset[0] - model.x) < 1e-6 && Math.abs(gzReset[1] - model.y) < 1e-6,
+        JSON.stringify({ focus: gzReset, center: [model.x, model.y] }));
+  check('归位走瞬时插值（instant = true）', !!gzReset && gzReset[2] === true,
+        JSON.stringify(gzReset));
+
+  // 游移幅度：换算后必须还在配置的振幅之内。
+  // idle 档 focus=0.25 × 振幅 0.35 / 0.2 → 0.0875 / 0.05，留一点浮点余量。
+  // 旧实现下这里是 1.0（满偏），所以这条断言能真的逮住回归。
+  win.L2D.setState('idle');
+  tick(120);
+  const gzDrift = rec.focus[rec.focus.length - 1];
+  const halfW = im.originalWidth * model.scale.x * 0.5;
+  const halfH = im.originalHeight * model.scale.y * 0.5;
+  const offX = gzDrift ? Math.abs(gzDrift[0] - model.x) / halfW : 1;
+  const offY = gzDrift ? Math.abs(gzDrift[1] - model.y) / halfH : 1;
+  check('游移幅度不超过配置振幅（x ≤ 0.09 / y ≤ 0.06）',
+        offX <= 0.09 + 1e-6 && offY <= 0.06 + 1e-6,
+        `offX=${offX.toFixed(4)} offY=${offY.toFixed(4)}`);
+
+  const tail = rec.focus.slice(-60);
+  const distinct = new Set(tail.map((p) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`)).size;
+  check('游移真的在动（不是钉死在一个点）', distinct > 5, `不同位置 ${distinct} 个`);
 
   console.log(`\n${'='.repeat(46)}`);
   console.log(`通过 ${pass} / 失败 ${fail}`);

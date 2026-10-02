@@ -40,6 +40,10 @@ const CORE = path.join(ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'lib',
 // 视线只允许来自 focus / 呼吸。待机动作写 yaw 或眼球，角色就会"看向别处"
 // （实测：idle_glance 写了 ParamAngleX=-9°/ParamEyeBallY=+0.1，看起来就是
 //  "盯着左上角、不像在看你"，所以这里是硬性禁止）
+//
+// 注意：这只堵住了其中一个成因。更主要的那一个在 bridge.js 的 setGaze() ——
+// 运行库 model.focus() 收的是**世界坐标点**而非归一化偏移，旧代码把两者搞混，
+// 结果两个角色都被钉死在满偏的左上角（详见 docs/live2d.md「视线」一节）。
 const GAZE_PARAMS = ['ParamAngleX', 'ParamEyeBallX', 'ParamEyeBallY'];
 
 const OWNED_BY_IDLE_LAYER = [

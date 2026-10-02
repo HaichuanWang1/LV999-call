@@ -780,6 +780,53 @@
     };
   }
 
+  /**
+   * 视线：把「归一化偏移」写进模型。
+   *
+   * ⚠️ 为什么不能直接 `model.focus(fx, fy)` —— 这是两个角色「一直盯着左上角」的根因
+   * ------------------------------------------------------------------------------
+   * 运行库的 `Live2DModel.focus(x, y)` 收的是**世界坐标里的一个点**，不是偏移量：
+   *
+   *     focus(t, e, i) {
+   *       this.toModelPosition(...)                 // worldTransform.applyInverse → 画布像素
+   *       let s = px / originalWidth  * 2 - 1,      // → [-1, 1]
+   *           r = py / originalHeight * 2 - 1,
+   *           a = Math.atan2(r, s);
+   *       this.internalModel.focusController.focus(Math.cos(a), -Math.sin(a), i)
+   *     }
+   *
+   * 它只取「画布中心 → 该点」的**方向**，**模长恒为 1**：传进去的数值大小完全不影响力道，
+   * 只影响方向。旧代码传的是 ±0.09 / ±0.05 这种归一化偏移，换算后几乎就是世界原点，
+   * 而 anchor 在画布中心、model.x/y 在屏幕中心 —— 世界原点 = 舞台左上角，
+   * 于是 focusController 被钉死在 (-0.707, +0.707)：
+   *   `ParamAngleX += -21°`（转头向左）、`ParamEyeBallY += +0.707`（眼珠向上）
+   * 两个角色都**满偏地盯着左上角**，且 `applyState()` 里那句「视线瞬时归位」
+   * `model.focus(0, 0, true)` 归的是同一个左上角 —— 所以状态切换也救不回来。
+   *
+   * 现在按 layout() 同一套换算把偏移**反解**成世界坐标点
+   * （`patHeadBox()` 用的是它的逆运算，两处公式必须一致）：
+   *
+   *     screen = model.x + (canvasX - canvasW / 2) * scale
+   *
+   * 世界坐标 y 向下、focus 的 y 向上，所以 fy 取负。
+   *
+   * @param fx      水平偏移 [-1,1]，正数 = 看向画面右侧（满偏约 +30° 头 yaw）
+   * @param fy      垂直偏移 [-1,1]，正数 = 向上看
+   * @param instant 是否跳过插值（状态切换归位时用）
+   */
+  function setGaze(fx, fy, instant) {
+    if (!model || !model.internalModel) return;
+    var im = model.internalModel;
+    // layout() 一定跑在模型就绪之后，但降级路径下 scale 可能是空对象 —— 兜成 1
+    var sx = (model.scale && model.scale.x) || 1;
+    var sy = (model.scale && model.scale.y) || 1;
+    try {
+      model.focus(model.x + fx * im.originalWidth * sx * 0.5,
+                  model.y - fy * im.originalHeight * sy * 0.5,
+                  !!instant);
+    } catch (e) { /* 视线不是关键路径，拿不到变换时静默跳过 */ }
+  }
+
   // ======================= 口型同步核心 =======================
   /**
    * 平滑音量曲线：快速张口 + 稍慢闭口，接近真实说话节奏
@@ -1656,7 +1703,7 @@
       _focusPhase += _lastDt * 0.6;
       var fx = Math.sin(_focusPhase) * 0.35 * CFG.states[currentState].focus;
       var fy = Math.cos(_focusPhase * 0.7) * 0.2 * CFG.states[currentState].focus;
-      try { model.focus(fx, fy); } catch (e) { /* ignore */ }
+      setGaze(fx, fy);
     }
   }
 
@@ -1707,8 +1754,8 @@
       }
     } catch (e) { /* 模型无此动作时忽略 */ }
 
-    // 视线瞬时归位
-    try { model.focus(0, 0, true); } catch (e) { /* ignore */ }
+    // 视线瞬时归位（setGaze 而非 model.focus —— 见 setGaze 的注释）
+    setGaze(0, 0, true);
 
     _focusPhase = 0;
   }
