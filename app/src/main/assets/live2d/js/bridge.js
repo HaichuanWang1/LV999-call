@@ -60,9 +60,10 @@
     // 各通话状态 → 表现映射
     //
     // motion 一律留空：两个模型的"状态动作"要么不存在、要么不合时宜
-    // （银狼只有 Transform / AngryLoop / Sleep 三组特效；DeepSeek 酱只有
-    //   idle 与道具演出）。待机感由各自 profile 的 idle 层 + 运行库的
-    //   Idle 动作组（若模型有注册）负责。
+    // （银狼只有 Transform / AngryLoop / Sleep 三组特效；大肥鱼只有
+    //   吃饭 / 吃token / token转 / sleep / Scene1 五条道具演出，注册在 Action 组）。
+    //   待机感由各自 profile 的 idle 层 + 运行库的 Idle 动作组（若模型有注册）负责 ——
+    //   目前只有银狼注册了 Idle 组，大肥鱼那一档完全靠程序化待机层。
     //
     // expression 一律留空是刻意的：情绪表情由 LLM 通过 [[e:标签]] 驱动
     // （见 applyStateExpression 的 _cue 覆盖层）。早期 thinking 占位用了 '06 0.0'，
@@ -370,68 +371,77 @@
     },
 
     // ======================================================================
-    // DeepSeek 酱（DS鲸鱼娘）
+    // DeepSeek 酱（形象：大肥鱼）
     // ======================================================================
+    //
+    // 形象从「DS鲸鱼娘 c_0120」换成了「大肥鱼」（VTube Studio 皮套，作者 狐宫静）。
+    // 安装由 tools/setup_dafeiyu_model.py 负责 —— 模型目录不入库，脚本才是唯一事实来源。
+    //
+    // ⚠️ profile 的 id 仍然是 `deepseek`，**刻意没跟着模型改名**：它是「角色 ↔ 形象」的
+    //    绑定键（BuiltInCharacters.live2dProfileId，自定义预设也会把这个字符串存进数据库），
+    //    改名会让已经存在的预设找不到档位。
     //
     // 与银狼的关键差异（都由 profile 承载，下游逻辑零改动）：
     //   1. 没有变身演出 —— transform.enabled = false。硬播 TransformOnce 会
     //      因为组不存在而静默失败（JS 侧只记一条 warn 并返回 false，不抛异常），
     //      但挂断侧会白等一段过场时间，所以要显式关掉。
-    //   2. 有待机动作 —— 模型自带 idle.motion3.json（4s / 89 曲线），已由
-    //      tools/setup_deepseek_model.py 注册成 Idle 组，运行库会自动循环播放。
-    //      程序化待机层因此只做"状态联动的微表情"，与动作层分工。
-    //   3. 没有笑眼/眯眼参数 —— 已直接扫 moc3 确认 ParamEyeLSmile /
-    //      ParamEyeRSmile / ParamEyeLSquint / ParamEyeRSquint 都不存在。
-    //      所以 channels 里去掉 smile / squint 两条通道：留着也不会报错
-    //      （paramOK 会跳过缺失参数），但写进去毫无效果，只会让调参时困惑。
-    //   4. 嘴部通道与银狼同名（ParamMouthOpenY / ParamMouthForm），口型层可直接复用。
-    //   5. **身体摆动不可用**：这个模型的物理把 ParamBodyAngleZ / ParamBodyAngleX
-    //      当作**输出**（physics3.json 的 setting3 / setting1，权重 100），
-    //      每帧都会被物理覆写 —— 待机层再写一遍等于没写。
-    //      银狼的物理不输出这两个参数，所以那一档的 sway 通道是有效的。
-    //      这里去掉 sway，改由物理自己驱动身体摆动。
+    //   2. **没有 Idle 组**。作者自带的 idle.motion3.json 写了 ParamAngleX（头 yaw）
+    //      与 ParamAngleZ：前者与「视线只来自 focus / 呼吸」的硬性约定冲突
+    //      （见 tools/live2d_motion_check.cjs 的 GAZE_PARAMS），后者与下面 channels.tilt
+    //      抢道，所以安装脚本刻意不注册它。待机 = 程序化待机层 + 运行库呼吸 + 眨眼，
+    //      与银狼同一路线（作者其余 5 条动作注册成了 Action 组，目前没有代码播它们）。
+    //   3. 没有眯眼参数 —— ParamEyeLSquint / ParamEyeRSquint 不存在，channels 里没有 squint。
+    //      ParamEyeLSmile / ParamEyeRSmile 存在，所以 smile 通道留着。
+    //   4. 没有眉毛上下 —— ParamBrowLY / ParamBrowRY 不存在，只有 ParamBrowLForm /
+    //      ParamBrowRForm（变形），所以 channels 里没有 brow，只有 browForm。
+    //      ⚠️ CFG.pat.amp 与 CFG.idle.drift / flick 的键必须用 channels 里的名字，
+    //      所以这一档的摸头幅度写在 amp.browForm 上（银狼那档写在 amp.brow 上）。
+    //   5. **身体摆动不可用**：ParamBodyAngleX / Y / Z 全是物理输出（physics3.json
+    //      权重 100），每帧被物理覆写 —— 通道表里没有 sway，改由物理自己驱动。
+    //      ParamAngleZ 是物理**输入**，所以 tilt（歪头）有效。
+    //   6. 嘴部通道与银狼同名（ParamMouthOpenY / ParamMouthForm），口型层可直接复用。
     deepseek: {
-      modelUrl: 'models/deepseek/c_0120.model3.json',
+      modelUrl: 'models/dafeiyu/dafeiyu.model3.json',
 
-      // 立绘是接近正方的半身像（画布 2048），内容重心比银狼低一点
-      offsetY: -0.06,
+      // 画布 4704×5348，内容是 Q 版半身像（头占内容盒上半部分，内容盒 3346×4648）。
+      // 内容盒宽高比 0.72，配 fitBy:'width' + fillRatio 1.25 之后纵向几乎刚好铺满，
+      // 所以这里只做很小的上移，给底部消息区让位。
+      // ⚠️ 这是"真机看一眼再调"的值，不是算出来的。
+      offsetY: -0.12,
 
       idle: {
         enabled: true,
 
-        // 只保留该模型真实存在、且**不是物理输出**的通道（见上方说明 3、5）
+        // 只保留该模型真实存在、且**不是物理输出**的通道（见上方说明 3~5）
         channels: {
-          brow:      ['ParamBrowLY', 'ParamBrowRY'],           // 眉毛 上下
-          browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈/抗议）
+          browForm:  ['ParamBrowLForm', 'ParamBrowRForm'],     // 眉毛 变形（皱眉/委屈/挑眉）
+          smile:     ['ParamEyeLSmile', 'ParamEyeRSmile'],     // 笑眼
           mouthForm: ['ParamMouthForm'],                        // 嘴 变形（不碰开闭：那是口型的地盘）
           breath:    ['ParamBreath'],                           // 呼吸深度
-          tilt:      ['ParamAngleZ']                            // 头部侧倾（单位：度）
+          tilt:      ['ParamAngleZ']                            // 头部侧倾（物理输入，可驱动）
         },
 
-        // 姿态幅度整体比银狼再小一点：这个模型自带 Idle 动作（89 条曲线）会写
-        // 大量道具/头发参数，叠加大幅度会打架；而且它是软乎乎的圆脸角色，
-        // 微表情做太大就不可爱了。
-        //
-        // 注意：这里的 sway 只是占位（0），实际不会写进模型 —— 该参数是物理输出，
-        // 通道表里已经没有它了。保留字段是为了让姿态表和银狼同构、便于对照。
+        // 姿态幅度整体比银狼再小一点：这是软乎乎的圆脸角色，微表情做太大就不可爱了。
+        // 没有 brow / squint / sway 三条通道（该模型没这些参数），所以姿态表里也没有它们。
         poses: {
-          idle:      { brow:  0.00, browForm: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0, sway: 0.00 },
-          listening: { brow:  0.18, browForm: 0.04, mouthForm: -0.08, breath: 0.02, tilt:  1.6, sway: 0.00 },
-          thinking:  { brow: -0.12, browForm: 0.26, mouthForm:  0.12, breath: 0.00, tilt: -2.4, sway: 0.00 },
-          speaking:  { brow:  0.08, browForm: 0.02, mouthForm:  0.04, breath: 0.28, tilt:  0.6, sway: 0.00 },
-          ended:     { brow: -0.08, browForm: 0.10, mouthForm: -0.04, breath: 0.00, tilt: -1.4, sway: 0.00 }
+          idle:      { browForm: 0.00, smile: 0.00, mouthForm:  0.00, breath: 0.10, tilt:  0.0 },
+          listening: { browForm: 0.05, smile: 0.28, mouthForm: -0.10, breath: 0.02, tilt:  2.0 },
+          thinking:  { browForm: 0.32, smile: 0.00, mouthForm:  0.16, breath: 0.00, tilt: -3.0 },
+          speaking:  { browForm: 0.02, smile: 0.14, mouthForm:  0.04, breath: 0.30, tilt:  0.8 },
+          ended:     { browForm: 0.12, smile: 0.00, mouthForm: -0.04, breath: 0.00, tilt: -1.6 }
         },
 
         poseRate: 0.06,
 
-        // 漂移通道同步收窄（没有 smile / squint 可漂）
+        // 漂移通道同步收窄（没有 brow / squint 可漂）
         drift: {
-          brow:      { amp: 0.05, period: 7.7 },
-          mouthForm: { amp: 0.04, period: 11.3 }
+          smile:     { amp: 0.05, period: 9.1 },
+          mouthForm: { amp: 0.05, period: 11.7 }
         },
 
-        // 这个角色没有兽耳，"抖一下"改成眉毛/嘴形的短脉冲（更像"被戳了一下"）
-        flick: { minGap: 5.0, maxGap: 11.0, duration: 0.30, amp: 0.22 },
+        // 没有兽耳，也没有可程序化驱动的耳朵参数（耳Ｘ/耳Ｙ 全是物理输出），
+        // 所以"抖一下"只剩眉毛变形 + 嘴形的短脉冲 —— 更像"被戳了一下"。
+        flick: { minGap: 4.0, maxGap: 9.0, duration: 0.28, amp: 0.26 },
 
         cuePoseScale: 0.3
       },
@@ -467,33 +477,37 @@
 
       // ==================== 摸头反应 ====================
       //
-      // 与该档 idle.channels 的差异保持一致：
-      //   - sway 必须留 0：该模型的 ParamBodyAngleZ 是**物理输出**（physics3.json
-      //     会每帧覆写），写进去等于没写（通道表里本来也没有它）；
-      //   - smile / squint 也留 0：该模型没有 ParamEyeLSmile / ParamEyeLSquint
-      //     这些参数，写着不报错但毫无效果，留着只会让调参时困惑。
-      // 所以这档的手感主要靠 tilt（歪头）+ brow + mouthForm，再加上表情「脸红」。
+      // amp 的键必须用上面 channels 里的名字：这个模型没有 brow / squint / sway，
+      // 所以幅度写在 browForm / smile / mouthForm / tilt 上（银狼那档写在 brow 上）。
+      // 手感主要靠 tilt（歪头）+ browForm + mouthForm，再加上表情「爱心眼」。
       //
-      // headParts 由 tools/live2d_dump_parts.py 生成（13 个，**不含头发**）：
-      //   恶魔角 / 眉型 / 眼睛L / 眼睛R / 动物耳朵L / 动物耳朵R / 嘴巴 /
-      //   耳朵L / 脸蛋 / 耳朵R / 猫猫耳 / 兔兔耳 / R耳
-      // 不含「头发 / 发型1 / 发型F2 / 发型D2 / 发型蛋筒D2 / 后发短」：实测头发
-      // 单件 2378×2790 px，几乎覆盖整个模型（见脚本里 HAIR 那组说明）。
-      // 这档的「脸蛋」本身就是整个头，外扩 8% 足够。
-      // 剩下的替换件（猫猫耳 / 兔兔耳 / 发型预设）靠运行时的 opacity 过滤剔除。
+      // headParts 由 tools/live2d_dump_parts.py 生成，但这一档是**显式指定**的：
+      // 大肥鱼是 VTS 风格的绑定，部件名是 `角度XY-` / `部件15` / `大肥鱼.psd` 这种
+      // 编辑器占位名，关键词表只会误命中 `角度XY-` 里的「角」。脚本里 MANUAL_PARTS
+      // 那张表记录了按位置算出来的依据 —— 可见部件里只有这三个在上半身：
+      //   Part2 前发（刘海）x0.155..0.691 y0.096..0.423
+      //   Part3 左眼        x0.244..0.378 y0.305..0.390
+      //   Part4 右眼        x0.468..0.605 y0.305..0.389
+      // （Part5「大肥鱼.psd」是覆盖整个内容盒的主容器，51 个网格，不能选；
+      //   Part6/7/9/10 透明度为 0，运行时的 opacity 过滤会剔除。）
+      //
+      // padRatio 取 0.45，比银狼 / DS鲸鱼娘的 0.08 大得多：这三个部件的并集只到
+      // y0.42，而头（含头饰）一直延伸到内容盒顶部，不放大就"只摸得到眼睛"。
       pat: {
-        headParts: ['Part48', 'Part101', 'Part57', 'Part58', 'Part44', 'Part47',
-                    'Part69', 'Part68', 'Part46', 'Part45', 'Part98', 'Part95',
-                    'Part96'],
-        amp: { tilt: 3.0, brow: 0.16, smile: 0, squint: 0, mouthForm: 0.08, sway: 0 },
-        expression: '脸红',
+        headParts: ['Part2', 'Part3', 'Part4'],
+        padRatio: 0.45,
+        amp: { tilt: 3.0, browForm: 0.16, smile: 0.20, mouthForm: 0.08 },
+        expression: '爱心眼',
         holdMs: 1200,
-        // 档位表情取自模型自带的 44 个表情
+        // 档位表情取自模型自带的 16 个表情（这个模型**没有面部情绪表情**，
+        // 全是道具开关，所以"被摸头"只能挑最接近的两个：
+        //   爱心眼 = 害羞/喜欢；用户彻底怒了 = 连摸四下后的不高兴
+        // 注意「用户彻底怒了」除了怒还带一个气泡道具（Param96），会一起出现）
         tiers: [
-          { motion: 0, duration: 0.95, expression: '脸红', ampScale: 1.00, holdMs: 1200 },
-          { motion: 1, duration: 1.00, expression: '脸红', ampScale: 1.30, holdMs: 1200 },
-          { motion: 2, duration: 1.05, expression: '流汗', ampScale: 1.60, holdMs: 1400 },
-          { motion: 3, duration: 0.75, expression: '生气', ampScale: 1.15, holdMs: 9000 }
+          { motion: 0, duration: 0.90, expression: '爱心眼', ampScale: 1.00, holdMs: 1200 },
+          { motion: 1, duration: 1.00, expression: '爱心眼', ampScale: 1.30, holdMs: 1200 },
+          { motion: 2, duration: 1.05, expression: '用户彻底怒了', ampScale: 1.60, holdMs: 1400 },
+          { motion: 3, duration: 0.75, expression: '用户彻底怒了', ampScale: 1.15, holdMs: 9000 }
         ]
       }
     }

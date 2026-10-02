@@ -26,6 +26,7 @@
 | `domain/model/EmotionVoiceStyles.kt` | 表情 key → 这一句的语气（⛔ 表里不许写语速） |
 | `notify/` | 记忆提醒：调度（WorkManager）/ Worker / 通知与权限判断 |
 | `assets/*.txt` | 角色系统提示词（`silverwolf_prompt.txt` / `deepseek_prompt.txt`） |
+| `assets/live2d/js/bridge.js` | Live2D 桥接层：**`PROFILES` 里一档一个模型**（通道表 / 摸头命中盒 / 视线） |
 
 ## 几条硬约束（改之前先读代码里的长注释）
 
@@ -40,6 +41,15 @@
 7. **挂断后的总结必须跑在 `applicationScope`**：`viewModelScope` 会被 `onCleared()` 连根取消。
 8. **新的运行时权限要真的去申请**：加权限 → 在调用点用 `PermissionGate`（或同款"开关 + 请求 +
    拒绝回滚"）走一遍，只声明不申请等于做了个静默坏功能。
+9. **Live2D 写参数前先查 `physics3.json`**：**物理输出**参数每帧被物理覆写，写上去等于没写
+   （动作文件、程序化待机层都算）。同理，动作文件不许写 `ParamAngleX` / `ParamEyeBall*`
+   （视线只来自 focus 与呼吸）和待机层占用的通道 —— 有 `tools/live2d_motion_check.cjs` 兜着。
+10. **`model.focus()` 收的是世界坐标点，不是归一化偏移**：传 `(0,0)` 会被解成"舞台左上角"，
+    角色就满偏盯着左上角，而**数值读回一路正常**。桥接层统一走 `bridge.js` 的 `setGaze()`
+    （它按 `layout()` 的公式把偏移反解成世界坐标点）。
+11. **Live2D 的 profile id 与模型目录名可以不一致，别"顺手对齐"**：`live2dProfileId`
+    是角色 ↔ 形象的绑定键，自定义预设也会把这个字符串存进数据库 —— 改名会让已有预设找不到档位。
+    DeepSeek 酱就是 profile 叫 `deepseek`、模型在 `models/dafeiyu/`。
 
 ## 文档索引（`docs/`）
 
@@ -77,5 +87,5 @@
 | `advice.md` | 一次代码通读后的"可以做什么"建议清单，开头自称与 `plan1.txt`/`plan2.txt` 并列 —— 那两份 plan 已不在仓库里，而它列的部分缺陷（网络错误被 TTS 念出来、`RECORD_AUDIO` 缺运行时请求）已经修掉了。**内容仍然有效**（打断、焦点、延迟、分段 TTS 那几节都没做），但需要在读的时候自己剔除已完成项。 |
 | `可能会用？` | 一段对话记录（关于采样参数 key 与分段 TTS 的取舍）。文件名不是给人找的，内容里"等你确认"的两件事至今没结论。 |
 | `plan5.md` / `plan6.md` | 已执行完的 plan（AGENTS.md 说执行完就删）。`plan6.md` 里还留着一份真机验收清单，其中「冷启动权限请求」「设置页权限对话框」几项标着"未验"。 |
-| `plan7.md` / `plan8.md` | 当前这一轮的任务书与下一轮（给 DeepSeek 换模型，正文还是空的）。 |
-| `_tmp_ds/` | 6.4MB 第三方 Live2D 模型原始下载包（已 gitignore，解包后的副本在 assets 里）。不是 agent 文件，但重复占用磁盘；删了要重新下载才能再用 `tools/setup_*` 脚本。 |
+| `plan7.md` / `plan8.md` | 已执行完的 plan。`plan7.md` 是权限改造 + 两个角色提示词重做；`plan8.md` 是给 DeepSeek 换模型（大肥鱼）+ 修「两个角色都盯着左上角」。两份都可以删了。 |
+| `_tmp_ds/` | 第三方 Live2D 模型原始下载包（已 gitignore）。里面是**上一版** DS鲸鱼娘的解包副本；当前形象「大肥鱼」的原始包不在仓库里（在 `~/Downloads/大肥鱼.zip`）。不是 agent 文件，但重复占用磁盘；删了要重新下载才能再用 `tools/setup_*` 脚本。 |

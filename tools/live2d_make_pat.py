@@ -121,6 +121,18 @@ MODELS = {
         "body_x": None,
         "body_y": None,
     },
+    "dafeiyu": {
+        "dir": os.path.join(MODELS_ROOT, "dafeiyu"),
+        "model3": "dafeiyu.model3.json",
+        "physics": "dafeiyu.physics3.json",
+        "out_dir": "motions",
+        # ⚠️ 与 deepseek 同一情况：ParamBodyAngleX/Y/Z 全是物理输出（权重 100）。
+        # 该模型另有 ParamAngleX4/Y4/X5/Y5/Z4/Z5 是物理**输入**（cdi3 里叫"物理输入身体 X/XX…"），
+        # 理论上能做身体下沉，但没法离线验证观感 —— 先和 deepseek 一样只动头。
+        "pitch": "ParamAngleY",
+        "body_x": None,
+        "body_y": None,
+    },
 }
 
 

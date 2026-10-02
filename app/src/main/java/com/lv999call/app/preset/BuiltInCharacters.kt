@@ -46,7 +46,8 @@ object BuiltInCharacters {
     /**
      * DeepSeek 酱（大肥鱼）。
      *
-     * 形象来自 B 站 UP 主「氵六青」无偿分享的 DS鲸鱼娘 Live2D 模型（鼠控版）。
+     * 形象来自 B 站 UP 主「狐宫静」无偿分享的「大肥鱼」Live2D 模型（VTube Studio 皮套）。
+     * 安装见 `tools/setup_dafeiyu_model.py` —— 模型目录不入库，脚本才是唯一事实来源。
      * 发声锁定 MiMo 预置少女音「冰糖」—— 见 [TtsPolicy.PresetVoice]，
      * 通话时无视设置里选的 TTS 模型。
      */
@@ -55,8 +56,11 @@ object BuiltInCharacters {
         displayName = "DeepSeek酱",
         subtitle = "傲娇干饭鲸鱼娘",
         promptAsset = "deepseek_prompt.txt",
+        // ⚠️ profile id 与模型目录名**故意不一致**：它是角色 ↔ 形象的绑定键，
+        // 自定义预设也会把这个字符串存进数据库，改名会让已有预设找不到档位。
+        // 形象本身换成了 models/dafeiyu/（见 bridge.js 的 deepseek 档）。
         live2dProfileId = "deepseek",
-        modelPath = "models/deepseek/c_0120.model3.json",
+        modelPath = "models/dafeiyu/dafeiyu.model3.json",
         expressions = Live2DExpressions.DEEPSEEK,
         avatarResId = R.drawable.deepseek_avatar,
         cardIconResId = R.drawable.deepseek_avatar,
@@ -69,12 +73,13 @@ object BuiltInCharacters {
         // 留空 = TTS 请求里那条风格指令是空串，模型按预置音色自己的自然读法念；
         // 想调语气的用户在准备页里写自己的那一格即可（存进 characterTtsPrompts）。
         defaultTtsPrompt = "",
-        // 该模型没有"变身"这类一次性演出（只有 idle / 吹泡泡 / 自拍等循环动作），
-        // 硬播会在接通瞬间定格一个怪动作，所以关闭过场
+        // 大肥鱼同样没有"变身"这类一次性演出：它自带的是吃饭 / 吃token / token转 /
+        // sleep / Scene1 五条道具动画（注册在 Action 组，目前没有代码播它们），
+        // 硬当变身过场播会在接通瞬间定格一个怪动作，所以保持关闭。
         hasTransform = false,
         credit = ModelCredit(
-            label = "模型作者：氵六青 @bilibili",
-            url = "https://space.bilibili.com/11272072"
+            label = "模型作者：狐宫静 @bilibili",
+            url = "https://space.bilibili.com/261589131"
         ),
         prepareTitle = "DeepSeek酱",
         prepareDescription = "使用 DeepSeek 酱专属提示词与少女音，和爱干饭的鲸鱼娘聊天。",

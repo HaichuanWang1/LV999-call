@@ -573,25 +573,49 @@ function check(name, cond, extra = '') {
   check('DeepSeek 档位加载成功并上报 ready',
         !!dsInfo, JSON.stringify(rec.events.map(([t]) => t)));
   check('档位切换后模型路径随之改变（不是仍加载银狼模型）',
-        !!dsInfo && /deepseek/.test(dsInfo.modelUrl), dsInfo && dsInfo.modelUrl);
+        !!dsInfo && /dafeiyu/.test(dsInfo.modelUrl) && !/silverwolf/.test(dsInfo.modelUrl),
+        dsInfo && dsInfo.modelUrl);
   check('模型路径来自档位而非 ?model= 兜底',
-        !!dsInfo && dsInfo.modelUrl === 'models/deepseek/c_0120.model3.json',
+        !!dsInfo && dsInfo.modelUrl === 'models/dafeiyu/dafeiyu.model3.json',
         dsInfo && dsInfo.modelUrl);
 
-  // 该模型没有笑眼/眯眼参数（已扫 moc3 确认），档位里剔除了这两条通道
-  const dsBridge = fs.readFileSync(BRIDGE_PATH, 'utf8');
-  const dsProfile = (dsBridge.match(/deepseek:\s*\{([\s\S]*?)\n\s{4}\}\n\s{4}\}/) || [])[1] || '';
-  const dsChannels = (dsProfile.match(/channels:\s*\{([\s\S]*?)\}/) || [])[1] || '';
-  check('DeepSeek 档位的待机通道不含 smile（该模型无此参数）',
-        !/smile\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 120));
+  // 大肥鱼没有眯眼参数（ParamEyeLSquint / ParamEyeRSquint 不存在），也没有眉毛上下
+  // （ParamBrowLY / ParamBrowRY 不存在，只有 ParamBrow*Form），档位里剔除了这两条通道。
+  // 反过来 smile（ParamEyeLSmile / ParamEyeRSmile）**存在**，所以必须保留 ——
+  // 上一版模型没有它，这两条断言是换模型之后反转过来的。
+  //
+  // ⚠️ 回归：这里以前是「正则抠出 profile 片段 → 看里面有没有 `smile:`」，
+  //    而那个片段正则**从来就没匹配上**（拿到的永远是空串），于是"不含 smile"是
+  //    **空集恒真**的 —— 换成肯定式断言才暴露。所以下面先断言片段真的抠到了。
+  const dsSrc = fs.readFileSync(BRIDGE_PATH, 'utf8');
+  const dsAt = dsSrc.search(/\n {4}deepseek:\s*\{/);
+  const dsRest = dsAt >= 0 ? dsSrc.slice(dsAt + 1) : '';
+  const dsNext = dsRest.slice(1).search(/\n {4}[a-zA-Z_$][\w$]*:\s*\{/);
+  const dsProfile = dsNext >= 0 ? dsRest.slice(0, dsNext + 1) : dsRest;
+  const dsChannels = (dsProfile.match(/channels:\s*\{([\s\S]*?)\n\s*\}/) || [])[1] || '';
+  check('抠到了 DeepSeek 档位的源码片段（空串会让下面几条断言空集恒真）',
+        dsProfile.length > 0 && /channels:/.test(dsProfile), `${dsProfile.length} 字符`);
   check('DeepSeek 档位的待机通道不含 squint（该模型无此参数）',
-        !/squint\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 120));
+        !/\bsquint\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 160));
+  check('DeepSeek 档位的待机通道不含 brow（该模型只有 ParamBrow*Form）',
+        !/\bbrow\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 160));
+  check('DeepSeek 档位保留 smile（该模型有 ParamEyeLSmile / ParamEyeRSmile）',
+        /\bsmile\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 160));
+  check('DeepSeek 档位保留 browForm（该模型唯一的眉毛参数）',
+        /\bbrowForm\s*:/.test(dsChannels), dsChannels.replace(/\s+/g, ' ').slice(0, 160));
+  // amp / drift / flick 的键必须与 channels 同名，否则 applyPat 里 `amp[name]` 取不到值
+  check('DeepSeek 档位的摸头幅度写在 browForm 上（不是 brow）',
+        /amp:\s*\{[^}]*\bbrowForm\s*:/.test(dsProfile),
+        (dsProfile.match(/amp:\s*\{[^}]*\}/) || [''])[0]);
 
   // 实证：跑一段时间，确认那些参数一次都没被写过
   win.L2D.setState('listening');
   tick(240);
-  check('运行期确实没有写入 smile/squint 参数',
-        !('ParamEyeLSmile' in rec.params) && !('ParamEyeLSquint' in rec.params),
+  check('运行期确实没有写入 squint 参数（该模型没有它）',
+        !('ParamEyeLSquint' in rec.params),
+        JSON.stringify(Object.keys(rec.params)));
+  check('运行期确实写入了 smile 参数（该模型有它，通道有效）',
+        'ParamEyeLSmile' in rec.params,
         JSON.stringify(Object.keys(rec.params)));
 
   check('DeepSeek 档位没有变身演出 → playTransform 返回 false',
@@ -651,9 +675,11 @@ function check(name, cond, extra = '') {
     };
   }
 
+  // 键 = profile id（用来解析 bridge.js 里的档位），值 = [模型目录, 物理文件名]。
+  // deepseek 档的形象已经换成大肥鱼，所以目录与物理文件名都跟 profile id 不一样了。
   const PROFILE_MODELS = {
     silverwolf: ['silverwolf', 'silverwolf.physics3.json'],
-    deepseek: ['deepseek', 'c_0120.physics3.json'],
+    deepseek: ['dafeiyu', 'dafeiyu.physics3.json'],
   };
 
   for (const [pid, [dir, physFile]] of Object.entries(PROFILE_MODELS)) {

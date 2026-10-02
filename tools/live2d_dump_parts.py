@@ -35,6 +35,10 @@ MODELS = {
         ROOT, "app", "src", "main", "assets", "live2d", "models", "deepseek",
         "c_0120.cdi3.json",
     ),
+    "dafeiyu": os.path.join(
+        ROOT, "app", "src", "main", "assets", "live2d", "models", "dafeiyu",
+        "dafeiyu.cdi3.json",
+    ),
 }
 
 # 「贴着头的部件」：脸 / 五官 / 头饰 / 眉 / 眼 / 嘴 / 耳 / 角 …
@@ -61,6 +65,36 @@ EXCLUDE = (
     "脖", "眼镜", "镜", "贴纸", "水印", "切换", "预设", "手", "身", "腿", "脚",
     "尾", "桌", "包", "卡", "特效", "背景", "Neck", "Glass", "Sticker",
 )
+
+# ---------------------------------------------------------------------------
+# 关键词匹配不成立的模型：显式指定 headParts
+#
+# 「大肥鱼」是 VTS 风格的绑定，部件名是 `角度XY-` / `部件15` / `大肥鱼.psd` 这种
+# 编辑器占位名，既没有「头」「脸」也没有别的语义 —— 关键词表只会误命中
+# `角度XY-` 里的「角」，最后选出 4 个部件（其中两个还是隐藏件）。
+#
+# 所以这一档改用**位置**定：把每个部件下所有 drawable 的并集包围盒算出来、
+# 归一化到内容包围盒（0~1，左上原点），可见部件里只有这几个在上半身：
+#
+#     Part2  前发          x 0.155..0.691   y 0.096..0.423   ← 刘海
+#     Part3  左眼          x 0.244..0.378   y 0.305..0.390
+#     Part4  右眼          x 0.468..0.605   y 0.305..0.389
+#     ArtMesh69/70         x 0.17..0.68     y 0.47..0.73     ← 头以下（垂下来的头发）
+#     Part5  大肥鱼.psd    覆盖整个内容盒（51 个网格）—— 是主容器，**不能**选
+#     Part6/7/9/10        透明度 0（没启用的预设 / 米饭道具），运行时会跳过
+#
+# 于是「头」= 刘海 + 双眼；并集只到 y0.42，而头一直延伸到画布顶部，
+# 所以外扩交给 profile 的 padRatio（该模型取 0.45，比银狼/DS鲸鱼娘的 0.08 大得多）。
+#
+# ⚠️ 换模型版本后要重算这张表 —— 部件 id 会变。
+# 复算方式：`node tools/live2d_dump_part_bounds.cjs <目录名>` 会把每个部件的并集
+# 包围盒（归一化到内容包围盒，与本表同一个坐标空间）连同物理角色一起打出来。
+# 它用真 Cubism Core 离线读 moc3，按 drawables.parentPartIndices 归组；
+# 注意顶点是**模型单位**，换算到画布像素要**乘** canvasinfo.PixelsPerUnit。
+# ---------------------------------------------------------------------------
+MANUAL_PARTS = {
+    "dafeiyu": ["Part2", "Part3", "Part4"],
+}
 
 
 def pick(path, with_hair=False):
@@ -104,6 +138,11 @@ def main() -> int:
             print(f"[skip] {tag}: 找不到 {path}", file=sys.stderr)
             continue
         parts, chosen, skipped, hair = pick(path, args.with_hair)
+        if tag in MANUAL_PARTS:
+            names = {str(p.get("Id")): str(p.get("Name", "")) for p in parts}
+            chosen = [(pid, names.get(pid, "?")) for pid in MANUAL_PARTS[tag]]
+            # 关键词那两栏（头发组 / 被排除）对显式指定的档没有意义，别印出来自相矛盾
+            skipped, hair = [], []
         if args.json:
             ids = ", ".join("'%s'" % p for p, _ in chosen)
             print(f"        headParts: [{ids}],")

@@ -45,19 +45,30 @@
 > **Haru 仅供本地技术验证与开发调试**，请勿随产品分发或商用。
 > 正式发布前必须替换为自有或已获授权的模型。
 
-### 内置角色模型（`models/silverwolf/`、`models/deepseek/`）
+### 内置角色模型（`models/silverwolf/`、`models/dafeiyu/`）
 
 这两个模型是**内置角色**的形象，同样处于 `.gitignore` 覆盖范围内，需本地获取。
 
 | 模型 | 角色 | 作者 | 获取方式 | 作者声明 |
 |------|------|------|---------|---------|
 | `models/silverwolf/` | 银狼 | B 站 @槿絮OuO | 自备 | 按作者要求标注来源 |
-| `models/deepseek/` | DeepSeek酱（DS鲸鱼娘） | B 站 @氵六青（11272072） | `python tools/setup_deepseek_model.py --zip <DS鲸鱼娘.zip>` | 商用直播 ✓ / 自印物料 ✓ / 禁止盗用与出售，模型为无偿分享 |
+| `models/dafeiyu/` | DeepSeek酱（大肥鱼） | B 站 @狐宫静（261589131） | `python tools/setup_dafeiyu_model.py --zip <大肥鱼.zip>` | 公开免费皮套；使用说明未附授权条款，按"署名 + 不商用转售"处理 |
 
-DeepSeek 酱的模型**必须用安装脚本**而不是手动拷贝：作者的 `model3.json`
-里没有 `Motions` 与 `Expressions` 段（44 个表情与 7 条动作都是"裸文件"），
-不补注册的话 LLM 调表情 / 播动作会全部静默失效。脚本同时把中文文件名
-ASCII 化（AAPT2 在 Windows 上对 assets 里的非 ASCII 文件名支持不一致）。
+`models/deepseek/`（上一版 DS鲸鱼娘，作者 B 站 @氵六青 11272072）**已经不参与运行** ——
+profile 与 `BuiltInCharacters.modelPath` 都指向 `models/dafeiyu/` 了。目录保留只是
+为了回滚（`python tools/setup_deepseek_model.py --remove` 可以卸掉）。
+
+DeepSeek 酱的模型**必须用安装脚本**而不是手动拷贝，两版模型各有各的原因：
+
+- 大肥鱼是 **VTube Studio 模型**：作者的 `model3.json` 里没有 `Motions` 段与
+  `Expressions` 段，`EyeBlink` / `LipSync` 两个组还是**空数组**；文件名全中文；
+  贴图是 4096×2048 + 两张 **4096×8192**（超过很多手机的 `GL_MAX_TEXTURE_SIZE`）。
+  脚本负责补注册表、ASCII 化文件名、按长边 4096 降采样。
+- 上一版 DS鲸鱼娘：`model3.json` 里没有 `Motions` 与 `Expressions` 段
+  （44 个表情与 7 条动作都是"裸文件"），不补注册的话 LLM 调表情 / 播动作会全部静默失效。
+
+两版脚本都会把中文文件名 ASCII 化 —— AAPT2 在 Windows 上对 assets 里的非 ASCII
+文件名支持不一致。
 
 ### 角色头像
 

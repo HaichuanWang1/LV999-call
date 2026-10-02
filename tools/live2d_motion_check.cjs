@@ -17,22 +17,71 @@
  * live2dcubismcore.min.js 是**自包含的 asm.js** 构建（不依赖 _em_module.wasm），
  * 用 new Function 把它的局部变量挂到 global 上即可拿到 API，离线可用。
  *
- * 运行：node tools/live2d_motion_check.cjs
+ * 运行：node tools/live2d_motion_check.cjs              # 查内置角色用到的全部模型
+ *      node tools/live2d_motion_check.cjs dafeiyu      # 只查某一个目录
  * 模型未随仓库分发（见 .gitignore），缺失时自动跳过，不影响 CI。
+ *
+ * 校验范围
+ * --------
+ * 默认**跟着 BuiltInCharacters.kt 的 modelPath 走**，不是"磁盘上有什么就查什么"：
+ * `models/` 下还躺着 Live2D 官方示例 haru（它的曲线用 `Target: Model` / `PartOpacity`，
+ * 与下面"曲线只写 Parameter"的假设不符，扫进来全是假失败）以及被换掉的旧模型。
  */
 
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const MODEL_DIR = path.join(
-  ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'models', 'silverwolf'
-);
-const MODEL_JSON = path.join(MODEL_DIR, 'silverwolf.model3.json');
-const MOC = path.join(MODEL_DIR, 'silverwolf.moc3');
-const PHYSICS = path.join(MODEL_DIR, 'silverwolf.physics3.json');
+const MODELS_ROOT = path.join(ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'models');
 const CORE = path.join(ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'lib',
                        'live2dcubismcore.min.js');
+
+/**
+ * 内置角色**实际使用**的模型（从 BuiltInCharacters.kt 的 modelPath 抠出来）
+ *
+ * 为什么不直接扫 models/ 下所有目录：那个目录里还会躺着
+ *   - `haru`：Live2D 官方示例，只用于技术验证（它的动作文件用 `Target: Model` /
+ *     `PartOpacity`，本项目的假设"曲线只写 Parameter"对它不成立 → 全是假失败）；
+ *   - 被换掉的旧模型（例如 DS鲸鱼娘 c_0120，profile 已经不指向它了）。
+ * 和 check_expression_names.cjs 同一思路：**校验范围跟着角色定义走**，
+ * 而不是跟着磁盘上有什么走。
+ * 想单独查某个装了但没被引用的模型：`node tools/live2d_motion_check.cjs <目录名>`。
+ */
+function modelsUsedByApp() {
+  const ktPath = path.join(ROOT, 'app', 'src', 'main', 'java', 'com', 'lv999call',
+                            'app', 'preset', 'BuiltInCharacters.kt');
+  if (!fs.existsSync(ktPath)) return [];
+  const kt = fs.readFileSync(ktPath, 'utf8');
+  const out = [];
+  for (const m of kt.matchAll(/modelPath\s*=\s*"([^"]+)"/g)) {
+    // 形如 "models/<目录>/<文件>.model3.json"
+    const parts = m[1].split('/');
+    if (parts.length < 2) continue;
+    out.push({ dir: parts[parts.length - 2], model3File: parts[parts.length - 1] });
+  }
+  return out;
+}
+
+/** 把「目录名（+可选 model3 文件名）」解析成一个可校验的模型描述；缺文件返回 null */
+function resolveModel(dirName, model3File) {
+  const dir = path.join(MODELS_ROOT, dirName);
+  if (!fs.existsSync(dir)) return null;
+  let files;
+  try { files = fs.readdirSync(dir); } catch (e) { return null; }
+  const model3 = model3File && files.indexOf(model3File) >= 0
+    ? model3File
+    : files.find((f) => f.endsWith('.model3.json'));
+  const moc = files.find((f) => f.endsWith('.moc3'));
+  if (!model3 || !moc) return null;
+  const physics = files.find((f) => f.endsWith('.physics3.json'));
+  return {
+    tag: dirName,
+    dir,
+    model3: path.join(dir, model3),
+    moc: path.join(dir, moc),
+    physics: physics ? path.join(dir, physics) : null,
+  };
+}
 
 // 由 bridge.js 的程序化待机层每帧写入的通道：动作文件再写一遍会被覆盖
 // （那层写在 afterMotionUpdate，晚于动作更新）。与 tools/live2d_make_idle.py
@@ -218,133 +267,153 @@ function inspectMotion(file, params, physics) {
 
 // ------------------------------------------------------------------- 主流程
 (async () => {
-  if (!fs.existsSync(MODEL_JSON) || !fs.existsSync(MOC)) {
+  // 可选：只查某一个模型（`node tools/live2d_motion_check.cjs dafeiyu`）
+  const only = process.argv.slice(2).find((a) => !a.startsWith('-'));
+  const models = only
+    ? [resolveModel(only)].filter(Boolean)
+    : modelsUsedByApp().map((u) => resolveModel(u.dir, u.model3File)).filter(Boolean);
+  if (!models.length) {
     console.log('跳过：本地没有模型文件（模型未随仓库分发，见 .gitignore）');
     console.log('      需要时先跑 tools/setup_live2d_assets.sh，再放好自己的模型。');
+    if (only) console.log(`      当前也没装名为 ${only} 的模型。`);
     process.exit(0);
   }
 
-  console.log('\n[1] 载入 Cubism Core 与 moc3');
+  console.log('[0] 载入 Cubism Core');
   const core = loadCore();
   const ready = await waitCore(core);
   check('Cubism Core 初始化完成', ready);
   if (!ready) process.exit(1);
   const v = core.Version.csmGetVersion();
   console.log(`  core: ${(v >>> 16)}.${(v >>> 8) & 0xff}.${v & 0xff}（0x${v.toString(16)}）`);
+  console.log(`  待查模型 ${models.length} 个：${models.map((m) => m.tag).join(', ')}`);
 
-  const buf = fs.readFileSync(MOC);
-  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-  const model = core.Model.fromMoc(core.Moc.fromArrayBuffer(ab));
-  const P = model.parameters;
-  const params = {};
-  for (let i = 0; i < P.count; i++) {
-    params[P.ids[i]] = { min: P.minimumValues[i], max: P.maximumValues[i], def: P.defaultValues[i] };
-  }
-  check('moc3 参数表已读出', P.count > 0, String(P.count));
-  console.log(`  参数 ${P.count} 个 / 部位 ${model.parts.count} 个 / drawable ${model.drawables.count} 个`);
+  for (const m of models) {
+    console.log('\n' + '#'.repeat(64));
+    console.log(`# 模型 ${m.tag}   ${path.relative(ROOT, m.dir)}`);
+    console.log('#'.repeat(64));
 
-  const phys = { inputs: new Set(), outputs: new Set() };
-  if (fs.existsSync(PHYSICS)) {
-    const pj = JSON.parse(fs.readFileSync(PHYSICS, 'utf8'));
-    for (const st of pj.PhysicsSettings || []) {
-      for (const i of st.Input || []) phys.inputs.add(i.Source.Id);
-      for (const o of st.Output || []) phys.outputs.add(o.Destination.Id);
+    console.log('\n[1] 载入 moc3 与物理表');
+    const buf = fs.readFileSync(m.moc);
+    const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    const model = core.Model.fromMoc(core.Moc.fromArrayBuffer(ab));
+    const P = model.parameters;
+    const params = {};
+    for (let i = 0; i < P.count; i++) {
+      params[P.ids[i]] = { min: P.minimumValues[i], max: P.maximumValues[i], def: P.defaultValues[i] };
     }
-  }
-  console.log(`  物理：输入 ${phys.inputs.size} 个 / 输出 ${phys.outputs.size} 个`);
+    check(`${m.tag}: moc3 参数表已读出`, P.count > 0, String(P.count));
+    console.log(`  参数 ${P.count} 个 / 部位 ${model.parts.count} 个 / drawable ${model.drawables.count} 个`);
 
-  console.log('\n[2] 动作组注册');
-  const modelJson = JSON.parse(fs.readFileSync(MODEL_JSON, 'utf8'));
-  const groups = (modelJson.FileReferences || {}).Motions || {};
-  const names = Object.keys(groups);
-  check('注册了动作组', names.length > 0, names.join(','));
-  check('自带动作组未被破坏（Transform/AngryLoop/Sleep）',
-        (groups.Transform || []).length === 2 &&
-        (groups.AngryLoop || []).length === 1 &&
-        (groups.Sleep || []).length === 1,
-        JSON.stringify(names.map((n) => `${n}:${groups[n].length}`)));
-  if (groups.TransformOnce) {
-    check('变身过场组 TransformOnce 有 2 条（进入 + 还原）',
-          groups.TransformOnce.length === 2,
-          JSON.stringify(groups.TransformOnce.map((d) => d.File)));
-  }
-  if (groups.PatOnce) {
-    check('摸头组 PatOnce 有 4 档（连点档位各一条）',
-          groups.PatOnce.length === 4,
-          JSON.stringify(groups.PatOnce.map((d) => d.File)));
-  } else {
-    warn('没有 PatOnce 组：摸头只剩程序化叠层，动作幅度会很轻'
-       + '（跑 python tools/live2d_make_pat.py 生成）');
-  }
-
-  const hasIdle = !!groups.Idle && groups.Idle.length > 0;
-  console.log(hasIdle
-    ? `  Idle 组 ${groups.Idle.length} 条（运行库会自动随机播放）`
-    : '  WARN 没有 Idle 组：运行库不会播放任何待机动作');
-
-  console.log('\n[3] 逐个动作文件校验');
-  let fileFail = 0;
-  for (const [group, defs] of Object.entries(groups)) {
-    for (const def of defs) {
-      const file = path.join(MODEL_DIR, def.File);
-      const label = `${group}/${path.basename(def.File)}`;
-      if (!fs.existsSync(file)) {
-        check(`${label} 文件存在`, false, file);
-        fileFail++;
-        continue;
+    const phys = { inputs: new Set(), outputs: new Set() };
+    if (m.physics && fs.existsSync(m.physics)) {
+      const pj = JSON.parse(fs.readFileSync(m.physics, 'utf8'));
+      for (const st of pj.PhysicsSettings || []) {
+        for (const i of st.Input || []) phys.inputs.add(i.Source.Id);
+        for (const o of st.Output || []) phys.outputs.add(o.Destination.Id);
       }
-      let info;
-      try {
-        info = inspectMotion(file, params, phys);
-      } catch (e) {
-        check(`${label} 可解析`, false, e.message);
-        fileFail++;
-        continue;
-      }
-      check(`${label} 段结构与元数据自洽`, info.problems.length === 0,
-            info.problems.slice(0, 3).join(' | '));
-      const outCurves = Object.keys(info.roles).filter((id) => info.roles[id] === 'output');
-      const loop = info.meta.Loop === true;
-      const base = path.basename(def.File);
-      // 我们自己生成的动作（待机 Idle 组 + 摸头 PatOnce 组）：要求比作者原文件严
-      const ours = /^idle_/.test(base) || /^pat_lv/.test(base);
-      const copy = /^transform_(in|out)/.test(base);
-
-      // 值域越界：我们自己的文件必须干净；作者原文件只提示（不是我们改的，
-      // 但值得知道 —— 例如 m_transform_2 的 Param172 写着 10~20 而 moc3 上限是 10，
-      // 结果是那半段特效一直贴在最大值上，看起来"没在动"）
-      if (info.rangeIssues.length) {
-        if (ours) check(`${label} 曲线值域未超出 moc3 范围`, false, info.rangeIssues.join(' | '));
-        else warn(`${label} 有值域越界（作者原文件，仅提示）：${info.rangeIssues.join(' | ')}`);
-      } else if (ours) {
-        check(`${label} 曲线值域未超出 moc3 范围`, true);
-      }
-
-      // 程序化待机自己生成的动作有额外要求：
-      //   - 非循环（循环会永远播同一条，失去"偶发"感）
-      //   - 不写物理输出参数（写了不生效）
-      //   - 不写程序化待机层占用的通道（那层每帧覆盖）
-      if (ours) {
-        check(`${label} 是非循环动作（播完换下一条）`, !loop, String(info.meta.Loop));
-        check(`${label} 未写物理输出参数`, outCurves.length === 0, outCurves.join(','));
-        const owned = Object.keys(info.roles).filter((id) => OWNED_BY_IDLE_LAYER.indexOf(id) >= 0);
-        check(`${label} 未与程序化待机层抢通道`, owned.length === 0, owned.join(','));
-        const gaze = Object.keys(info.roles).filter((id) => GAZE_PARAMS.indexOf(id) >= 0);
-        check(`${label} 未抢视线通道（yaw / 眼球）`, gaze.length === 0, gaze.join(','));
-      } else if (copy) {
-        // 这些是"只改 Loop"的副本，唯一要求就是别再变回循环
-        check(`${label} 是一次性动作（Loop: false）`, !loop, String(info.meta.Loop));
-      } else if (outCurves.length) {
-        warn(`${label} 有 ${outCurves.length} 条曲线写着物理输出参数（作者原文件，仅提示）：${outCurves.slice(0, 4).join(',')}`);
-      }
-      console.log(`    ${loop ? 'loop ' : 'once '} ${String(info.meta.Duration).padEnd(5)}s ` +
-                  `曲线 ${info.curves.length} 段 ${info.counts.nseg} ` +
-                  `参数 ${Object.keys(info.roles).join(',')}`);
     }
+    console.log(`  物理：输入 ${phys.inputs.size} 个 / 输出 ${phys.outputs.size} 个`);
+
+    console.log('\n[2] 动作组注册');
+    const modelJson = JSON.parse(fs.readFileSync(m.model3, 'utf8'));
+    const groups = (modelJson.FileReferences || {}).Motions || {};
+    const names = Object.keys(groups);
+    check(`${m.tag}: 注册了动作组`, names.length > 0, names.join(','));
+    // 这三组是银狼模型自带的一次性演出，我们的生成脚本只加副本、不该动原文件
+    if (m.tag === 'silverwolf') {
+      check('silverwolf: 自带动作组未被破坏（Transform/AngryLoop/Sleep）',
+            (groups.Transform || []).length === 2 &&
+            (groups.AngryLoop || []).length === 1 &&
+            (groups.Sleep || []).length === 1,
+            JSON.stringify(names.map((n) => `${n}:${groups[n].length}`)));
+    }
+    if (groups.TransformOnce) {
+      check(`${m.tag}: 变身过场组 TransformOnce 有 2 条（进入 + 还原）`,
+            groups.TransformOnce.length === 2,
+            JSON.stringify(groups.TransformOnce.map((d) => d.File)));
+    }
+    if (groups.PatOnce) {
+      check(`${m.tag}: 摸头组 PatOnce 有 4 档（连点档位各一条）`,
+            groups.PatOnce.length === 4,
+            JSON.stringify(groups.PatOnce.map((d) => d.File)));
+    } else {
+      warn(`${m.tag}: 没有 PatOnce 组 —— 摸头只剩程序化叠层，动作幅度会很轻`
+         + `（跑 python tools/live2d_make_pat.py --model ${m.tag}）`);
+    }
+
+    const hasIdle = !!groups.Idle && groups.Idle.length > 0;
+    console.log(hasIdle
+      ? `  Idle 组 ${groups.Idle.length} 条（运行库会自动随机播放）`
+      : '  Idle 组：无 —— 待机交给 bridge.js 的程序化待机层 + 运行库呼吸/眨眼'
+        + '（大肥鱼就是这种：作者自带的 idle 写了 ParamAngleX/ParamAngleZ，'
+        + '与视线约定和待机层抢道，安装脚本刻意不注册）');
+
+    console.log('\n[3] 逐个动作文件校验');
+    let fileFail = 0;
+    for (const [group, defs] of Object.entries(groups)) {
+      for (const def of defs) {
+        const file = path.join(m.dir, def.File);
+        const label = `${m.tag} ${group}/${path.basename(def.File)}`;
+        if (!fs.existsSync(file)) {
+          check(`${label} 文件存在`, false, file);
+          fileFail++;
+          continue;
+        }
+        let info;
+        try {
+          info = inspectMotion(file, params, phys);
+        } catch (e) {
+          check(`${label} 可解析`, false, e.message);
+          fileFail++;
+          continue;
+        }
+        check(`${label} 段结构与元数据自洽`, info.problems.length === 0,
+              info.problems.slice(0, 3).join(' | '));
+        const outCurves = Object.keys(info.roles).filter((id) => info.roles[id] === 'output');
+        const loop = info.meta.Loop === true;
+        const base = path.basename(def.File);
+        // 我们自己生成的动作（待机 Idle 组 + 摸头 PatOnce 组）：要求比作者原文件严
+        const ours = /^idle_/.test(base) || /^pat_lv/.test(base);
+        const copy = /^transform_(in|out)/.test(base);
+
+        // 值域越界：我们自己的文件必须干净；作者原文件只提示（不是我们改的，
+        // 但值得知道 —— 例如 m_transform_2 的 Param172 写着 10~20 而 moc3 上限是 10，
+        // 结果是那半段特效一直贴在最大值上，看起来"没在动"）
+        if (info.rangeIssues.length) {
+          if (ours) check(`${label} 曲线值域未超出 moc3 范围`, false, info.rangeIssues.join(' | '));
+          else warn(`${label} 有值域越界（作者原文件，仅提示）：${info.rangeIssues.join(' | ')}`);
+        } else if (ours) {
+          check(`${label} 曲线值域未超出 moc3 范围`, true);
+        }
+
+        // 程序化待机自己生成的动作有额外要求：
+        //   - 非循环（循环会永远播同一条，失去"偶发"感）
+        //   - 不写物理输出参数（写了不生效）
+        //   - 不写程序化待机层占用的通道（那层每帧覆盖）
+        if (ours) {
+          check(`${label} 是非循环动作（播完换下一条）`, !loop, String(info.meta.Loop));
+          check(`${label} 未写物理输出参数`, outCurves.length === 0, outCurves.join(','));
+          const owned = Object.keys(info.roles).filter((id) => OWNED_BY_IDLE_LAYER.indexOf(id) >= 0);
+          check(`${label} 未与程序化待机层抢通道`, owned.length === 0, owned.join(','));
+          const gaze = Object.keys(info.roles).filter((id) => GAZE_PARAMS.indexOf(id) >= 0);
+          check(`${label} 未抢视线通道（yaw / 眼球）`, gaze.length === 0, gaze.join(','));
+        } else if (copy) {
+          // 这些是"只改 Loop"的副本，唯一要求就是别再变回循环
+          check(`${label} 是一次性动作（Loop: false）`, !loop, String(info.meta.Loop));
+        } else if (outCurves.length) {
+          warn(`${label} 有 ${outCurves.length} 条曲线写着物理输出参数（作者原文件，仅提示）：${outCurves.slice(0, 4).join(',')}`);
+        }
+        console.log(`    ${loop ? 'loop ' : 'once '} ${String(info.meta.Duration).padEnd(5)}s ` +
+                    `曲线 ${info.curves.length} 段 ${info.counts.nseg} ` +
+                    `参数 ${Object.keys(info.roles).join(',')}`);
+      }
+    }
+    check(`${m.tag}: 所有注册的动作文件都可加载`, fileFail === 0, `${fileFail} 个有问题`);
   }
-  check('所有注册的动作文件都可加载', fileFail === 0, `${fileFail} 个有问题`);
 
   console.log('\n' + '='.repeat(52));
+  console.log(`检查了 ${models.length} 个模型：${models.map((m) => m.tag).join(', ')}`);
   console.log(`通过 ${pass} / 失败 ${fail}`);
   process.exit(fail === 0 ? 0 : 1);
 })();

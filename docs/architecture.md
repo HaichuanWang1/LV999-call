@@ -72,12 +72,16 @@ app/src/main/assets/live2d/  # Live2D 资源
 
 tools/
 ├── setup_live2d_assets.sh     # 一键获取 lib/ 与示例模型
-├── setup_deepseek_model.py    # 注册 DeepSeek酱 模型的动作/表情组（可重复执行）
+├── setup_dafeiyu_model.py     # 安装「大肥鱼」：ASCII 化 + 贴图降采样 + 补注册表（可重复执行）
+├── setup_deepseek_model.py    # 上一版 DS鲸鱼娘模型（已不参与运行，留着可回滚）
 ├── live2d_postprocess.py      # 下载后处理（剥离 sourceMapping 等）
 ├── live2d_strip_watermark.py  # 剔除图集里的署名水印（坐标由 moc3 解析得到）
 ├── live2d_make_idle.py        # 生成待机动作（Idle 组），改模型文件的可重复来源
+├── live2d_make_pat.py         # 生成摸头动作（PatOnce 组，4 档）
+├── live2d_dump_parts.py       # 摸头命中盒的头部部件表（从 cdi3.json 按关键词生成）
+├── live2d_dump_part_bounds.cjs # 按位置列出部件包围盒（关键词失效时用它定 headParts）
 ├── live2d_motion_check.cjs    # 动作文件校验（真 Cubism Core + moc3 值域/物理表交叉核对）
-├── live2d_selftest.cjs        # 桥接层自测（45 项断言）
+├── live2d_selftest.cjs        # 桥接层自测（129 项断言）
 ├── live2d_fallback_test.cjs   # 降级路径测试（9 项断言）
 ├── check_expression_names.cjs # 表情白名单 ↔ 模型文件一致性校验
 ├── audio_pipe_test.sh         # AudioPipe 自测（12 项断言，JVM 直跑真实 .class）

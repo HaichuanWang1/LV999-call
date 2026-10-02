@@ -49,31 +49,63 @@ Compose (CallScreen)
 bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输出：双马尾、
 袖子、裙子、蝴蝶结、兽耳、睫毛、翅膀……全由头身角度驱动）。
 
-### DeepSeek酱 模型（DS鲸鱼娘）
+### DeepSeek酱 模型（大肥鱼）
+
+形象从最初的「DS鲸鱼娘 c_0120」换成了 B 站 UP 主「狐宫静」无偿分享的「大肥鱼」
+（VTube Studio 皮套）。**profile id 仍然是 `deepseek`** —— 它是「角色 ↔ 形象」的绑定键
+（`BuiltInCharacters.live2dProfileId`，自定义预设也会把这个字符串存进数据库），
+跟着模型改名会让已经存在的预设找不到档位。
+
+安装：`python tools/setup_dafeiyu_model.py --zip <大肥鱼.zip>`。
+模型目录不入库（见下文「资源不入库」），所以**脚本才是这次改动的唯一事实来源**。
 
 与银狼完全不同的形态，差异全部由 profile 承载（下游逻辑零改动）：
 
-| 维度 | 银狼 | DeepSeek酱 |
+| 维度 | 银狼 | DeepSeek酱（大肥鱼） |
 |---|---|---|
-| 动作组 | `Transform` / `AngryLoop` / `Sleep`（**无 `Idle`**） | **`Idle`**（真待机动作，4s / 89 曲线）+ `Action` ×6（吹泡泡 / 碰水 / 自拍 / 开盖 / 番茄酱…） |
+| 动作组 | `Transform` / `AngryLoop` / `Sleep`（**无 `Idle`**） | **无 `Idle`**（见下第 3 条）+ `Action` ×5（吃饭 / 吃token / token转 / sleep / Scene1） |
 | 一次性演出 | `TransformOnce`（变身，接通 + 挂断都播） | 无 → `hasTransform = false`、`transform.enabled = false` |
-| 表情数 | 15（含 4 个姿势 key） | 44（大部分是**桌宠道具开关**，白名单筛出 19 个） |
-| 笑眼 / 眯眼参数 | 有 | **不存在**（已扫 moc3 确认）→ 通道表去掉 `smile` / `squint` |
-| 身体摆动 | 可程序化驱动 | **物理输出**（`physics3.json` setting3 / setting1，权重 100）→ 去掉 `sway` 通道，交给物理 |
+| 表情数 | 15（含 4 个姿势 key） | 16，但**全是 VTS 道具开关**（钢盆 / token / 气泡 / 滑动变阻器 ×6 / 星星眼 / 爱心眼 / 用户彻底怒了）→ 白名单只剩 11 个 |
+| 眯眼 / 眉毛上下参数 | 有 | **不存在**（已扫 moc3 确认）→ 通道表去掉 `squint` / `brow`，只留 `browForm` |
+| 笑眼参数 | 有 | **有**（与上一版模型相反，`smile` 通道保留） |
+| 身体摆动 | 可程序化驱动 | **物理输出**（`ParamBodyAngleX/Y/Z` 权重 100）→ 去掉 `sway` 通道，交给物理 |
+| 摸头命中盒 | 13 个语义部件 | **显式指定 3 个**（`Part2` 前发 + `Part3/4` 左右眼）+ `padRatio` 0.45 |
 
-- **有真 `Idle` 动作**：运行库会自动循环播放，所以程序化待机层只做「状态联动的微表情」，
-  与动作层分工 —— 姿态幅度也刻意比银狼再小一点（动作文件会写大量道具/头发参数，叠大会打架）
-- 表情白名单按「角色情绪 + 干饭萌点」筛（脸红 / 生气 / 吐魂 / 呆呆眼 / 闭眼口水 / 蛋包饭…），
-  没把 44 个全丢给 LLM —— 既会乱来，提示词也会膨胀好几倍
-- 署名：模型作者「氵六青 @bilibili」，展示在**主板块底部**（`BuiltInCharacter.credit`）。
-  刻意放在舞台区**之外**：舞台被 WebView 占满，署名放进去就是点不动的死链接，
-  还会和摸头的手势抢同一次触摸。
+三件必须知道的事：
 
-⚠️ **写参数前先查物理表**：moc3 的 358 个参数里有 **185 个是物理输出**，
+1. **作者给的是 VTube Studio 模型，直接塞进 assets 播不了。** 它的 `model3.json`
+   只有 Moc / Textures / Physics / DisplayInfo —— **没有 Motions 段、没有 Expressions 段**，
+   而且 `EyeBlink` / `LipSync` 两个组是**空数组**（不补的话眨眼与口型整条失效）。
+   pixi-live2d-display 只认注册过的条目，不注册就全部静默失效（pixi 找不到就忽略，不报错）。
+   文件名还全是中文（`大肥鱼.moc3` / `exp/星星眼.exp3.json`），而 AAPT2 在 Windows 上对
+   assets 里的非 ASCII 资源名支持不一致 —— 所以安装脚本干三件事：ASCII 化文件名、
+   补全注册表、降采样贴图。
+2. **贴图必须降采样。** 作者原图是 4096×2048 + 两张 **4096×8192**（共 34.7MB）。
+   4096×8192 超过很多手机的 `GL_MAX_TEXTURE_SIZE`（常见上限 4096），上传失败的表现是
+   **整块贴图变黑 / 模型不显示**；就算支持，三张加起来也是 ~290MB 显存。脚本按
+   「长边 ≤ 4096」逐页等比缩小（→ 2048×4096），装完整个目录 10.9MB。
+3. **没有 `Idle` 组是刻意的。** 作者自带的 `motion/idle.motion3.json` 写了
+   `ParamAngleX`（头 yaw）与 `ParamAngleZ`：前者与「视线只来自 focus / 呼吸」的硬性约定
+   冲突（见下文「视线」），后者与程序化待机层的 `tilt` 通道抢道。所以安装脚本不注册它 ——
+   待机 = 程序化待机层 + 运行库呼吸 + 眨眼，与银狼同一路线。
+   （银狼那档的 `Idle` 组是 `tools/live2d_make_idle.py` 生成的，而那个脚本目前只认银狼：
+   它的动作定义与通道预算都写死了，且它写 `ParamBodyAngleX/Y` —— 在大肥鱼上是物理输出。）
+
+⚠️ **这个模型一个面部情绪表情都没有**：16 个「表情」写的全是 `Param89~101` 这些道具
+开关参数。所以 LLM 的 `[[e:…]]` 只能挑出「星星眼 / 爱心眼 / 用户彻底怒了」三条，
+情绪表现力比上一版模型（44 个表情，含脸红 / 生气 / 哭 / 流汗 / 晕晕）弱很多 ——
+这是换形象的代价，不是配置漏了。另外 `滑动变阻器`（第 1 个档位）的 `Parameters` 是
+**空数组**，触发它不会有任何变化，所以刻意没进标签表（另外 5 个档位在）。
+
+- 署名：模型作者「狐宫静 @bilibili」（`space.bilibili.com/261589131`），展示在
+  **主板块底部**（`BuiltInCharacter.credit`）。刻意放在舞台区**之外**：舞台被 WebView
+  占满，署名放进去就是点不动的死链接，还会和摸头的手势抢同一次触摸。
+
+⚠️ **写参数前先查物理表**：大肥鱼 moc3 的 138 个参数里有 **90 个是物理输出**，
 物理每帧都会覆盖它们，动作曲线或参数写上去等于没写。可安全驱动的是
-「物理输入 / 空闲」通道，例如 `ParamBrow*`、`ParamEye*Smile`、`ParamMouthForm`、
-`ParamAngleZ`、`ParamBodyAngleZ`；手与手臂（`Param90~99`）、裙子、袖子、蝴蝶结
-全是物理输出，**做不了程序化动画**，只能靠 `key` 开关换姿势。
+「物理输入 / 空闲」通道，例如 `ParamBrow*Form`、`ParamEye*Smile`、`ParamMouthForm`、
+`ParamAngleZ`、`ParamBreath`；手、耳、蝴蝶结、吊饰、头发、裙子、尾巴、身体
+全是物理输出，**做不了程序化动画**。
 
 ### 程序化待机层
 
@@ -304,11 +336,11 @@ pointerdown / move / up（页面内监听）
   而 `layout()` 用的是**画布像素**（左上原点、y 向下）。第一版拿单位去套像素公式，
   算出来的盒子只有 0.00009 宽、整块跑到屏幕外 —— 现在统一走
   `internalModel.getDrawableBounds(i)`，与 `contentBounds()` 同源。
-- **头发不进命中盒**。实测两个模型的头发都会一路垂到身体（银狼后发 1673×1686 px、
-  DeepSeek 酱头发 2378×2790 px），混进来"点她大腿也算摸头"，连摸四下还会让她生气。
+- **头发不进命中盒**。实测银狼后发 1673×1686 px、上一版 DeepSeek 酱头发 2378×2790 px，
+  都会一路垂到身体，混进来"点她大腿也算摸头"，连摸四下还会让她生气。
   所以 `headParts` 只取**贴着头的部件**（脸 / 五官 / 头饰 / 眉 / 眼 / 嘴 / 耳 / 角）。
 
-部件表从哪来：两个模型都没有 `HitAreas`，而 Core 的 `Drawables.parentPartIndices` /
+部件表从哪来：模型都没有 `HitAreas`，而 Core 的 `Drawables.parentPartIndices` /
 `Parts.parentIndices` 是唯一的"网格 → 部件"映射（框架层的 `getDrawableParentPartIndex`
 不在包里）。部件 id 与中文名的对应只存在于 `cdi3.json`，所以这一步放在离线：
 
@@ -321,6 +353,30 @@ python tools/live2d_dump_parts.py --json     # 输出可粘贴进 bridge.js 的 
 `opacity ≤ 0.01` 的替换件（`猫猫耳` / `发型D2` / `兔兔耳` 这类预设开关）不参与，
 否则没启用的那套会把盒子撑歪。拿不到 Core 数据时（老运行时、模型异常）回落到
 `CFG.pat.hit` 那个兜底矩形 —— 宁可粗糙，也不要"点了没反应"。
+
+**关键词匹配不成立时走显式指定**（大肥鱼就是这种）。它是 VTS 风格的绑定，部件名是
+`角度XY-` / `部件15` / `大肥鱼.psd` 这种编辑器占位名 —— 关键词表只会误命中
+`角度XY-` 里的「角」，最后选出 4 个部件（其中两个还是隐藏件）。所以
+`live2d_dump_parts.py` 里有一张 `MANUAL_PARTS` 表，改成按**位置**定：
+把每个部件下所有 drawable 的并集包围盒算出来、归一化到内容包围盒（0~1，左上原点），
+可见部件里只有三个在上半身 ——
+
+| 部件 | 名称 | 归一化包围盒 |
+|---|---|---|
+| `Part2` | 前发（刘海） | x 0.155~0.691  y 0.096~0.423 |
+| `Part3` | 左眼 | x 0.244~0.378  y 0.305~0.390 |
+| `Part4` | 右眼 | x 0.468~0.605  y 0.305~0.389 |
+
+（`Part5`「大肥鱼.psd」覆盖整个内容盒、51 个网格，是主容器，**不能**选；
+`Part6/7/9/10` 透明度为 0，运行时的 opacity 过滤会剔除。）
+并集只到 y 0.42 而头一直延伸到内容盒顶部，所以这一档的 `padRatio` 取 **0.45**
+（银狼 / 上一版模型是 0.08），不放大就"只摸得到眼睛"。
+
+> 复算方式：`node tools/live2d_dump_part_bounds.cjs <目录名>` 会把每个部件的并集
+> 包围盒（归一化到内容包围盒，与 `CFG.pat.hit` 同一个坐标空间）连同物理角色一起打出来。
+> 它用真 Cubism Core 离线读 moc3，按 `drawables.parentPartIndices` 归组；
+> 注意顶点是**模型单位**，换算到画布像素要**乘** `canvasinfo.PixelsPerUnit`（不是除），
+> 原点在 `CanvasOriginX/Y`。这个乘除搞反过一次：算出来所有部件的包围盒都塌成画布中心一个点。
 
 调试：`window.L2D.debugPatHit(true)`（CDP 亦可）会在舞台上画出**实际参与判定**的红框，
 框里写着 `fallback` 就说明走的是兜底矩形；`window.L2D.debug().pat` 里同时给出
@@ -386,13 +442,20 @@ node tools/live2d_motion_check.cjs    # 校验（段结构 / 值域 / 通道预�
    调试时也可直接传参：`Live2DView(modelPath = "...", profileId = "...")`
 3. 若模型口型参数不是 `ParamMouthOpenY`，调整该档的 `lipSyncParams`
 4. ⚠️ **先查 `physics3.json`**：物理输出参数每帧都会被物理覆写，写进去等于没写。
-   待机层能安全驱动的只有「物理输入 / 空闲」通道（`ParamBrow*`、`ParamMouthForm`、
-   `ParamAngleZ`…）—— DeepSeek酱 那档就去掉了 `smile`/`squint`/`sway`
-   （前两个参数不存在，后一个是物理输出）
+   待机层能安全驱动的只有「物理输入 / 空闲」通道（`ParamBrow*Form`、`ParamMouthForm`、
+   `ParamAngleZ`…）—— DeepSeek酱 那档就去掉了 `brow`/`squint`/`sway`
+   （前两个参数在**大肥鱼**里不存在，后一个是物理输出）；反过来 `smile` 在大肥鱼里
+   **存在**，所以那一档保留它（上一版 DS鲸鱼娘模型里它不存在 —— 换模型时这类
+   通道表要重新对着 moc3 核一遍，不能照抄）
 5. 在 `Live2DExpressions` 里加一套该角色的表情 / 姿势，然后跑
    `node tools/check_expression_names.cjs` 校验名字与模型文件是否对得上
 6. 若没有「变身」这类一次性演出，把 `hasTransform` 设为 `false`
    （否则挂断会白等一段过场），并在该档里 `transform.enabled = false`
+7. 跑 `python tools/live2d_dump_parts.py --model <your-model>` 生成摸头命中盒的
+   `headParts`（关键词不适用时按上面的 `MANUAL_PARTS` 显式指定），再跑
+   `python tools/live2d_make_pat.py --model <your-model>` 生成摸头动作
+8. 收尾校验：`node tools/live2d_motion_check.cjs <目录名>`（它默认只查内置角色
+   用到的模型，见脚本头部的「校验范围」）
 
 > 自备模型同样在 `.gitignore` 覆盖范围内，不会被误提交。
 
@@ -420,14 +483,21 @@ WebView 内的 JS 无法用 Android 单元测试覆盖，可用附带的自测�
 状态机与口型链路（mock PIXI/DOM 直接驱动 bridge.js）：
 
 ```bash
-node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 摸头命中盒 / 容错
+node tools/live2d_selftest.cjs         # 状态机 / 口型注入 / 情绪表情 / 布局 / 视线 / 摸头命中盒 / 容错
 node tools/live2d_fallback_test.cjs    # 资源缺失时的降级上报
+node tools/live2d_motion_check.cjs     # 动作文件：段结构 / 值域 / 通道预算 / 视线（内置角色的模型）
 node tools/check_expression_names.cjs  # 表情白名单与模型文件是否对得上
+python tools/setup_dafeiyu_model.py    # 安装「大肥鱼」（ASCII 化 + 贴图降采样 + 补注册表）
 python tools/live2d_dump_parts.py      # 摸头命中盒用的头部部件表（从 cdi3.json 生成）
+python tools/live2d_dump_part_bounds.cjs <目录名>  # 按位置列部件包围盒（关键词失效时用）
 python tools/live2d_make_pat.py        # 摸头动作文件 PatOnce（4 档）
 bash tools/audio_pipe_test.sh          # AudioPipe：唤醒/背压/打断/环形回绕
 python tools/memory_migration_check.py # Room 3→4 迁移：结构/数据存活/游标初始化（23 项）
 ```
+
+> `live2d_selftest.cjs` 里 `[18] 视线` 一节锁住的是 `setGaze()` 的坐标换算 ——
+> 这条断言的价值在于：旧实现下 `model.focus(0, 0)` 被解成"舞台左上角"，
+> 角色满偏盯着左上角，而**数值读回一路正常**（详见「视线」一节）。
 
 > `check_expression_names.cjs` 的价值在于：模型表情名少写一个空格 pixi 只会静默忽略，
 > 现象是「表情没变」且没有任何报错，肉眼审查根本发现不了。
