@@ -50,6 +50,12 @@ android {
         versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 只打包真机在用的两种 ARM 架构。libvosk.so 每个 ABI 约 8–9 MB，
+        // 跟着 AAR 进来的 x86 / x86_64 只有模拟器用得上，白胖约 18 MB。
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {
@@ -97,6 +103,13 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        jniLibs {
+            // 默认（extractNativeLibs=false）会把 native 库原样存进 APK 以便直接 mmap，
+            // 但 libvosk.so 的 deflate 压缩率高达 68%（8.9 MB → 2.8 MB）。
+            // 改回「安装时解压」后下载体积立减约 11 MB；安装后总占用仍然更小
+            // （旧：APK 120 MB 全在盘上；新：APK 84 MB + 解压出的库 17 MB ≈ 101 MB）。
+            useLegacyPackaging = true
         }
     }
 }

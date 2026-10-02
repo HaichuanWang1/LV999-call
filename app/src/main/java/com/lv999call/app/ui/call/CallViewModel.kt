@@ -76,6 +76,18 @@ class CallViewModel(
     val asrRetryHint: StateFlow<Int> = _asrRetryHint.asStateFlow()
 
     /**
+     * 离线语音模型（Vosk）的准备进度。
+     *
+     * 默认 ASR 是随包分发的 Vosk 模型，首次使用要把它从 assets 解压到内部存储
+     * （约 50 MB），这段等待必须让用户看见 —— 详见 [VoskPrepareState]。
+     */
+    private val _voskPrepare = MutableStateFlow<VoskPrepareState>(VoskPrepareState.Idle)
+    val voskPrepare: StateFlow<VoskPrepareState> = _voskPrepare.asStateFlow()
+
+    /** 最近一次准备失败时用的模型 id，供「重试」复用 */
+    private var lastVoskModelId: String? = null
+
+    /**
      * 当前通话的内置角色（自定义预设通话时为 null）。
      *
      * UI 靠它决定 Live2D 模型路径与 profile、静态头像、背景图、署名与过场开关 ——
@@ -398,6 +410,12 @@ class CallViewModel(
                 // 续聊没有"开场问候轮"（列表非空），所以这里装好就直接生效。
                 loadMemoryPromptBlock(memoryCharacterKey)
                 _messages.value = session.messages
+                // 续聊也要把离线模型准备好。
+                //
+                // ⚠️ 这里以前**没有**这一步：Vosk 只在"开聊"那两条路上初始化过。
+                // 以前默认 ASR 是在线 HTTP，续聊不初始化也看不出来；默认换成离线之后，
+                // 续聊会拿着一个 null Recognizer 去识别 —— 每句话都被判成「没听清」。
+                prepareAsr(configRepository.configFlow.first())
                 _callState.value = CallState.LISTENING
                 startListening()
                 // 这个角色的历史会话里可能还有没总结的（上通断网/被杀），后台补掉
@@ -441,6 +459,67 @@ class CallViewModel(
     }
 
     /**
+     * 按当前配置准备语音识别：走 Vosk 时确保离线模型已解压并载入内存。
+     *
+     * ## 失败**不再中断通话**
+     *
+     * 旧实现是 `if (!initVoskModel(...)) { _callState.value = ENDED; return }` ——
+     * 准备失败就直接把人踢出通话页，而且没有任何说明。现在失败只把
+     * [voskPrepare] 置成 [VoskPrepareState.Failed]，遮罩上说明原因并给「重试」，
+     * 通话本身继续：语音输入暂时用不了，文字输入完全不受影响。
+     *
+     * @return 是否就绪（调用方目前只用于日志，不控制流程）
+     */
+    private suspend fun prepareAsr(config: ApiConfig): Boolean {
+        if (config.asrProvider != ApiConfig.ASR_PROVIDER_VOSK) {
+            _voskPrepare.value = VoskPrepareState.Idle
+            return true
+        }
+
+        val modelId = config.asrVoskModelId.ifEmpty { ApiConfig.DEFAULT_VOSK_MODEL_ID }
+        lastVoskModelId = modelId
+        val asrEngine = appModule.asrEngine
+
+        // 已经载入内存（同一通电话里第二次进来）：不闪一下进度遮罩
+        if (asrEngine.isVoskModelLoaded(modelId)) {
+            _voskPrepare.value = VoskPrepareState.Idle
+            return true
+        }
+
+        _voskPrepare.value = VoskPrepareState.Preparing(0f)
+        val ok = asrEngine.initVoskModel(modelId) { progress ->
+            _voskPrepare.value = VoskPrepareState.Preparing(progress)
+        }
+        _voskPrepare.value = if (ok) {
+            VoskPrepareState.Idle
+        } else {
+            VoskPrepareState.Failed("离线语音模型（$modelId）没能准备好")
+        }
+        return ok
+    }
+
+    /** 遮罩上的「重试」：只重跑准备，不重建会话、不重播开场问候 */
+    fun retryVoskPrepare() {
+        val modelId = lastVoskModelId ?: return
+        viewModelScope.launch {
+            _voskPrepare.value = VoskPrepareState.Preparing(0f)
+            val ok = appModule.asrEngine.initVoskModel(modelId) { progress ->
+                _voskPrepare.value = VoskPrepareState.Preparing(progress)
+            }
+            _voskPrepare.value = if (ok) {
+                VoskPrepareState.Idle
+            } else {
+                VoskPrepareState.Failed("离线语音模型（$modelId）没能准备好")
+            }
+        }
+    }
+
+    /** 遮罩上的「先打字聊」：收起失败提示，通话继续 */
+    fun dismissVoskPrepareError() {
+        _voskPrepare.value = VoskPrepareState.Idle
+    }
+
+    /**
      * 使用内置角色开始通话（首页「内置预设」入口）。
      *
      * 提示词、表情集、发声策略、参考音频全部来自 [BuiltInCharacter]，
@@ -468,14 +547,9 @@ class CallViewModel(
             _messages.value = emptyList()
 
             val currentConfig = configRepository.configFlow.first()
-            if (currentConfig.asrProvider == "vosk") {
-                val asrEngine = appModule.asrEngine
-                val modelId = currentConfig.asrVoskModelId.ifEmpty { "vosk-model-small-cn-0.22" }
-                if (!asrEngine.initVoskModel(modelId)) {
-                    _callState.value = CallState.ENDED
-                    return@launch
-                }
-            }
+            // 离线模型首次要从 assets 解压（约 50 MB），进度由 voskPrepare 遮罩呈现。
+            // 失败不结束通话 —— 见 prepareAsr 的说明
+            prepareAsr(currentConfig)
 
             // TTS 风格提示词：准备页为该角色单独设的那一格 → 角色自带默认。
             // ⚠️ 以前这里还有"→ 全局兜底"的第三档，那是一条跨角色污染通道：银狼默认语气为空，
@@ -546,16 +620,9 @@ class CallViewModel(
                 loadMemoryPromptBlock(memoryCharacterKey)
                 _messages.value = emptyList()
 
-                // 如果使用 Vosk，初始化模型
+                // 离线语音模型同样在这里准备好（失败不结束通话，见 prepareAsr）
                 val currentConfig = configRepository.configFlow.first()
-                if (currentConfig.asrProvider == "vosk") {
-                    val asrEngine = appModule.asrEngine
-                    val modelId = currentConfig.asrVoskModelId.ifEmpty { "vosk-model-small-cn-0.22" }
-                    if (!asrEngine.initVoskModel(modelId)) {
-                        _callState.value = CallState.ENDED
-                        return@launch
-                    }
-                }
+                prepareAsr(currentConfig)
 
                 // 发送打招呼
                 beginResponseTurn()

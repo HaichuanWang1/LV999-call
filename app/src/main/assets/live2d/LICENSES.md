@@ -34,17 +34,6 @@
 > 但使用需遵守 Live2D 条款；达到一定营收规模的主体需购买商业授权。
 > 详见 https://www.live2d.com/en/sdk/license/
 
-### 示例模型（`models/haru/`）
-
-| 模型 | 来源 | 许可 |
-|------|------|------|
-| Haru Greeter | Live2D 官方示例模型 | Live2D Sample Model Terms of Use |
-
-- 条款 — https://www.live2d.com/eula/live2d-sample-model-terms_en.html
-
-> **Haru 仅供本地技术验证与开发调试**，请勿随产品分发或商用。
-> 正式发布前必须替换为自有或已获授权的模型。
-
 ### 内置角色模型（`models/silverwolf/`、`models/dafeiyu/`）
 
 这两个模型是**内置角色**的形象，同样处于 `.gitignore` 覆盖范围内，需本地获取。
@@ -54,9 +43,15 @@
 | `models/silverwolf/` | 银狼 | B 站 @槿絮OuO | 自备 | 按作者要求标注来源 |
 | `models/dafeiyu/` | DeepSeek酱（大肥鱼） | B 站 @狐宫静（261589131） | `python tools/setup_dafeiyu_model.py --zip <大肥鱼.zip>` | 公开免费皮套；使用说明未附授权条款，按"署名 + 不商用转售"处理 |
 
-`models/deepseek/`（上一版 DS鲸鱼娘，作者 B 站 @氵六青 11272072）**已经不参与运行** ——
-profile 与 `BuiltInCharacters.modelPath` 都指向 `models/dafeiyu/` 了。目录保留只是
-为了回滚（`python tools/setup_deepseek_model.py --remove` 可以卸掉）。
+**已经移除的两个模型**（v1.6.1 起不再随 APK 打包，省 6.6 MB）：
+
+| 曾用目录 | 说明 | 想恢复的话 |
+|---------|------|-----------|
+| `models/haru/` | Live2D 官方示例，只用于早期技术验证，**代码里从来没有引用过**（只剩注释里当路径示例） | `bash tools/setup_live2d_assets.sh` |
+| `models/deepseek/` | 上一版 DS鲸鱼娘（作者 B 站 @氵六青 11272072），profile 与 `BuiltInCharacters.modelPath` 都改指 `models/dafeiyu/` 了 | `python tools/setup_deepseek_model.py --zip <原包.zip>` |
+
+两个目录都只是"躺在 assets 里没人用"，删掉不影响任何功能 —— 留着它们只是让每个
+下载 APK 的人都白付一次流量。
 
 DeepSeek 酱的模型**必须用安装脚本**而不是手动拷贝，两版模型各有各的原因：
 

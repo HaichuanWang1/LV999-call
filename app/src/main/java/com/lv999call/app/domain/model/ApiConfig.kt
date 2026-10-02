@@ -33,7 +33,13 @@ data class ApiConfig(
     val llmThinkingEnabled: Boolean = false,
 
     // ASR配置
-    val asrProvider: String = "custom",  // "custom" | "vosk"
+    /**
+     * 语音识别走哪条路：`"custom"`（HTTP 端点）或 `"vosk"`（本机离线模型）。
+     *
+     * 默认是 [ASR_PROVIDER_VOSK]。理由：HTTP 那条路必须自己填 baseUrl + key，
+     * 新装完就是不可用状态；离线模型随包分发，装完就能说话，语音也不出设备。
+     */
+    val asrProvider: String = DEFAULT_ASR_PROVIDER,
     val asrBaseUrl: String = "",
     val asrApiKey: String = "",
 
@@ -53,7 +59,14 @@ data class ApiConfig(
      * [com.lv999call.app.data.remote.AsrApiService.normalizeLanguage] 归一化。
      */
     val asrLanguage: String = "zh",
-    val asrVoskModelId: String = "",  // Vosk离线模型ID
+
+    /**
+     * Vosk 离线模型 id（对应 `assets/vosk-models/<id>`）。
+     *
+     * 默认 [DEFAULT_VOSK_MODEL_ID]（随包分发的那一个），这样设置页的模型列表
+     * 一开始就是「已选中」而不是空白。
+     */
+    val asrVoskModelId: String = DEFAULT_VOSK_MODEL_ID,
 
     // TTS配置 (MiMo-V2.5-TTS 系列)
     // provider / baseUrl / voiceId / speed 曾经也在这里，但请求体里从来没有真正生效过
@@ -175,6 +188,30 @@ data class ApiConfig(
     val memoryReminderLastAt: Long = 0
 ) {
     companion object {
+        /** ASR：走 HTTP 端点（OpenAI `/v1/audio/transcriptions` 兼容协议） */
+        const val ASR_PROVIDER_CUSTOM = "custom"
+
+        /** ASR：走随包分发的 Vosk 离线模型 */
+        const val ASR_PROVIDER_VOSK = "vosk"
+
+        /**
+         * 默认 ASR 档位。
+         *
+         * 之所以默认离线：在线那条路要求用户自己填 baseUrl 与 key，装完是**不可用**的；
+         * 而离线模型是 assets 资产，装完即可说话，且录音不出设备。
+         * 代价是首次使用要把它解压到内部存储（约 50 MB），这一段有进度遮罩兜着 ——
+         * 见 [com.lv999call.app.ui.call.VoskPrepareState]。
+         */
+        const val DEFAULT_ASR_PROVIDER = ASR_PROVIDER_VOSK
+
+        /**
+         * 随包分发的离线模型 id（`assets/vosk-models/<id>`）。
+         *
+         * 这个字符串在配置默认值、模型列表、通话准备三条路上都必须一致，
+         * 所以只在这里写一次。
+         */
+        const val DEFAULT_VOSK_MODEL_ID = "vosk-model-small-cn-0.22"
+
         /** 朗读超时默认值（秒）—— 与旧版本写死的 180s 一致 */
         const val DEFAULT_TTS_PLAYBACK_TIMEOUT_SEC = 180
 

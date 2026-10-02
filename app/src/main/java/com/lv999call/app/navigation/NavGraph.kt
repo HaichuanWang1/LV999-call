@@ -191,6 +191,7 @@ fun NavGraph() {
             val expressionCue by viewModel.expressionCue.collectAsState()
             val activeCharacter by viewModel.character.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
+            val voskPrepare by viewModel.voskPrepare.collectAsState()
 
             // 麦克风权限闸门：进通话页就申请（见 PermissionGate 的说明）。
             // 没授权时它自己渲染说明页并返回 false —— 直接 return，下面那句
@@ -242,7 +243,11 @@ fun NavGraph() {
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
                 isMuted = isMuted,
-                asrRetryHint = asrRetryHint
+                asrRetryHint = asrRetryHint,
+                // 离线语音模型首次解压的进度遮罩（默认 ASR 就是 Vosk，见 ApiConfig）
+                voskPrepare = voskPrepare,
+                onRetryVoskPrepare = { viewModel.retryVoskPrepare() },
+                onDismissVoskPrepareError = { viewModel.dismissVoskPrepareError() }
             )
         }
 
@@ -338,6 +343,7 @@ fun NavGraph() {
             val audioLevel by viewModel.audioLevel.collectAsState()
             val expressionCue by viewModel.expressionCue.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
+            val voskPrepare by viewModel.voskPrepare.collectAsState()
 
             // 麦克风权限闸门：与内置角色那条路由同一套处理（见 PermissionGate）
             if (!com.lv999call.app.ui.common.MicPermissionGuard(
@@ -388,7 +394,11 @@ fun NavGraph() {
                 onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) },
                 isMuted = isMuted,
-                asrRetryHint = asrRetryHint
+                asrRetryHint = asrRetryHint,
+                // 离线语音模型首次解压的进度遮罩（默认 ASR 就是 Vosk，见 ApiConfig）
+                voskPrepare = voskPrepare,
+                onRetryVoskPrepare = { viewModel.retryVoskPrepare() },
+                onDismissVoskPrepareError = { viewModel.dismissVoskPrepareError() }
             )
         }
 
@@ -413,6 +423,7 @@ fun NavGraph() {
             val activeCharacter by viewModel.character.collectAsState()
             val presetVisuals by viewModel.presetVisuals.collectAsState()
             val asrRetryHint by viewModel.asrRetryHint.collectAsState()
+            val voskPrepare by viewModel.voskPrepare.collectAsState()
 
             // 麦克风权限闸门：续聊同样要申请（用户可能在上一次通话里点了"以后再说"）
             if (!com.lv999call.app.ui.common.MicPermissionGuard(
@@ -462,7 +473,11 @@ fun NavGraph() {
                 expressionCue = expressionCue,
                 onHangUp = { viewModel.hangUp() }, onToggleMute = { viewModel.toggleMute() },
                 onSendText = { text -> viewModel.sendTextMessage(text) }, isMuted = isMuted,
-                asrRetryHint = asrRetryHint
+                asrRetryHint = asrRetryHint,
+                // 离线语音模型首次解压的进度遮罩（默认 ASR 就是 Vosk，见 ApiConfig）
+                voskPrepare = voskPrepare,
+                onRetryVoskPrepare = { viewModel.retryVoskPrepare() },
+                onDismissVoskPrepareError = { viewModel.dismissVoskPrepareError() }
             )
         }
 

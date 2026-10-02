@@ -31,14 +31,13 @@ MODELS = {
         ROOT, "app", "src", "main", "assets", "live2d", "models", "silverwolf",
         "silverwolf.cdi3.json",
     ),
-    "deepseek": os.path.join(
-        ROOT, "app", "src", "main", "assets", "live2d", "models", "deepseek",
-        "c_0120.cdi3.json",
-    ),
     "dafeiyu": os.path.join(
         ROOT, "app", "src", "main", "assets", "live2d", "models", "dafeiyu",
         "dafeiyu.cdi3.json",
     ),
+    # 注意：这里的 key 是**模型目录名**，不是形象档位 id。
+    # 「deepseek」档位现在用的就是 dafeiyu 模型，所以没有单独的条目 ——
+    # 旧条目指向的 models/deepseek/c_0120.cdi3.json 已经从 assets 里删掉了。
 }
 
 # 「贴着头的部件」：脸 / 五官 / 头饰 / 眉 / 眼 / 嘴 / 耳 / 角 …

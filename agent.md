@@ -17,6 +17,9 @@
 | `navigation/NavGraph.kt` | 全部路由；**三条通话路由的入口都挂了麦克风权限闸门** |
 | `ui/common/PermissionGate.kt` | 运行时权限守卫（进页面即申请 + 拒绝后的说明页 / 系统设置出口） |
 | `ui/call/CallViewModel.kt` | 一通电话的状态机：开场问候、录音→ASR→LLM→TTS 循环、挂断触发记忆总结 |
+| `ui/call/VoskPrepareState.kt` | 离线语音模型首次解压的状态（进度遮罩的数据源） |
+| `audio/VoskModelManager.kt` | 离线模型的解压 / 下载 / 删除；解压进度从这里往上报 |
+| `audio/AsrEngine.kt` | ASR 入口：HTTP 与 Vosk 两条路，按 `ApiConfig.asrProvider` 分流 |
 | `domain/usecase/ProcessAudioUseCase.kt` | 一轮对话的主流程；**拼 system prompt、裁历史、发声来源优先级**都在这里 |
 | `data/repository/ChatRepository.kt` | LLM 流式 + TTS 合成（SSE → PCM 边收边播）；TTS 请求体在这里组装 |
 | `data/repository/ConfigRepository.kt` | DataStore 配置读写（所有配置项的唯一入口） |
@@ -51,6 +54,18 @@
 11. **Live2D 的 profile id 与模型目录名可以不一致，别"顺手对齐"**：`live2dProfileId`
     是角色 ↔ 形象的绑定键，自定义预设也会把这个字符串存进数据库 —— 改名会让已有预设找不到档位。
     DeepSeek 酱就是 profile 叫 `deepseek`、模型在 `models/dafeiyu/`。
+12. **默认 ASR 是离线 Vosk，默认值只写在 `ApiConfig` 的常量里**：
+    `DEFAULT_ASR_PROVIDER` / `DEFAULT_VOSK_MODEL_ID` 是唯一来源（`ConfigRepository` 也读它，
+    以前那里另有一份 `"custom"` 字面量，改一处不生效）。模型是 assets 资产，首次使用要把
+    约 50 MB 解压到内部存储 —— 那段等待有进度遮罩（`VoskPrepareState`），
+    **准备失败不再结束通话**（旧实现是 `CallState.ENDED`，人会被静默踢出通话页）。
+13. **删 assets 之前先确认真的没人引用**：`models/haru/`（只出现在注释里）与
+    `models/deepseek/`（已被 dafeiyu 取代）就是这样清掉的，省 6.6 MB。
+    每多一个没人用的 assets 文件，每个下载 APK 的人都要多付一次流量。
+14. **APK 体积的三个开关**（都在 `app/build.gradle.kts`，别"顺手"改回去）：
+    `ndk.abiFilters` 只留 arm64/arm32（x86 只有模拟器要，白胖 18 MB）、
+    `jniLibs.useLegacyPackaging = true`（`libvosk.so` deflate 压缩率 68%，原样存放
+    等于白送 11 MB）、以及不打包没引用的模型资源。
 
 ## 文档索引（`docs/`）
 

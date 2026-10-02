@@ -54,7 +54,7 @@ internal object Live2DAssetLoader {
         val path = url.path ?: return null
         if (!path.startsWith(URL_PREFIX)) return null
 
-        // /assets/live2d/models/haru/x.moc3  ->  models/haru/x.moc3
+        // /assets/live2d/models/silverwolf/x.moc3  ->  models/silverwolf/x.moc3
         val relative = path.substring(URL_PREFIX.length)
         if (relative.isEmpty()) return null
 

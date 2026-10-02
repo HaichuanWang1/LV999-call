@@ -721,11 +721,13 @@ function check(name, cond, extra = '') {
         !!fallbackInfo && /silverwolf/.test(fallbackInfo.modelUrl),
         fallbackInfo && fallbackInfo.modelUrl);
 
-  // ?model= 仍然要能覆盖档位里的模型路径（自定义模型入口）
+  // ?model= 仍然要能覆盖档位里的模型路径（自定义模型入口）。
+  // 覆盖目标故意挑一个**和档位默认不同**的模型（deepseek 档默认是 dafeiyu），
+  // 否则断言通过了也说明不了覆盖真的生效。
   const overrideInfo = await bootWith(
-    '?profile=deepseek&model=' + encodeURIComponent('models/haru/haru_greeter_t03.model3.json'));
+    '?profile=deepseek&model=' + encodeURIComponent('models/silverwolf/silverwolf.model3.json'));
   check('?model= 能覆盖档位内的模型路径',
-        !!overrideInfo && /haru/.test(overrideInfo.modelUrl), overrideInfo && overrideInfo.modelUrl);
+        !!overrideInfo && /silverwolf/.test(overrideInfo.modelUrl), overrideInfo && overrideInfo.modelUrl);
 
   // ========================================================================
   console.log('\n[15] 摸头反应（部件命中盒 + 页面内手势）');

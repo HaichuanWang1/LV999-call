@@ -80,8 +80,8 @@ Live2D 的运行时与模型因版权原因不入库，需先本地获取：
 bash tools/setup_live2d_assets.sh
 ```
 
-该脚本会下载 PixiJS / Cubism Core / pixi-live2d-display 到 `lib/`，
-以及 Live2D 官方示例模型 Haru 到 `models/haru/`。
+该脚本会把 PixiJS / Cubism Core / pixi-live2d-display 下载到 `lib/`。
+Live2D 官方示例模型 Haru 需要额外加 `--with-sample`（App 不引用它，默认不拉）。
 
 > 跳过此步也能正常构建运行，只是通话界面会回退到静态头像。
 > 使用自备模型见 [Live2D 形象 → 使用自备模型](docs/live2d.md)。
@@ -94,6 +94,10 @@ bash tools/setup_live2d_assets.sh
 4. 点击 🔄 按钮自动获取模型列表，选择模型
 5. 上传一段参考音频作为默认音色
 6. 保存设置，返回首页开始通话
+
+> **语音识别（ASR）默认就是离线的**，不需要配任何东西。第一次开始通话时会把随包的
+> 中文语音模型解压到本机（约 50 MB，界面上有进度条），只需要这一次；之后录音不出设备。
+> 想改用在线识别（Whisper 等）在设置页切到「自定义HTTP」并填端点即可。
 
 > 如果使用本地局域网部署的模型（如 192.168.x.x），直接填入 HTTP 地址即可，已放行明文流量。
 

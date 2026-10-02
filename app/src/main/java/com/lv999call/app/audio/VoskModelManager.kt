@@ -2,7 +2,10 @@ package com.lv999call.app.audio
 
 import android.content.Context
 import android.util.Log
+import com.lv999call.app.domain.model.ApiConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -18,11 +21,33 @@ class VoskModelManager(private val context: Context) {
         private const val MODELS_DIR = "vosk_models"
         private const val ASSETS_MODELS_DIR = "vosk-models"
 
+        /**
+         * 解压用的缓冲区。
+         *
+         * 模型有 68 MB，`copyTo` 默认的 8 KB 缓冲区要跑八千多轮；
+         * 64 KB 能把首次解压的时间砍掉一截，代价只有几十 KB 内存。
+         */
+        private const val COPY_BUFFER_BYTES = 64 * 1024
+
         /** 预定义模型列表 */
         val AVAILABLE_MODELS = listOf(
-            VoskModel("vosk-model-small-cn-0.22", "中文（小）", "zh", "~50MB", "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip"),
+            VoskModel(
+                ApiConfig.DEFAULT_VOSK_MODEL_ID,
+                "中文（小）",
+                "zh",
+                "~50MB",
+                "https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip"
+            ),
         )
     }
+
+    /**
+     * 解压锁。
+     *
+     * 解压是"整目录复制"，两个调用方同时进来会互相覆盖出半个模型
+     * （通话路径与设置页可能同时触发）。这里把整段串行化。
+     */
+    private val extractLock = Mutex()
 
     data class VoskModel(
         val id: String,
@@ -40,12 +65,16 @@ class VoskModelManager(private val context: Context) {
 
     fun getModelPath(modelId: String): File = File(getModelsDir(), modelId)
 
+    /** 模型是否已经解压到内部存储（解压过就不用再解一次） */
+    fun isModelExtracted(modelId: String): Boolean {
+        val modelDir = getModelPath(modelId)
+        return modelDir.exists() && modelDir.isDirectory &&
+            modelDir.listFiles()?.isNotEmpty() == true
+    }
+
     fun isModelAvailable(modelId: String): Boolean {
         // 检查是否已解压到内部存储
-        val modelDir = getModelPath(modelId)
-        if (modelDir.exists() && modelDir.isDirectory && modelDir.listFiles()?.isNotEmpty() == true) {
-            return true
-        }
+        if (isModelExtracted(modelId)) return true
         // 检查 assets 中是否有该模型
         return try {
             val assetPath = "$ASSETS_MODELS_DIR/$modelId"
@@ -61,20 +90,27 @@ class VoskModelManager(private val context: Context) {
 
     /**
      * 确保模型可用 — 优先从 assets 解压，否则从内部存储加载
+     *
+     * @param onProgress 解压进度 0f..1f。**已经在内部存储时不会回调**（无事可报），
+     *   调用方若要区分"解压中 / 载入中"，看 [isModelExtracted] 即可。
      * @return 模型路径，失败返回 null
      */
-    suspend fun ensureModelReady(modelId: String): String? = withContext(Dispatchers.IO) {
-        val modelDir = getModelPath(modelId)
-
-        // 已在内部存储
-        if (modelDir.exists() && modelDir.listFiles()?.isNotEmpty() == true) {
-            return@withContext modelDir.absolutePath
+    suspend fun ensureModelReady(
+        modelId: String,
+        onProgress: (Float) -> Unit = {}
+    ): String? = withContext(Dispatchers.IO) {
+        if (isModelExtracted(modelId)) {
+            return@withContext getModelPath(modelId).absolutePath
         }
 
-        // 尝试从 assets 解压
-        val extracted = extractFromAssets(modelId)
-        if (extracted) {
-            return@withContext modelDir.absolutePath
+        extractLock.withLock {
+            // 拿到锁之后再确认一次：等锁的这段时间里，前一个持锁者可能已经解压完了
+            if (isModelExtracted(modelId)) {
+                return@withContext getModelPath(modelId).absolutePath
+            }
+            if (extractFromAssets(modelId, onProgress)) {
+                return@withContext getModelPath(modelId).absolutePath
+            }
         }
 
         Log.e(TAG, "模型不可用: $modelId")
@@ -83,8 +119,10 @@ class VoskModelManager(private val context: Context) {
 
     /**
      * 从 assets 解压模型到内部存储（仅首次）
+     *
+     * @param onProgress 0f..1f，按已复制字节数 / 模型总字节数计算
      */
-    private fun extractFromAssets(modelId: String): Boolean {
+    private fun extractFromAssets(modelId: String, onProgress: (Float) -> Unit): Boolean {
         val assetPath = "$ASSETS_MODELS_DIR/$modelId"
         val targetDir = getModelPath(modelId)
 
@@ -95,10 +133,24 @@ class VoskModelManager(private val context: Context) {
                 return false
             }
 
-            targetDir.mkdirs()
-            Log.d(TAG, "从assets解压模型: $modelId")
+            val total = assetTotalBytes(assetPath).coerceAtLeast(1L)
+            var copied = 0L
+            // 进度回调发生在复制循环里，逐块上报会把主线程刷爆；
+            // 每变化 1% 报一次，进度条看起来已经是连续的
+            var lastPercent = -1
 
-            extractAssetDir(assetPath, targetDir)
+            targetDir.mkdirs()
+            Log.d(TAG, "从assets解压模型: $modelId (共 ${total / 1024 / 1024} MB)")
+            onProgress(0f)
+
+            extractAssetDir(assetPath, targetDir) { bytes ->
+                copied += bytes
+                val percent = (copied * 100 / total).toInt()
+                if (percent != lastPercent) {
+                    lastPercent = percent
+                    onProgress((copied.toFloat() / total).coerceIn(0f, 1f))
+                }
+            }
 
             Log.d(TAG, "模型解压完成: ${targetDir.absolutePath}")
             true
@@ -109,15 +161,38 @@ class VoskModelManager(private val context: Context) {
         }
     }
 
-    /** 递归解压 assets 目录 */
-    private fun extractAssetDir(assetPath: String, targetDir: File) {
+    /**
+     * 递归累加一个 assets 目录下所有文件的字节数 —— 解压进度的分母。
+     *
+     * `assets.list()` 对**文件**和**空目录**都返回空数组，靠 `open()` 抛不抛异常区分。
+     */
+    private fun assetTotalBytes(assetPath: String): Long {
+        val entries = context.assets.list(assetPath) ?: return 0L
+        if (entries.isEmpty()) {
+            return try {
+                context.assets.open(assetPath).use { it.available().toLong() }
+            } catch (_: Exception) {
+                0L
+            }
+        }
+        var sum = 0L
+        for (entry in entries) sum += assetTotalBytes("$assetPath/$entry")
+        return sum
+    }
+
+    /**
+     * 递归解压 assets 目录
+     *
+     * @param onBytes 每写完一个文件回调一次，参数是这次写入的字节数
+     */
+    private fun extractAssetDir(assetPath: String, targetDir: File, onBytes: (Long) -> Unit) {
         val entries = context.assets.list(assetPath) ?: return
 
         if (entries.isEmpty()) {
             // 是文件，复制
             context.assets.open(assetPath).use { input ->
                 FileOutputStream(File(targetDir, assetPath.substringAfterLast('/'))).use { output ->
-                    input.copyTo(output)
+                    onBytes(input.copyTo(output, COPY_BUFFER_BYTES))
                 }
             }
         } else {
@@ -132,13 +207,13 @@ class VoskModelManager(private val context: Context) {
                     context.assets.open(childAssetPath).use { input ->
                         if (!targetDir.exists()) targetDir.mkdirs()
                         FileOutputStream(File(targetDir, entry)).use { output ->
-                            input.copyTo(output)
+                            onBytes(input.copyTo(output, COPY_BUFFER_BYTES))
                         }
                     }
                 } else {
                     // 目录
                     childTargetDir.mkdirs()
-                    extractAssetDir(childAssetPath, childTargetDir)
+                    extractAssetDir(childAssetPath, childTargetDir, onBytes)
                 }
             }
         }

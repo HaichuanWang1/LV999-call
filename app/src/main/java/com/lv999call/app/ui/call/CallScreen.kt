@@ -10,9 +10,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,14 +34,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -168,7 +176,19 @@ fun CallScreen(
      * 这里在状态胶囊上短暂顶一句提示，然后自然回到「聆听中…」。
      * 用自增计数而非布尔：连续两次没听清时 LaunchedEffect 才会重新触发。
      */
-    asrRetryHint: Int = 0
+    asrRetryHint: Int = 0,
+    /**
+     * 离线语音模型的准备状态（[CallViewModel.voskPrepare]）。
+     *
+     * 默认 ASR 是随包分发的 Vosk 模型，首次使用要把它从 assets 解压到本机
+     * （约 50 MB）。那段时间里页面本身没有任何变化，必须靠这层遮罩告诉用户
+     * "在干活，不是卡死了"。
+     */
+    voskPrepare: VoskPrepareState = VoskPrepareState.Idle,
+    /** 遮罩上的「重试」（[CallViewModel.retryVoskPrepare]） */
+    onRetryVoskPrepare: () -> Unit = {},
+    /** 遮罩上的「先打字聊」（[CallViewModel.dismissVoskPrepareError]） */
+    onDismissVoskPrepareError: () -> Unit = {}
 ) {
     val colors = MaterialTheme.colorScheme
     val shapes = MaterialTheme.shapes
@@ -602,6 +622,16 @@ fun CallScreen(
                 Spacer(modifier = Modifier.size(52.dp))
             }
         }
+
+        // ---------- 离线语音模型准备遮罩（最上层）----------
+        // 放在根 Box 的最后：它必须盖住控制栏，否则"没准备好"的时候用户还能点到
+        // 麦克风按钮，而那时语音识别根本还没就绪。
+        VoskPrepareOverlay(
+            state = voskPrepare,
+            onRetry = onRetryVoskPrepare,
+            onDismissError = onDismissVoskPrepareError,
+            onHangUp = onHangUp
+        )
     }
 }
 
@@ -937,5 +967,218 @@ private fun CallStatusIndicator(callState: CallState, showAsrRetryHint: Boolean 
                 )
             }
         }
+    }
+}
+
+/**
+ * 「离线语音模型正在准备」遮罩 —— 首次解压那几十秒里**唯一**的反馈。
+ *
+ * ## 为什么必须有
+ *
+ * 默认 ASR 是随包分发的 Vosk 模型（assets 资产）。第一次要用它，得先把约 50 MB
+ * 解压到内部存储，再把模型读进内存。改造前这段等待没有任何界面表现：
+ * 用户点了「开始通话」，看到的是页面一动不动；如果解压失败，更是直接被
+ * `CallState.ENDED` 踢回上一页，连一句解释都没有。
+ *
+ * ## 两个状态
+ *
+ * - [VoskPrepareState.Preparing]：进度环 + 真实百分比。解压完成后
+ *   （progress 到 1）改成"载入中"的转圈 —— 那一段是 Kaldi 内部在读模型，
+ *   没有细粒度进度可报，摆一个静止的 100% 反而像卡死了。
+ * - [VoskPrepareState.Failed]：说明原因，并给「重试」与「先打字聊」两个出口。
+ *   后者只是收起提示，**通话不结束** —— 语音输入用不了，文字聊天照常。
+ *
+ * 整层会吞掉所有点击：准备期间的按钮按下去本来也没有意义。
+ */
+@Composable
+private fun VoskPrepareOverlay(
+    state: VoskPrepareState,
+    onRetry: () -> Unit,
+    onDismissError: () -> Unit,
+    onHangUp: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val ext = UltraFlowTheme.extendedColors
+
+    AnimatedVisibility(
+        visible = state !is VoskPrepareState.Idle,
+        modifier = Modifier.fillMaxSize(),
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(280))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colors.background.copy(alpha = 0.86f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { /* 吞掉点击 */ },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.86f)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(ext.panelSurface)
+                    .border(BorderStroke(1.dp, ext.panelBorder), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 24.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                if (state is VoskPrepareState.Failed) {
+                    Icon(
+                        Icons.Default.MicOff,
+                        contentDescription = null,
+                        tint = colors.error,
+                        modifier = Modifier.size(44.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "离线语音模型没准备好",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = state.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "语音输入暂时用不了，文字聊天不受影响。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TextButton(onClick = onDismissError) { Text("先打字聊") }
+                        Button(onClick = onRetry) { Text("重试") }
+                    }
+                    // 第三个出口：这层遮罩会吞掉所有点击，不给一个明确的"离开"
+                    // 按钮的话，用户只能靠系统返回手势挂断 —— 那是给开发者用的知识。
+                    TextButton(onClick = onHangUp) {
+                        Text(
+                            "结束通话",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    val progress = (state as? VoskPrepareState.Preparing)?.progress ?: 0f
+                    val loading = progress >= 1f
+
+                    VoskPrepareRing(progress = progress, tint = colors.primary, track = ext.panelBorder)
+
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = if (loading) "正在载入离线语音模型…" else "正在准备离线语音模型…",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = colors.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        // 说清"为什么要等"和"只等这一次"：不然用户会以为这软件每次
+                        // 开聊都要先愣半分钟
+                        text = "第一次使用需要把中文语音模型解压到本机（约 50 MB），" +
+                            "只需要这一次。之后语音识别完全离线，录音不出设备。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text(
+                        text = "请稍候，不要退出～",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 准备进度环：真实百分比 + 一层永远在动的光晕。
+ *
+ * 光晕是刻意的"我还在干活"信号 —— 解压到某个大文件时会有一段时间百分比不动，
+ * 完全静止的界面会被当成卡死。
+ */
+@Composable
+private fun VoskPrepareRing(progress: Float, tint: Color, track: Color) {
+    val loading = progress >= 1f
+    val transition = rememberInfiniteTransition(label = "voskRing")
+
+    // 转圈：只在"载入中"那一段用得上（解压阶段有真实进度，不需要假装）
+    val spin by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1300, easing = LinearEasing)),
+        label = "spin"
+    )
+    val halo by transition.animateFloat(
+        initialValue = 0.18f,
+        targetValue = 0.55f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "halo"
+    )
+
+    Box(modifier = Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val stroke = 7.dp.toPx()
+            val inset = stroke / 2f
+            val arcSize = Size(size.width - stroke, size.height - stroke)
+            val topLeft = Offset(inset, inset)
+
+            // 光晕：呼吸式明暗，给"还在跑"一个持续信号
+            drawCircle(color = tint.copy(alpha = halo * 0.18f), radius = size.minDimension / 2f)
+
+            // 轨道
+            drawArc(
+                color = track,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = topLeft,
+                size = arcSize,
+                style = Stroke(width = stroke, cap = StrokeCap.Round)
+            )
+
+            if (loading) {
+                drawArc(
+                    color = tint,
+                    startAngle = spin - 90f,
+                    sweepAngle = 100f,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            } else {
+                drawArc(
+                    color = tint,
+                    startAngle = -90f,
+                    sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            }
+        }
+
+        Text(
+            text = if (loading) "载入" else "${(progress.coerceIn(0f, 1f) * 100).toInt()}%",
+            style = MaterialTheme.typography.titleMedium,
+            color = tint,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }

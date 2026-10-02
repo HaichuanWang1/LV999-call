@@ -36,17 +36,26 @@ class AsrEngine(private val context: Context) {
 
     /**
      * 初始化 Vosk 模型和 Recognizer（复用，不每次重建）
+     *
+     * @param onProgress 首次解压的进度 0f..1f；解压完成后会再报一次 1f，
+     *   表示"接下来是把模型读进内存"（这一段没有进度可报）。
      */
-    suspend fun initVoskModel(modelId: String): Boolean {
-        if (voskModel != null && currentVoskModelId == modelId) return true
+    suspend fun initVoskModel(
+        modelId: String,
+        onProgress: (Float) -> Unit = {}
+    ): Boolean {
+        if (isVoskModelLoaded(modelId)) return true
 
         releaseVoskModel()
 
-        val modelPath = modelManager.ensureModelReady(modelId)
+        val modelPath = modelManager.ensureModelReady(modelId, onProgress)
         if (modelPath == null) {
             Log.e(TAG, "Vosk模型不可用: $modelId")
             return false
         }
+
+        // 解压完成（或本来就已解压）→ 接下来是 Kaldi 把模型读进内存，几秒
+        onProgress(1f)
 
         return try {
             voskModel = Model(modelPath)
@@ -63,9 +72,22 @@ class AsrEngine(private val context: Context) {
             voskModel = null
             voskRecognizer = null
             currentVoskModelId = null
+            // 载入失败往往意味着解压出来的那份是坏的（最典型的是上次解压到一半
+            // 被取消/被杀，留下半个目录）。而 `isModelExtracted` 只看"目录非空"，
+            // 不删的话下一次「重试」会直接复用它、再次失败 —— 变成死循环。
+            // 删掉之后重试才会真正重新解压。
+            modelManager.deleteModel(modelId)
             false
         }
     }
+
+    /**
+     * 指定模型是否已经载入内存。
+     *
+     * 调用方（通话页）用它避免"已经就绪还要闪一下准备进度"。
+     */
+    fun isVoskModelLoaded(modelId: String): Boolean =
+        voskModel != null && currentVoskModelId == modelId
 
     fun releaseVoskModel() {
         voskRecognizer?.close()
@@ -79,7 +101,7 @@ class AsrEngine(private val context: Context) {
      * 语音识别入口 — 根据配置自动选择 HTTP 或 Vosk
      */
     suspend fun transcribe(config: ApiConfig, pcmData: ByteArray): String {
-        return if (config.asrProvider == "vosk") {
+        return if (config.asrProvider == ApiConfig.ASR_PROVIDER_VOSK) {
             transcribeVosk(pcmData)
         } else {
             transcribeHttp(config, pcmData)
@@ -209,7 +231,8 @@ class AsrEngine(private val context: Context) {
      * HTTP ASR：失败重试一次，仍失败则在**离线模型已加载**时回退 Vosk。
      *
      * 不在失败时现场加载 Vosk 模型：首次要从 assets 解压 ~50MB，会把这一轮通话卡死几十秒，
-     * 比直接告诉用户「没听清」更糟。
+     * 比直接告诉用户「没听清」更糟。首次准备由通话开始前的进度遮罩负责
+     * （见 [com.lv999call.app.ui.call.VoskPrepareState]）。
      */
     private suspend fun transcribeHttp(config: ApiConfig, pcmData: ByteArray): String {
         if (pcmData.isEmpty()) return ""

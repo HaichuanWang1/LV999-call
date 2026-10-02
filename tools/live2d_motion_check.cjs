@@ -24,8 +24,12 @@
  * 校验范围
  * --------
  * 默认**跟着 BuiltInCharacters.kt 的 modelPath 走**，不是"磁盘上有什么就查什么"：
- * `models/` 下还躺着 Live2D 官方示例 haru（它的曲线用 `Target: Model` / `PartOpacity`，
- * 与下面"曲线只写 Parameter"的假设不符，扫进来全是假失败）以及被换掉的旧模型。
+ * `models/` 下可能还躺着 App 用不到的东西 —— 例如 Live2D 官方示例 haru
+ * （它的曲线用 `Target: Model` / `PartOpacity`，与下面"曲线只写 Parameter"的假设
+ * 不符，扫进来全是假失败）、被换掉的旧模型、以及用户自己丢进来试玩的模型。
+ * 和 check_expression_names.cjs 同一思路：**校验范围跟着角色定义走**，
+ * 而不是跟着磁盘上有什么走。
+ * 想单独查某个装了但没被引用的模型：`node tools/live2d_motion_check.cjs <目录名>`。
  */
 
 const fs = require('fs');
@@ -39,10 +43,11 @@ const CORE = path.join(ROOT, 'app', 'src', 'main', 'assets', 'live2d', 'lib',
 /**
  * 内置角色**实际使用**的模型（从 BuiltInCharacters.kt 的 modelPath 抠出来）
  *
- * 为什么不直接扫 models/ 下所有目录：那个目录里还会躺着
+ * 为什么不直接扫 models/ 下所有目录：那个目录里可能还会躺着
  *   - `haru`：Live2D 官方示例，只用于技术验证（它的动作文件用 `Target: Model` /
  *     `PartOpacity`，本项目的假设"曲线只写 Parameter"对它不成立 → 全是假失败）；
- *   - 被换掉的旧模型（例如 DS鲸鱼娘 c_0120，profile 已经不指向它了）。
+ *   - 被换掉的旧模型（例如 DS鲸鱼娘 c_0120，profile 已经不指向它了）；
+ *   - 用户自己丢进来试玩的模型。
  * 和 check_expression_names.cjs 同一思路：**校验范围跟着角色定义走**，
  * 而不是跟着磁盘上有什么走。
  * 想单独查某个装了但没被引用的模型：`node tools/live2d_motion_check.cjs <目录名>`。

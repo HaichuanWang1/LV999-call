@@ -472,7 +472,7 @@ fun rememberLive2DController(): Live2DController = remember { Live2DController()
  *
  * @param controller 由 [rememberLive2DController] 创建
  * @param modelPath 模型相对 assets/live2d 的路径，如
- *        `models/haru/haru_greeter_t03.model3.json`；传 null 用 profile 默认值
+ *        `models/silverwolf/silverwolf.model3.json`；传 null 用 profile 默认值
  * @param profileId bridge.js `PROFILES` 里的形象参数档位（待机通道 / 布局 / 呼吸 /
  *        是否变身等），与 [com.lv999call.app.domain.model.BuiltInCharacter.live2dProfileId]
  *        对应；传 null 回落银狼

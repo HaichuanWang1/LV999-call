@@ -117,7 +117,9 @@ class ConfigRepository(private val context: Context) {
             llmTopP = prefs[LLM_TOP_P] ?: 1.0f,
             llmMaxOutputTokens = prefs[LLM_MAX_OUTPUT_TOKENS]?.toIntOrNull() ?: 2048,
             llmThinkingEnabled = prefs[LLM_THINKING_ENABLED]?.toBooleanStrictOrNull() ?: false,
-            asrProvider = prefs[ASR_PROVIDER] ?: "custom",
+            // 默认值统一从 ApiConfig 取：以前这里另写了一份 "custom" / "" 字面量，
+            // 改默认档位时很容易只改了一处（数据类那份），实际读出来的还是旧的
+            asrProvider = prefs[ASR_PROVIDER] ?: ApiConfig.DEFAULT_ASR_PROVIDER,
             asrBaseUrl = prefs[ASR_BASE_URL] ?: "",
             asrApiKey = prefs[ASR_API_KEY] ?: "",
             asrModel = prefs[ASR_MODEL] ?: "",
@@ -125,7 +127,7 @@ class ConfigRepository(private val context: Context) {
             // 让设置页显示的也是规范值（否则用户会以为 zh-CN 是服务端要的格式）
             asrLanguage = AsrApiService.normalizeLanguage(prefs[ASR_LANGUAGE] ?: "zh")
                 .ifEmpty { "auto" },
-            asrVoskModelId = prefs[ASR_VOSK_MODEL_ID] ?: "",
+            asrVoskModelId = prefs[ASR_VOSK_MODEL_ID] ?: ApiConfig.DEFAULT_VOSK_MODEL_ID,
             ttsApiKey = prefs[TTS_API_KEY] ?: "",
             ttsModel = prefs[TTS_MODEL] ?: "mimo-v2.5-tts-voiceclone",
             characterTtsPrompts = parseCharacterPrompts(prefs[CHARACTER_TTS_PROMPTS]),

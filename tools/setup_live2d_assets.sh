@@ -6,9 +6,13 @@
 # 缺失时 App 仍可运行，只是会自动回退到静态头像。
 #
 # 用法:
-#   bash tools/setup_live2d_assets.sh               # 运行时 + 示例模型
-#   bash tools/setup_live2d_assets.sh --lib-only    # 只拉运行时
-#   bash tools/setup_live2d_assets.sh --sample-only # 只拉示例模型
+#   bash tools/setup_live2d_assets.sh                 # 只拉运行时（默认）
+#   bash tools/setup_live2d_assets.sh --lib-only      # 同上
+#   bash tools/setup_live2d_assets.sh --with-sample   # 运行时 + Live2D 官方示例模型 Haru
+#   bash tools/setup_live2d_assets.sh --sample-only   # 只拉示例模型
+#
+# 示例模型 Haru 默认**不**拉：App 里没有任何代码引用它（见 LICENSES.md），
+# 拉下来只会让 assets 白胖 3 MB。它现在纯粹是"想拿个模型调页面"时的素材。
 # ============================================================
 set -uo pipefail
 
@@ -27,12 +31,13 @@ PLD_URL="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min
 MODEL_BASE="https://cdn.jsdelivr.net/gh/guansss/pixi-live2d-display/test/assets/haru"
 
 DO_LIB=1
-DO_SAMPLE=1
+DO_SAMPLE=0
 for a in "$@"; do
   case "$a" in
     --lib-only)    DO_SAMPLE=0 ;;
-    --sample-only) DO_LIB=0 ;;
-    -h|--help)     sed -n '2,13p' "$0"; exit 0 ;;
+    --with-sample) DO_SAMPLE=1 ;;
+    --sample-only) DO_LIB=0; DO_SAMPLE=1 ;;
+    -h|--help)     sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 2 ;;
   esac
 done

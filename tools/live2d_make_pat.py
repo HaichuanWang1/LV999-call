@@ -110,25 +110,16 @@ MODELS = {
         "body_x": "ParamBodyAngleX",
         "body_y": "ParamBodyAngleY",
     },
-    "deepseek": {
-        "dir": os.path.join(MODELS_ROOT, "deepseek"),
-        "model3": "c_0120.model3.json",
-        "physics": "c_0120.physics3.json",
-        "out_dir": "",                 # 该模型的动作文件就在模型根目录
-        # ⚠️ 该模型 ParamBodyAngleX/Y/Z **全是物理输出**（physics3.json 权重 100），
-        # 写进去会被物理每帧覆盖 —— 所以这档只能动头，不做身体下沉。
-        "pitch": "ParamAngleY",
-        "body_x": None,
-        "body_y": None,
-    },
+    # 旧条目「deepseek」已删：它指向 models/deepseek/c_0120.*，
+    # 而那个模型（DS鲸鱼娘）已经被 dafeiyu 取代并从 assets 里移除了。
     "dafeiyu": {
         "dir": os.path.join(MODELS_ROOT, "dafeiyu"),
         "model3": "dafeiyu.model3.json",
         "physics": "dafeiyu.physics3.json",
         "out_dir": "motions",
-        # ⚠️ 与 deepseek 同一情况：ParamBodyAngleX/Y/Z 全是物理输出（权重 100）。
+        # ⚠️ ParamBodyAngleX/Y/Z 全是物理输出（权重 100），写进去会被物理每帧覆盖。
         # 该模型另有 ParamAngleX4/Y4/X5/Y5/Z4/Z5 是物理**输入**（cdi3 里叫"物理输入身体 X/XX…"），
-        # 理论上能做身体下沉，但没法离线验证观感 —— 先和 deepseek 一样只动头。
+        # 理论上能做身体下沉，但没法离线验证观感 —— 先只动头。
         "pitch": "ParamAngleY",
         "body_x": None,
         "body_y": None,
