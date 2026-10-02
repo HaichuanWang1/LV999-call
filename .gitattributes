@@ -33,7 +33,27 @@
 *.aab    binary
 *.zip    binary
 
+# ============================================================
+# GitHub 语言统计（Linguist）归因
+# ============================================================
+# 背景：GitHub 代码页一度显示 HTML 占比异常高（约 60%）。
+# 根因不是本项目写了很多 HTML，而是 Linguist 按**字节**统计，
+# 而仓库里 vendored 的第三方 skill 自带大量已渲染的 HTML/JS 成品，
+# 体量远超真实业务代码（Kotlin），把语言栏整个带偏了。
+#
+# `.agents/skills/` 是从上游 vendored 进来的第三方 skill，
+# 各自带 LICENSE / THIRD_PARTY_NOTICES，不属于本项目源码。
+# 标为 vendored 后 Linguist 不再统计，语言栏回归真实构成。
+.agents/skills/**     linguist-vendored
+
+# `docs/` 下的 HTML 是 Archify 生成的架构图成品（单文件、内联运行时），
+# 属于文档产物而非源码；标为 generated 后既不计入语言统计，
+# 也能让 778KB 的单文件在 diff 里默认折叠，避免淹没代码审查。
+docs/**/*.html        linguist-generated
+
+# ------------------------------------------------------------
 # Vosk 离线模型（大文件，二进制）
+# ------------------------------------------------------------
 *.fst    binary
 *.mdl    binary
 *.dubm   binary

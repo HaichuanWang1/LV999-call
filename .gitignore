@@ -69,3 +69,13 @@ tools/migration_check/
 
 # Archify 出图的中间产物（候选 JSON / 浏览器证据 / 截图，可随时重跑）
 .archify/
+
+# ============================================================
+# Archify Skill 自带的示例「渲染产物」（不入库）
+# ============================================================
+# 这些 HTML 是 examples/*.json 渲染出来的成品，不是源码：
+# 5 个文件合计 3.7MB，占了仓库 HTML 体积的绝大部分，
+# 会把 GitHub 的语言统计顶成「HTML 主导」。
+# 示例的源（*.json）已入库，需要时一条命令重新渲染：
+#   node .agents/skills/archify/scripts/render-examples.mjs
+.agents/skills/archify/examples/*.html
