@@ -17,3 +17,4 @@
 - 出架构图/流程图用 `.agents/skills/archify`（dsh 自动发现，无需安装）；
   用法与重跑方式见 `docs/architecture.md` 末尾，产物 HTML 放 `docs/` \*每次执行非bug调整的任务时，必须使用goal和task
   在每次发布新版本之前更新archify，如果是少量修改例如修bug就不需要操作这一步
+当工作区出现新的plan文件，在你做提交的时候，直接顺便把plan也并进你那次提交就行，不需要单独提交plan文件

@@ -117,8 +117,14 @@ tools/
 
 图本身是 Archify 生成的可交互通话链路图：
 主链路 `用户 → CallScreen → CallViewModel → AudioRecorder → AsrEngine → ChatRepository → AudioPlayer`，
-外加 Live2D、表情→语气、长期记忆、记忆提醒（后台）、Room 与三个远程 AI 端点，
-共 **16 个组件、20 条关系、5 张说明卡**，每条都带源码位置。
+外加 Live2D、表情→语气、**离线模型准备**、长期记忆、记忆提醒（后台）、Room、Vosk 离线模型
+与三个远程 AI 端点，共 **17 个组件、22 条关系、6 张说明卡**，每条都带源码位置。
+
+> **语音识别那一段的走向（v1.6.1 起）**：默认 ASR 是离线的，所以
+> `AsrEngine → Vosk 离线模型`（**离线识别**）是**实线强调**的主路径，而
+> `AsrEngine → ASR 服务` 是**虚线**的「HTTP 转写（备选）」。
+> `CallViewModel → 离线模型准备 → Vosk 离线模型` 是新增支路：首次通话要把 65 MB 模型
+> 从 assets 解压到 `filesDir`，进度经 `VoskPrepareState` 冒到界面遮罩上，失败不结束通话。
 
 > **图里没画的一条前置闸门**：三条通话路由（内置角色 / 自定义预设 / 续聊）的入口都挂了
 > [`ui/common/PermissionGate.kt`](../app/src/main/java/com/lv999call/app/ui/common/PermissionGate.kt)
@@ -150,3 +156,21 @@ node .agents/skills/archify/bin/archify.mjs finalize architecture \
 所以**加内容时要横向铺开，不要往下堆行**：这张图是从 888 高加到 1248 高之后才发现比例掉到
 1.23、四个门禁全挂在 validate 上的。同理，把某条 `via` 回线往画布底部挪（例如 y=820 → y=1180）
 也会连带把比例拉垮 —— 回线要贴着内容走，别让它单独撑高画布。
+
+### 另一条：长回线要盯住它绕哪一边
+
+`audio-player → user` 那条「扬声器播放」是横跨整幅图的回线。v1.6.1 加节点时，
+自动路由把它改成了**从主链路上方绕**，结果在左侧冲出了画布
+（`layout/route-out-of-bounds`，越界点是 `x = -4`）——**光把 `meta.viewBox` 调高没用**，
+因为越界的是负坐标，不是右/下溢出。
+
+修法是把它按上一版那样钉死在**下方走廊**：
+
+```json
+{ "id": "speaker-out", "from": "audio-player", "to": "user", "label": "扬声器播放",
+  "fromSide": "bottom", "toSide": "bottom", "via": [[1398, 820], [70, 820]] }
+```
+
+判断依据可以直接从**上一版 HTML** 里读：SVG 的 `data-composition-points`
+是渲染后的真实路径（注意它是**自动路由算出来的结果、不是作者写的**，
+所以照抄坐标即可，别把那些点当成需要复现的输入）。
