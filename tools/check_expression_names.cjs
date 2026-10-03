@@ -148,7 +148,22 @@ for (const c of characters) {
 
   console.log(`\n[${c.displayName}] 表情集 ${c.expressionsRef}（${set.entries.length} 条）`);
 
-  check(`${c.id}: 表情集非空`, set.entries.length > 0);
+  // 模型文件是否存在，决定了「空表情集」是**合法状态**还是**配置漏了**：
+  //   - 模型没装（例如流萤，形象走静态头像降级）→ 空集是刻意的。宿主只在
+  //     `!expressions.isEmpty` 时才把 [[e:…]] 协议拼进 system prompt，所以空集
+  //     意味着 LLM 根本不知道这套机制 —— 比塞一套模型里不存在的表情
+  //     （标签照常输出、表情永远不生效的静默失效）安全。
+  //   - 模型装了却一条都没开放 → 那才是真的漏了。
+  const modelFile = path.join(MODELS_ROOT, c.modelPath.split('/').join(path.sep));
+  const modelMissing = !fs.existsSync(modelFile);
+
+  if (set.entries.length > 0) {
+    check(`${c.id}: 表情集非空`, true);
+  } else if (modelMissing) {
+    console.log(`  OK   ${c.id}: 表情集为空 —— 模型未安装，刻意不开放表情（也就不注入标签协议）`);
+  } else {
+    check(`${c.id}: 表情集非空`, false, '模型已安装，却一条表情都没开放给 LLM');
+  }
   check(`${c.id}: 短标签唯一`,
         new Set(set.entries.map((e) => e.key)).size === set.entries.length,
         set.entries.map((e) => e.key).join(','));
@@ -179,8 +194,7 @@ for (const c of characters) {
   }
 
   // 与模型文件比对
-  const modelFile = path.join(MODELS_ROOT, c.modelPath.split('/').join(path.sep));
-  if (!fs.existsSync(modelFile)) {
+  if (modelMissing) {
     console.log('  SKIP 模型文件不存在（已被 .gitignore 排除）：' + path.relative(ROOT, modelFile));
     console.log('       -> 用 python tools/setup_deepseek_model.py 或自备模型后重跑本检查');
     continue;

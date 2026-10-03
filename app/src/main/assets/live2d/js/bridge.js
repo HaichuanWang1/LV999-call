@@ -510,6 +510,35 @@
           { motion: 3, duration: 0.75, expression: '用户彻底怒了', ampScale: 1.15, holdMs: 9000 }
         ]
       }
+    },
+
+    // ======================================================================
+    // 流萤
+    // ======================================================================
+    //
+    // ⚠️ 这个档位**故意只声明模型路径**，因为模型本身还不存在（见 plan10）。
+    //
+    // 为什么模型不存在也要写这一档：`PROFILE_ID` 查不到时会**静默回落银狼档**
+    // （见下方 `if (!PROFILES[PROFILE_ID]) PROFILE_ID = 'silverwolf'`）。
+    // 回落在现在这条路径上"看起来"没坏 —— 宿主同时用 `?model=` 传了模型路径
+    // （见 Live2DAssetLoader.indexUrl），而那个文件不存在 → `Live2DModel.from()`
+    // 被 reject → `reportError` → 宿主 `Live2DStatus.ERROR` → 回退静态头像，
+    // 银狼那套通道表压根没机会被用到。但那是**巧合**，不是设计：
+    // 阶段 2 把模型补上之后，落错档位的症状会变成"模型是流萤、布局和待机参数是银狼"。
+    //
+    // 为什么下面不写 channels / poses / offsetY / pat.headParts：
+    // 这些值全都**取决于模型真实的参数名与画布尺寸**，在没有模型的现在只能靠猜。
+    // 猜错的后果不是报错，而是"看起来配好了、实际每帧被物理层覆盖" —— 大肥鱼那档
+    // 已经踩过一次（见 BASE 的 idle 说明）。所以这里一个都不写，等模型到手再补。
+    //
+    // 阶段 2 补这一档的步骤（详见 docs/live2d.md）：
+    //   1. 模型装到 assets/live2d/models/firefly/，确认 model3.json 里注册了
+    //      Motions / Expressions / EyeBlink / LipSync（口型必须有，否则没有嘴型同步）
+    //   2. `python tools/live2d_dump_parts.py --model firefly` 出摸头命中盒的 headParts
+    //   3. 按该模型**实际存在且不是物理输出**的参数名写 idle.channels / poses / drift
+    //   4. 真机看一眼再调 offsetY / fillRatio（这两个值是看出来的，不是算出来的）
+    firefly: {
+      modelUrl: 'models/firefly/firefly.model3.json'
     }
   };
 

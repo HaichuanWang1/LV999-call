@@ -31,8 +31,36 @@
 路由也是**参数化**的（`character_prepare/{characterId}` / `character_call/{characterId}`），
 不是每个角色两条专属路由 —— 否则 NavGraph 会随角色数线性膨胀。
 
-**加第三个角色的完整步骤**：`BuiltInCharacters` 加一行 → assets 放提示词 →
-`Live2DExpressions` 加一套 → `bridge.js` 加一档 profile → 首页图标/背景两张 drawable。
+**加一个角色的完整步骤**（`BuiltInCharacters` 加一行 + assets 放提示词 +
+`Live2DExpressions` 加一套 + `bridge.js` 加一档 profile + 首页图标/背景两张 drawable）
+只是骨架，真正容易漏的是这三条：
+
+1. **提示词里不要自己写 `[[e:…]]` 标签协议**。那块协议由宿主在
+   `ProcessAudioUseCase` 里按 `!expressions.isEmpty` 追加在角色提示词之后，
+   角色提示词再写一遍就是两份互相打架的规则。
+2. **`bridge.js` 必须真的加一档 profile**。`PROFILE_ID` 查不到会**静默回落银狼档**，
+   症状不是报错，而是"模型对了、布局和待机参数是银狼的"。
+3. **参考音频要单独剪**（`tools/make_ref_voice.py`），见 [`tts.md`](tts.md)。
+
+### 没有 Live2D 模型的角色：静态头像降级
+
+「流萤」是第一个**没有 Live2D 模型**的内置角色，走的是既有的降级路径，不需要新代码：
+
+    modelPath 指向的目录不存在
+      → bridge.js 的 Live2DModel.from() 被 reject → notify('error')
+      → Live2DController.handleEvent("error") → Live2DStatus.ERROR
+      → CallScreen 的 live2dActive = false → StaticAvatar（那张 avatarResId）
+
+要点：
+
+- **别指望 `onReceivedError`**：它只在**主框架**加载失败时回调，而模型是页面内的子资源，
+  404 不会走到那儿。真正兜住的是 bridge.js 的 `.catch()`（和 15 秒的 `markLoadTimeout()`）。
+- **空表情集是有意义的状态，不是"还没填"**：`Live2DExpressions.FIREFLY` 故意留空。
+  宿主只在 `!expressions.isEmpty` 时才注入标签协议，所以空集时 LLM 完全不知道
+  `[[e:…]]` 存在。反过来先塞一套猜的表情名，标签会被正常输出、正常剥离（不会念出来），
+  但表情**永远不生效** —— 最难查的那种静默失效。
+- `tools/check_expression_names.cjs` 会把「模型没装 + 表情集为空」判为 **OK**，
+  只有「模型装了却一条表情都没开放」才判 FAIL。
 
 ### 一个踩过的坑：形象参数不能当成"会变的状态"
 

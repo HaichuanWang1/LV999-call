@@ -130,6 +130,23 @@ adb logcat -s ChatRepo:D AudioPlayer:D ProcessAudioUseCase:D
 > base64 后约 861KB，远低于 MiMo 的 10MB base64 上限）每轮都要
 > 随请求上传，这是「开口前等待」里除服务端合成之外的另一块固定成本。
 >
+> 流萤那份（`assets/firefly/ref_voice.wav`）按同一规格剪：14.92 秒 / 643KB /
+> base64 约 857KB。**这个"约 15 秒"不是随便定的** —— 它是每句话都要多传的那几百 KB
+> 与音色还原度之间的平衡点，改长之前先想清楚代价。
+>
+> 参考音频由 [`tools/make_ref_voice.py`](../tools/make_ref_voice.py) 从游戏语音里剪：
+>
+> ```bash
+> python tools/make_ref_voice.py --list        # 看候选（转写 + 时长 + 自动切出的句子）
+> python tools/make_ref_voice.py               # 按默认选段生成
+> ```
+>
+> 剪的时候有两条经验值得记住：
+> - **挑日常闲聊，别挑剧情独白**。参考音频决定的是音色，但**语气会一起被带过去** ——
+>   拿"兵器""残骸""熄灭"这种台词剪出来的音色会偏沉。
+> - **按停顿取连续区间，别按句切开再垫统一静音**。后者拼出来是"一顿一顿"的节奏，
+>   克隆出的韵律也跟着走样（试过：18 段拼出 17.4 秒，比原句还散）。
+>
 > 仓库里曾经还躺着一份 `assets/silverwolf_audio.wav`（旧版 `merged.wav`，1.3MB）——
 > 那是角色化改造**之前**的硬编码音色，改造后音色统一走
 > `TtsPolicy.CloneVoice.refAudioAsset`（即上面的 `silverwolf/ref_voice.wav`），

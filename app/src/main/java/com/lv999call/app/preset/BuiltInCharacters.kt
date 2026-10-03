@@ -86,8 +86,55 @@ object BuiltInCharacters {
         emoji = "🐳"
     )
 
+    /**
+     * 流萤。
+     *
+     * 形象走**静态头像降级**这条路：没有合法可再分发的 Live2D 模型（见 plan10 的
+     * 「阶段 2 预备方案」），所以 [modelPath] 指向的目录**故意不存在** ——
+     * WebView 加载失败 → `Live2DStatus.ERROR` → `live2dActive = false` →
+     * [com.lv999call.app.ui.call.CallScreen] 的 `StaticAvatar`，
+     * 也就是用 [avatarResId] 那张头像，而不是白屏。这条降级路径是既有的、已测过的。
+     *
+     * 提示词里刻意**不含**表情标签协议：[expressions] 用的是空集，而
+     * `ProcessAudioUseCase` 只在 `!expressions.isEmpty` 时才注入标签协议，
+     * 所以 LLM 完全不知道这套机制 —— 这比注入一套模型里不存在的表情
+     * （必然"标签触发了但脸没变"的静默失效）安全得多。
+     *
+     * 音色：参考音频从游戏档案语音里剪出来（见 `tools/make_ref_voice.py`），
+     * 取的是「嗨，又见面啦…叫我「流萤」吧」那段打招呼 + 一段日常闲聊，
+     * 不用剧情独白 —— 参考音频会连语气一起带过去。
+     */
+    val FIREFLY = BuiltInCharacter(
+        id = "firefly",
+        displayName = "流萤",
+        subtitle = "温柔的火萤少女",
+        promptAsset = "firefly_prompt.txt",
+        live2dProfileId = "firefly",
+        // ⚠️ 模型不存在，故意如此 —— 见类注释。阶段 2 拿到分层 PSD 后再补目录。
+        modelPath = "models/firefly/firefly.model3.json",
+        expressions = Live2DExpressions.FIREFLY,
+        avatarResId = R.drawable.firefly_avatar,
+        cardIconResId = R.drawable.firefly_avatar,
+        backgroundResId = R.drawable.firefly_bg,
+        // 克隆音色，参考音频由角色自带（与银狼同一条路），不读用户设置里的音色
+        ttsPolicy = TtsPolicy.CloneVoice(
+            modelId = "mimo-v2.5-tts-voiceclone",
+            refAudioAsset = "firefly/ref_voice.wav"
+        ),
+        // 与银狼、DeepSeek 酱一致：不预置基础语气，克隆音色自己带着她的读法。
+        // 想调语气的用户在准备页里写自己的那一格（存进 characterTtsPrompts）。
+        defaultTtsPrompt = "",
+        // 没有模型自然也没有"变身"过场
+        hasTransform = false,
+        // 模型还没有，没有作者可署名；阶段 2 补
+        credit = null,
+        prepareTitle = "流萤",
+        prepareDescription = "使用流萤专属提示词与音色，和她聊聊今天过得怎么样。",
+        emoji = "🦋"
+    )
+
     /** 全部内置预设，顺序即首页展示顺序 */
-    val ALL: List<BuiltInCharacter> = listOf(SILVERWOLF, DEEPSEEK)
+    val ALL: List<BuiltInCharacter> = listOf(SILVERWOLF, DEEPSEEK, FIREFLY)
 
     /** 按 id 查；未知 id 返回 null（路由参数非法时由调用方兜底） */
     fun byId(id: String?): BuiltInCharacter? = ALL.firstOrNull { it.id == id }

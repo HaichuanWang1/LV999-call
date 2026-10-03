@@ -107,6 +107,50 @@ bridge.js 的**视线跟随**，以及 **103 组物理**（50 输入 → 185 输
 `ParamAngleZ`、`ParamBreath`；手、耳、蝴蝶结、吊饰、头发、裙子、尾巴、身体
 全是物理输出，**做不了程序化动画**。
 
+### 流萤：没有模型，走静态头像降级
+
+「流萤」是第一个**没有 Live2D 模型**的内置角色 —— 不是漏了，是拿不到合法来源：
+
+- 官方（崩铁）的角色是 Spine 模型，**转不成 Live2D**；
+- 民间 Live2D 模型要么找不到、要么没有可再分发的授权。
+
+所以 `modelPath` 指向的 `models/firefly/` **故意不存在**，走的是一条既有的、已测过的路径：
+
+    Live2DModel.from() 被 reject → notify('error')
+      → Live2DStatus.ERROR → CallScreen 的 live2dActive = false
+      → StaticAvatar（用 BuiltInCharacter.avatarResId 那张头像）
+
+三个容易踩的点：
+
+1. **别指望 `onReceivedError`**：它只在**主框架**加载失败时回调。模型是页面内的子资源，
+   404 走不到那儿；真正兜住的是 `bridge.js` 的 `.catch()` 和 15 秒的 `markLoadTimeout()`。
+2. **`bridge.js` 仍然必须有一档 `firefly`**：`PROFILE_ID` 查不到会**静默回落银狼档**。
+   现在这条路径上回落"看起来"没坏（因为宿主同时用 `?model=` 传了模型路径，模型照样 404
+   照样回退），但那是**巧合** —— 阶段 2 补上模型后，症状会变成"模型是流萤、布局和待机
+   参数是银狼的"。所以那一档只声明 `modelUrl`，其余一个不写（值都取决于模型的真实参数名
+   与画布尺寸，猜错的后果是"看起来配好了、实际每帧被物理覆盖"，大肥鱼那档踩过）。
+3. **`Live2DExpressions.FIREFLY` 故意留空**：宿主只在 `!expressions.isEmpty` 时才把
+   `[[e:…]]` 协议拼进 system prompt，所以空集时 LLM 完全不知道这套机制存在。
+   先塞一套猜的表情名反而更糟 —— 标签会被正常输出、正常剥离（不会念出来），
+   但表情**永远不生效**，是最难查的静默失效。
+
+#### 阶段 2 预案：用分层 PSD 自制模型
+
+模型路径留好了，等有素材时按这条走（详见 [`../plan10.md`](../plan10.md) 的阶段 2）：
+
+1. 工具：[`tsunehimatoi/psd2live`](https://github.com/tsunehimatoi/psd2live)（GPL-3.0，
+   Windows 便携版自带 JRE）。输入**分层 PSD** → 输出 `.moc3` + `.model3.json` + 贴图/物理/动作，
+   自动做网格、变形器、头身参数、待机/眨眼/点头动作，不依赖官方 Cubism SDK。
+   CLI：`--input <psd> --output <dir>`。
+   ⚠️ **导出目标默认 Cubism 5.0，必须显式降到 4.0** —— 本项目的 Core 是 Cubism **4**。
+2. 前置条件（这才是真正的卡点）：眼白/瞳孔/上睫毛分开、有**张口**图层、前后发分离且
+   留够遮挡补全余量、身体直立、图层效果已栅格化。psd2live 自己的 STATUS 把
+   「头发拆分与遮挡补全」评为**不可用**，被遮挡区域需要图像生成能力补全。
+3. 拿到模型后补 `bridge.js` 的 `firefly` 档（`idle.channels` / `poses` / `offsetY` /
+   `fillRatio` / `pat.headParts`），按「使用自备模型」那节的第 4~8 步逐项做，
+   再填 `Live2DExpressions.FIREFLY` 与 `EmotionVoiceStyles`（**两边都要填**，
+   只填表情不填语气就是"表情变了、语气不变"），最后补 `ModelCredit`。
+
 ### 程序化待机层
 
 模型没有待机动作，但画面里不能是个静止立绘，于是 `bridge.js` 在
@@ -553,6 +597,10 @@ python tools/memory_migration_check.py # Room 3→4 迁移：结构/数据存活
 
 - 内置角色的两个模型（银狼 / 大肥鱼）美术版权归各自作者，应用内已按作者要求署名；
   作者如有异议可联系删除
+- 第三个角色「流萤」**没有随包分发任何模型**（见上文「流萤：没有模型」），
+  她的形象是一张用户自备的静态头像
+- 流萤的克隆参考音频取自游戏语音，角色与语音版权归米哈游；与银狼的参考音频同样处理
+  （见 [`tts.md`](tts.md)），仅随 APK 分发、不单独提供下载
 - Live2D 官方示例模型 Haru **已不再随包分发**（`setup_live2d_assets.sh --with-sample`
   可以拉回来，仅供本地技术验证，请勿随产品分发或商用）
 - Live2D Cubism Core 受 Live2D 独立授权条款约束，

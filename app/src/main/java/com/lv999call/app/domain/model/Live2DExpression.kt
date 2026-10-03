@@ -214,4 +214,24 @@ object Live2DExpressions {
             "玩家「我升职了！」" to "[[e:星星眼]]哇！那今天必须加餐！我请客——用你的钱。"
         )
     )
+
+    /**
+     * 流萤：**故意留空**。
+     *
+     * 她现在没有 Live2D 模型（形象走静态头像降级，见
+     * [com.lv999call.app.preset.BuiltInCharacters.FIREFLY]），所以没有可用的表情名。
+     *
+     * 空集不是"还没填"，而是一个**有意义的档位**：`ProcessAudioUseCase` 只在
+     * `!expressions.isEmpty` 时才把标签协议拼进 system prompt。空集时 LLM
+     * 根本不知道 `[[e:…]]` 这套机制存在，也就不会输出标签 ——
+     * 这正是我们要的。反过来，如果先塞一套猜的表情名，模型会照常输出标签、
+     * 标签会被正常剥离（不会念出来），但表情**永远不会生效**，变成最难查的那种
+     * 静默失效。宁可现在什么都没有。
+     *
+     * ⚠️ 阶段 2 拿到模型后要做的**不是**把这一项填满就完事：
+     * 表情名必须来自模型 `model3.json` 的 `Expressions[].Name`（逐字照抄），
+     * 并且每个 key 都要在 [EmotionVoiceStyles] 里配一条语气，
+     * 否则就会出现"表情变了、语气不变"。完整步骤见 `docs/live2d.md`。
+     */
+    val FIREFLY = ExpressionSet(displayName = "流萤", entries = emptyList())
 }
