@@ -21,6 +21,14 @@ class AudioPlayer {
         private const val SAMPLE_RATE = 24000  // TTS通常输出24kHz
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_OUT_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+
+        /**
+         * 超过这个时长的「读不到数据」就算一次断供（管道被读空 → 听感上就是卡了一下）。
+         *
+         * 200ms 定得比解码侧的 250ms 略低：管道本身有 64KB≈1.3s 的缓冲，
+         * 能走到「播放端读空」说明上游已经欠了不止一点，宁可早报。
+         */
+        private const val STARVE_WARN_MS = 200L
     }
 
     private var audioTrack: AudioTrack? = null
@@ -167,13 +175,48 @@ class AudioPlayer {
                 var bytesRead: Int
                 var firstFrameLogged = false
 
+                // ── 断供（underrun）统计：纯日志 ──────────────────────────────
+                // 「卡了一下」在播放端的直接证据就是这里：inputStream.read() 空等了。
+                // 与 ChatRepo 的「TTS节奏」日志对照即可归因：
+                //   两边都对得上 → 服务端/网络慢（上游没喂上）
+                //   只有这里有   → 本地解码或播放侧的问题
+                var fedMs = 0L            // 已写入 AudioTrack 的音频时长（24kHz/mono/16bit 估算）
+                var starveCount = 0
+                var starveMs = 0L
+                var maxStarveMs = 0L
+                var maxStarveAtMs = 0L
+
+                // AudioTrack 自己的欠载计数（API 24+，本项目 minSdk=26）。
+                // 这是**唯一**能抓到「管道里有货、但播放线程没及时喂硬件」的指标 ——
+                // 那种情况下 inputStream.read() 是秒回的，上面的断供统计完全看不见它，
+                // 但用户耳朵里照样是一声卡顿。
+                val underrunAtStart = runCatching { audioTrack?.underrunCount ?: -1 }.getOrDefault(-1)
+
                 while (isActive) {
+                    val readStartMs = android.os.SystemClock.uptimeMillis()
                     bytesRead = inputStream.read(buffer)
+                    val readWaitMs = android.os.SystemClock.uptimeMillis() - readStartMs
                     if (bytesRead == -1) break
+
+                    // 首块之前的那段等待不算断供：那是「她还没开口」，
+                    // 已由上面的「首块等待」单独记录，混进来会把它重复算一遍。
+                    if (firstFrameLogged && readWaitMs >= STARVE_WARN_MS) {
+                        starveCount++
+                        starveMs += readWaitMs
+                        if (readWaitMs > maxStarveMs) {
+                            maxStarveMs = readWaitMs
+                            maxStarveAtMs = fedMs
+                        }
+                        Log.w(
+                            TAG,
+                            "音频断供 ${readWaitMs}ms @音频${fedMs}ms（管道被读空，上游没喂上）"
+                        )
+                    }
 
                     if (_isPlaying.value) {
                         audioTrack?.write(buffer, 0, bytesRead)
                         _amplitude.value = calculateRms16(buffer, bytesRead)
+                        fedMs += bytesRead * 1000L / (SAMPLE_RATE * 2)
                         if (!firstFrameLogged) {
                             firstFrameLogged = true
                             Log.d(
@@ -185,6 +228,14 @@ class AudioPlayer {
                         break
                     }
                 }
+
+                val underrunAtEnd = runCatching { audioTrack?.underrunCount ?: -1 }.getOrDefault(-1)
+                Log.d(
+                    TAG,
+                    "播放结束: 音频≈${fedMs}ms 断供${starveCount}次共${starveMs}ms " +
+                        "最长${maxStarveMs}ms@音频${maxStarveAtMs}ms " +
+                        "硬件欠载=${if (underrunAtStart < 0 || underrunAtEnd < 0) "n/a" else "${underrunAtEnd - underrunAtStart}"}"
+                )
 
                 // 这 100ms 不能删：playbackJob 因此比「实际放完」多活一小会儿，awaitPlaybackEnd（靠 join 判定）才敢确信音频已放完
                 delay(100)

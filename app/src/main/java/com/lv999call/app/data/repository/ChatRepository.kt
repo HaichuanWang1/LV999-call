@@ -93,6 +93,14 @@ class ChatRepository(
 
         /** 流式播放管道容量：写满即阻塞（背压），64KB ≈ 1.3s @24kHz/mono */
         private const val TTS_PIPE_BUFFER_BYTES = 64 * 1024
+
+        /**
+         * 超过这个时长的「分块空档」就打一条 WARN。
+         *
+         * 250ms 是听感阈值：比这短的间隔人耳会当成正常停顿，再长就是「卡了一下」。
+         * 这个数字只影响日志噪声，不影响任何行为。
+         */
+        private const val TTS_STALL_WARN_MS = 250L
     }
 
     /** 获取可用模型列表 */
@@ -516,14 +524,36 @@ class ChatRepository(
      */
     private fun decodeTtsSseToPcm(inputStream: InputStream, out: AudioPipe): Int {
         val reader = inputStream.bufferedReader()
-        var line: String?
         var lineCount = 0
         var chunkCount = 0
         var byteCount = 0
 
+        // ── 卡顿定位计时（纯日志，不改变任何行为）──────────────────────────
+        //
+        // 为什么必须在这里埋：「她第二句卡了一下」有两种完全不同的成因，听感一模一样：
+        //   A. 服务端/网络迟迟不下发下一块  → 本函数的 readWait 会很大
+        //   B. 本地播放/解码跟不上          → readWait 接近 0，卡顿出现在播放端
+        // 分开计时才能归因，否则只能猜。
+        //
+        // ⚠️ 特别注意：**不能**用「整个解码耗时」当网络指标。管道满时解码协程会阻塞在
+        // out.write() 上（背压），于是那个耗时必然 ≈ 音频时长，把网络节奏彻底掩盖掉。
+        // 所以下面把「等下一行」和「等管道腾地方」分别累计。
+        val startedAt = android.os.SystemClock.uptimeMillis()
+        var networkWaitMs = 0L          // 累计：等 SSE 下一行的时间
+        var backpressureMs = 0L         // 累计：管道满、被播放端卡住的时间
+        var maxGapMs = 0L               // 最大分块空档
+        var maxGapAtAudioMs = 0L        // 该空档落在音频的第几毫秒处
+        var audioMsSoFar = 0L           // 已解码出的音频时长（按 24kHz/mono/16bit 估算）
+
         try {
-            while (reader.readLine().also { line = it } != null) {
-                val currentLine = line ?: continue
+            while (true) {
+                // readLine() 只在整行到齐后返回，所以这段等待 = 「服务端多久没给下一行」。
+                // 管道背压期间读到的都是 BufferedReader 里已缓冲的数据，readWait≈0，
+                // 两类等待因此天然不互相污染。
+                val readStartMs = android.os.SystemClock.uptimeMillis()
+                val currentLine = reader.readLine() ?: break
+                val arrivedAtMs = android.os.SystemClock.uptimeMillis()
+                val readWaitMs = arrivedAtMs - readStartMs
                 lineCount++
 
                 if (currentLine.startsWith("data: ")) {
@@ -546,6 +576,23 @@ class ChatRepository(
                         }
 
                         if (!base64Data.isNullOrEmpty()) {
+                            // 空档 = 上一块到这块之间，客户端干等了多久。第一块不算
+                            // （它前面那段等待是「整段推理还没开始出音」，另有日志）。
+                            networkWaitMs += readWaitMs
+                            if (chunkCount > 0) {
+                                if (readWaitMs > maxGapMs) {
+                                    maxGapMs = readWaitMs
+                                    maxGapAtAudioMs = audioMsSoFar
+                                }
+                                if (readWaitMs >= TTS_STALL_WARN_MS) {
+                                    android.util.Log.w(
+                                        "ChatRepo",
+                                        "TTS 分块空档 ${readWaitMs}ms @音频${audioMsSoFar}ms " +
+                                            "（第${chunkCount}块之后，服务端/网络侧）"
+                                    )
+                                }
+                            }
+
                             val decoded = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
                             // 兜底剥头：请求已改用 pcm16（纯 PCM 无头），但服务端若因任何
                             // 原因回落成 wav 分块，每个分块都会自带完整 RIFF 头。直接写进
@@ -553,9 +600,13 @@ class ChatRepository(
                             // 让播放端永远只看到纯 PCM。
                             val pcm = stripWavHeader(decoded)
                             // 管道满则阻塞在这里 → 背压，播放多快就解码多快
+                            val writeStartMs = android.os.SystemClock.uptimeMillis()
                             out.write(pcm)
+                            backpressureMs += android.os.SystemClock.uptimeMillis() - writeStartMs
+
                             chunkCount++
                             byteCount += pcm.size
+                            audioMsSoFar += pcm.size * 1000L / (24000L * 2)  // 24kHz/mono/16bit
                         }
                     } catch (e: Exception) {
                         android.util.Log.w("ChatRepo", "TTS JSON解析失败: ${data.take(200)}, 原因: ${e.message}")
@@ -568,6 +619,14 @@ class ChatRepository(
         }
 
         android.util.Log.d("ChatRepo", "TTS解析: 行=$lineCount, 块=$chunkCount, 字节=$byteCount")
+        // 归因关键行：网络等待 / 背压等待 / 最大空档及其位置。
+        // 判读方法见 docs/tts.md「卡顿归因」。
+        android.util.Log.d(
+            "ChatRepo",
+            "TTS节奏: 音频≈${audioMsSoFar}ms 网络等待=${networkWaitMs}ms 背压等待=${backpressureMs}ms " +
+                "最大空档=${maxGapMs}ms@音频${maxGapAtAudioMs}ms 总耗时=" +
+                "${android.os.SystemClock.uptimeMillis() - startedAt}ms"
+        )
         return byteCount
     }
 
